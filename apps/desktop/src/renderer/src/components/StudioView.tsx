@@ -11,6 +11,7 @@ import { PlanActionEditor } from './PlanActionEditor';
 import { AUTOPILOT_ACTIVE, useAutopilotStatus } from './use-autopilot-status';
 import { FlowDiagram } from './FlowDiagram';
 import { ImageCard } from './ImageAttachment';
+import { Card } from './ui/Card';
 import { buildFoundationPrompt, buildPagePrompt, filterScreens, parseFlows, parsePages, screenRows, screenTitleKey, type DesignContext, type DesignPromptMode } from '../flow-diagram';
 import { Markdown } from './Markdown';
 import {
@@ -2825,21 +2826,19 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
             <span className="done"><Check size={12} /> {artifacts.artifacts.length} artifacts</span>
             <span className="done"><Check size={12} /> Board: {board.cards.length} cards, {board.cards.filter((card) => card.status === 'ready').length} ready</span>
           </div>
-          <div className="studio-choices">
-            <div className="studio-choice">
-              <h3><Sparkles size={15} /> Generate with KAI</h3>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            <Card title={<><Sparkles size={15} /> Generate with KAI</>} className="flex h-full flex-col gap-2 !p-3">
               <p className="studio-note">The agent builds from the brief and the board, starting on the first ready card. Each card stops at Review for you.</p>
-              <UiButton type="button" className="primary-button" onClick={() => void launchProject(projectId, 'generate')} disabled={busy !== null}>
+              <UiButton type="button" className="primary-button mt-auto" onClick={() => void launchProject(projectId, 'generate')} disabled={busy !== null}>
                 {busy === 'launch' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Start building
               </UiButton>
-            </div>
-            <div className="studio-choice">
-              <h3><Code2 size={15} /> Open code editor</h3>
+            </Card>
+            <Card title={<><Code2 size={15} /> Open code editor</>} className="flex h-full flex-col gap-2 !p-3">
               <p className="studio-note">Code it yourself. The learning AI sits beside the editor and reads this project's brief, decisions and conventions.</p>
-              <UiButton type="button" className="primary-button" onClick={() => void launchProject(projectId, 'editor')} disabled={busy !== null}>
+              <UiButton type="button" className="primary-button mt-auto" onClick={() => void launchProject(projectId, 'editor')} disabled={busy !== null}>
                 <Code2 size={14} /> Open editor
               </UiButton>
-            </div>
+            </Card>
           </div>
           <div className="studio-actions">
             <UiButton type="button" className="secondary-button" onClick={dismissHandoff}>Review the artifacts and board first</UiButton>
@@ -2851,10 +2850,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       )}
 
       {(!state || state.status !== 'done' || tab === 'interview') && (
-      <section className={`studio-grid${state ? '' : ' studio-grid-intake'}`}>
+      <section className={`grid min-w-0 grid-cols-1 items-start gap-3${state ? ' lg:grid-cols-2 xl:grid-cols-3' : ''}`}>
         {state && (
-          <article className="studio-card">
-            <h2><NotebookPen size={16} /> The idea</h2>
+          <Card title={<><NotebookPen size={16} /> The idea</>} className="flex flex-col gap-2 !p-3">
             {state.status === 'done' ? (
               <>
                 <p className="studio-goal">{state.goal || state.idea}</p>
@@ -2864,10 +2862,10 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
             ) : (
               <>
                 <p className="studio-goal">{state.goal || state.idea}</p>
-                {state.assumptions.length > 0 && <><h3>Assumptions</h3>{assumptionControls(state.assumptions)}</>}
+                {state.assumptions.length > 0 && <><h3 className="m-0 mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Assumptions</h3>{assumptionControls(state.assumptions)}</>}
                 {decided.length > 0 && (
                   <>
-                    <h3>Decisions</h3>
+                    <h3 className="m-0 mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Decisions</h3>
                     <dl className="studio-decisions">
                       {decided.map((item) => <div key={item.question}><dt>{item.question}</dt><dd>{item.answer}</dd></div>)}
                     </dl>
@@ -2876,11 +2874,10 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 <p className="studio-note">The brief fills in as you answer. A skipped question is decided by the studio.</p>
               </>
             )}
-          </article>
+          </Card>
         )}
 
-        <article className="studio-card">
-          <h2><Sparkles size={16} /> Questions</h2>
+        <Card title={<><Sparkles size={16} /> Questions</>} className="flex flex-col gap-2 !p-3">
           {busy === 'load' && <p className="studio-note"><Loader2 className="spin" size={13} /> Reading the project…</p>}
           {busy !== 'load' && !state && <p className="studio-note">Nothing to answer yet. Describe the idea below and start.</p>}
           {state?.status === 'done' && (
@@ -2889,7 +2886,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               <p className="studio-note">Questions asked: {recap?.asked ?? 0} of {STUDIO_MAX_QUESTIONS}</p>
               {recap && recap.decided.length > 0 && (
                 <>
-                  <h3>Decided</h3>
+                  <h3 className="m-0 mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Decided</h3>
                   <div className="studio-interview-recap">
                     {recap.decided.map((item) => (
                       <details key={item.question}>
@@ -2901,27 +2898,27 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 </>
               )}
               {recap && recap.leftToAgents.length > 0 && <Notes title="Left to the agents" items={recap.leftToAgents} />}
-              {state.assumptions.length > 0 && <><h3>Assumptions</h3>{assumptionControls(state.assumptions)}</>}
-              <h3>Topic coverage</h3>{topicCoverage(state)}
+              {state.assumptions.length > 0 && <><h3 className="m-0 mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Assumptions</h3>{assumptionControls(state.assumptions)}</>}
+              <h3 className="m-0 mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Topic coverage</h3>{topicCoverage(state)}
               {askAssumedTopicsButton(state)}
             </>
           )}
           {state?.status === 'reviewing' && (
             <>
               <p className="studio-note">Review the goal and decisions below. Nothing will be written until you choose “Write the brief”.</p>
-              <h3>Goal</h3>
+              <h3 className="m-0 mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Goal</h3>
               <p className="studio-goal">{state.goal || state.idea}</p>
               {recap && recap.decided.length > 0 && (
                 <>
-                  <h3>Decided</h3>
+                  <h3 className="m-0 mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Decided</h3>
                   <div className="studio-interview-recap">
                     {recap.decided.map((item) => <details key={item.question}><summary><strong>{item.question}</strong><span>Decided</span></summary><p>{item.answer}</p></details>)}
                   </div>
                 </>
               )}
               {recap && recap.leftToAgents.length > 0 && <Notes title="Left to the agents" items={recap.leftToAgents} />}
-              {state.assumptions.length > 0 && <><h3>Assumptions</h3>{assumptionControls(state.assumptions)}</>}
-              <h3>Topic coverage</h3>{topicCoverage(state)}
+              {state.assumptions.length > 0 && <><h3 className="m-0 mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Assumptions</h3>{assumptionControls(state.assumptions)}</>}
+              <h3 className="m-0 mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Topic coverage</h3>{topicCoverage(state)}
               <div className="studio-actions">
                 <UiButton type="button" className="secondary-button" onClick={() => void backToQuestions()} disabled={busy !== null}><ArrowLeft size={14} /> Back to questions</UiButton>
                 {askAssumedTopicsButton(state)}
@@ -2932,7 +2929,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
           {asking && state && (
             <>
               <p className="studio-note">I read your idea. It already covers {state.ideaStated.length ? state.ideaStated.map((topic) => INTERVIEW_TOPICS[topic]).join(', ') : 'no complete topics yet'}. I’ll ask about {state.ideaGaps.length ? state.ideaGaps.map((topic) => INTERVIEW_TOPICS[topic]).join(', ') : 'only any remaining details'}.</p>
-              <div className="studio-interview-head">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <AgentOrb state={busy === 'answer' || busy === 'finish' ? 'thinking' : 'idle'} />
                 <p className="studio-note">Question {Math.min(state.rounds.flatMap((round) => round.questions).length, interviewQuestionBudget(state))} of {interviewQuestionBudget(state)}. Skip anything you would rather leave to the agents, or pick "Not sure, you decide".</p>
                 <UiNativeSelect aria-label="Ask me about a topic" value="" disabled={busy !== null || state.rounds.flatMap((round) => round.questions).length >= interviewQuestionBudget(state)} onChange={(event) => { const topic = event.target.value as InterviewTopic; if (topic) void askTopic(topic); }}>
@@ -2940,7 +2937,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   {(Object.keys(INTERVIEW_TOPICS) as InterviewTopic[]).filter((topic) => state.topics[topic]?.status !== 'decided').map((topic) => <option key={topic} value={topic}>{INTERVIEW_TOPICS[topic]}{state.topics[topic]?.status === 'assumed' ? ' · assumed' : ' · open'}</option>)}
                 </UiNativeSelect>
                 {state.extraQuestions < STUDIO_EXTRA_QUESTIONS * STUDIO_MAX_EXTENSIONS && (
-                  <div className="studio-question-extension">
+                  <div className="flex min-w-0 flex-col gap-1">
                     <UiButton type="button" className="composer-text-button" onClick={() => void extendInterview()} disabled={busy !== null} title={`The interview can ask up to ${STUDIO_QUESTION_CEILING} questions.`}>
                       {STUDIO_EXTRA_QUESTIONS} more questions
                     </UiButton>
@@ -3054,10 +3051,10 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               </div>
             </>
           )}
-        </article>
+          </Card>
 
         {state && (
-          <aside className="studio-rail" aria-label="Studio side panel">
+          <aside className="studio-rail lg:col-span-2 xl:col-span-3" aria-label="Studio side panel">
             <article className="studio-card">
               <h2>Your projects</h2>
               <div className="studio-rail-pills">
