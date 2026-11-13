@@ -999,6 +999,7 @@ export function WorkspaceView({
         route: selectedRoute,
         autonomy: selectedAutonomy,
         agent: selectedAgent,
+        execution: executionMode,
         ...(activeConversation ? { conversationId: activeConversation.id } : {}),
         ...(options?.goal ? { goal: options.goal } : {}),
         ...(options?.skills?.length ? { skills: options.skills } : {}),

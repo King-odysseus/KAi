@@ -411,22 +411,23 @@ async function verifyWorkspaceControls(page) {
   await selectMenuOption(page, 'Agent', /^Codex$/);
   await verifyMenuContrast(page, 'Agent');
 
-  const autonomyModes = [
-    ['plan', 'Plan'],
-    ['ask', 'Ask'],
-    ['autoEdit', 'Auto-edit'],
-    ['full', 'Full control'],
-    ['custom', 'Custom'],
+  // The menu is "Access level" and its choices carry the experience-level wording from ACCESS_LEVELS.
+  const accessLevels = [
+    ['plan', 'Plan only'],
+    ['ask', 'Ask first'],
+    ['autoEdit', 'Edit files'],
+    ['full', 'Full access'],
+    ['custom', 'Custom access'],
   ];
-  for (const [mode, label] of autonomyModes) {
-    await selectMenuOption(page, 'Autonomy', label);
-    const selected = await page.getByRole('button', { name: 'Autonomy', exact: true }).innerText();
+  for (const [mode, label] of accessLevels) {
+    await selectMenuOption(page, 'Access level', label);
+    const selected = await page.getByRole('button', { name: 'Access level', exact: true }).innerText();
     if (!selected.includes(label)) {
-      throw new Error(`The workspace did not switch to the ${mode} autonomy mode.`);
+      throw new Error(`The workspace did not switch to the ${mode} access level; the menu reads ${JSON.stringify(selected)}.`);
     }
   }
-  await selectMenuOption(page, 'Autonomy', 'Ask');
-  await verifyMenuContrast(page, 'Autonomy');
+  await selectMenuOption(page, 'Access level', 'Ask first');
+  await verifyMenuContrast(page, 'Access level');
 
   const route = page.getByRole('button', { name: 'Route', exact: true });
   if (!await route.isDisabled()) {
@@ -486,13 +487,9 @@ async function verifyThemeToggle(page) {
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   if (initialTheme !== 'dark') throw new Error(`The workspace should begin in dark mode, received ${initialTheme}.`);
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    if (await page.evaluate(() => document.documentElement.dataset.theme === 'light')) break;
-    await page.getByRole('button', { name: /^Theme:/ }).click({ force: true });
-    await page.waitForTimeout(150);
-  }
+  await chooseTitleBarTheme(page, /^Light/);
   if (!await page.evaluate(() => document.documentElement.dataset.theme === 'light')) {
-    throw new Error('The title-bar theme control did not cycle to light mode.');
+    throw new Error('The title-bar theme menu did not switch to the light theme.');
   }
   await waitForPage(page, async () => {
     const response = await window.kaiDesktop.getSettings();
@@ -502,12 +499,15 @@ async function verifyThemeToggle(page) {
   await verifyMenuContrast(page, 'Agent');
   await page.screenshot({ path: path.join(outputDirectory, 'theme-light.png') });
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    if (await page.evaluate(() => document.documentElement.dataset.theme === 'dark')) break;
-    await page.getByRole('button', { name: /^Theme:/ }).click({ force: true });
-    await page.waitForTimeout(150);
-  }
+  await chooseTitleBarTheme(page, /^Dark/);
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+}
+
+/** The title bar's theme control is a menu of every theme, not a button that cycles; open it and pick one by name. */
+async function chooseTitleBarTheme(page, name) {
+  await page.getByRole('button', { name: 'Choose theme' }).click({ force: true });
+  await page.getByRole('menuitem', { name }).click({ force: true });
+  await page.waitForTimeout(150);
 }
 
 async function verifyBuildIdentifier(page) {
@@ -654,12 +654,14 @@ async function verifyMenuContrast(page, label) {
   const firstOption = options.first();
   const colors = await firstOption.evaluate((element) => {
     const style = getComputedStyle(element);
-    const parentStyle = getComputedStyle(element.parentElement);
-    const transparent = style.backgroundColor === 'transparent' || style.backgroundColor === 'rgba(0, 0, 0, 0)';
-    return {
-      background: transparent ? parentStyle.backgroundColor : style.backgroundColor,
-      color: style.color,
-    };
+    const isClear = (value) => value === 'transparent' || value === 'rgba(0, 0, 0, 0)';
+    // The colour the text actually sits on: the first ancestor with a background of its own. A menu is built from
+    // wrappers (some `display: contents`) that paint nothing, so looking only one level up compared the text with black.
+    let background = style.backgroundColor;
+    for (let node = element.parentElement; isClear(background) && node; node = node.parentElement) {
+      background = getComputedStyle(node).backgroundColor;
+    }
+    return { background: isClear(background) ? getComputedStyle(document.body).backgroundColor : background, color: style.color };
   });
   const ratio = contrastRatio(colors.color, colors.background);
   if (ratio < 4.5) {
@@ -785,17 +787,22 @@ async function verifyDirectApiFlow(page, fixture, usesMcp, usesRemoteMcp = false
   if (!contextPreview.ok || contextPreview.data.estimatedTokens < 1) {
     throw new Error(`Project context preview was not populated: ${JSON.stringify(contextPreview)}`);
   }
+  // The estimate sits in the right-hand context pane, which starts closed, and the CLI/API switch is in the run options
+  // panel; the composer's own ring (not a separate meter) carries the running total.
+  const showContext = page.getByRole('button', { name: /^Show context panel/ });
+  if (await showContext.count() > 0) await showContext.click();
   await page.getByText('Estimated direct API context').waitFor();
-  await page.locator('.context-meter strong').filter({ hasText: '~' }).waitFor();
-  await page.getByRole('button', { name: 'API' }).click();
-  await page.getByText('API ready').waitFor();
+  const runOptions = page.locator('[data-tour="composer-advanced"]');
+  if (await runOptions.getAttribute('aria-expanded') !== 'true') await runOptions.click();
+  await page.getByRole('button', { name: 'API', exact: true }).click();
+  await page.getByRole('button', { name: /^Provider: / }).waitFor();
   const routeMenu = page.getByRole('button', { name: 'Route', exact: true });
   if (await routeMenu.isDisabled()) throw new Error('The route menu should be enabled in API mode.');
   await verifyMenuContrast(page, 'Route');
-  const providerChip = page.locator('.api-provider-chip');
+  // In API mode the panel names the provider (a button into Settings) and the Model menu names the model in use.
   const expectedProvider = provider === 'openrouter' ? 'OpenRouter' : provider === 'deepseek' ? 'DeepSeek API' : 'OpenAI Responses API';
-  await providerChip.filter({ hasText: expectedProvider }).waitFor();
-  await providerChip.filter({ hasText: 'smoke-api-model' }).waitFor();
+  await page.getByRole('button', { name: new RegExp(`^Provider: ${expectedProvider}`) }).waitFor();
+  await page.getByRole('button', { name: 'Model', exact: true }).filter({ hasText: 'smoke-api-model' }).waitFor();
   const textarea = page.getByLabel('Task prompt');
   const expectedReply = usesMcp ? 'KAI_MCP_OK' : usesCommand ? 'KAI_COMMAND_OK' : 'KAI_API_OK';
   await textarea.fill(usesMcp
@@ -805,7 +812,7 @@ async function verifyDirectApiFlow(page, fixture, usesMcp, usesRemoteMcp = false
       : 'Reply with exactly KAI_API_OK. Do not use tools.');
   await page.getByRole('button', { name: 'Start conversation' }).click();
   if (usesCommand) await page.getByRole('button', { name: 'Allow once' }).click();
-  await page.locator('article.assistant .message-body').filter({ hasText: expectedReply }).waitFor({ timeout: 20_000 });
+  await page.locator('.message-body').filter({ hasText: expectedReply }).first().waitFor({ timeout: 20_000 });
 
   const expectedRequests = usesMcp || usesCommand ? 2 : 1;
   if (fixture.requests.length !== expectedRequests) {

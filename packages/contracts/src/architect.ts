@@ -103,6 +103,12 @@ export const architectBriefSchema = z
     avoid: z.array(z.string().trim().min(1).max(500)).max(30).default([]),
     /** What must be true when the work is done; the review is judged against exactly these. */
     doneChecks: z.array(z.string().trim().min(1).max(500)).min(1).max(30),
+    /**
+     * A test or typecheck command that proves the work, which KAI runs before the review and which can overrule an
+     * approval. Only a command on the safe list is ever run (see `isSafeCheckCommand`): the Architect is read-only, and
+     * a command it writes must not be a way round that.
+     */
+    checkCommand: z.string().trim().max(300).optional(),
   })
   .strict();
 export type ArchitectBrief = z.infer<typeof architectBriefSchema>;
@@ -172,6 +178,9 @@ export const architectStatusSchema = z
     fallbackUsed: z.boolean(),
     architectLabel: z.string().max(200),
     implementerLabel: z.string().max(200),
+    /** What each role has cost so far, in USD, so a strong planner's share is visible next to the builder's. */
+    architectCostUsd: z.number().min(0).default(0),
+    implementerCostUsd: z.number().min(0).default(0),
     startedAt: z.string().nullable(),
     updatedAt: z.string().min(1),
     log: z.array(architectLogEntrySchema).max(80),
@@ -191,6 +200,8 @@ export const architectRunInputSchema = z
     autonomy: z.enum(['plan', 'ask', 'autoEdit', 'full', 'custom']),
     /** The composer's agent, used only where a request must name one and the role is an API. */
     agent: agentIdSchema,
+    /** The composer's execution mode, put back on the conversation when the run ends. */
+    execution: executionModeSchema.optional(),
     goal: goalInputSchema.optional(),
     skills: z.array(z.string().min(1).max(200)).max(50).optional(),
     selectedPaths: z.array(z.string().min(1).max(2_000)).max(50).optional(),
@@ -248,4 +259,30 @@ export function isPlanningGradeTarget(target: RoleTarget): boolean {
   if (!api) return false;
   if (api.model) return isPlanningGradeModel(api.model);
   return api.provider === 'anthropic' || api.provider === 'openai';
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The check command the Architect may ask for
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** The test, typecheck and build runners a project check is normally made of, each followed by plain flags only. */
+const SAFE_CHECK_COMMAND = new RegExp(
+  '^(npm (test|run [\\w:.-]+)|pnpm (test|run [\\w:.-]+)|yarn (test|[\\w:.-]+)|bun (test|run [\\w:.-]+)'
+  + '|npx (vitest|tsc|jest|eslint|playwright test)'
+  + '|pytest|python -m (pytest|unittest)'
+  + '|cargo (test|check|clippy|build)|go (test|vet|build)|dotnet (test|build)|mvn (test|verify)|gradle (test|check|build))'
+  + '(\\s+[\\w:=./@-]+|\\s+--?[\\w:=./@-]+)*$',
+);
+
+/**
+ * Whether a command is one KAI will run on the Architect's say-so: a plain test, check or build command with no shell
+ * operators, redirects or substitutions. The Architect is read-only by permission, so anything it names that could
+ * change files or reach beyond the project is refused rather than run; the person's own check command is unaffected.
+ */
+export function isSafeCheckCommand(command: string | null | undefined): boolean {
+  if (!command) return false;
+  const trimmed = command.trim();
+  if (trimmed.length === 0 || trimmed.length > 300) return false;
+  if (/[\n\r;&|<>`$(){}\\]/.test(trimmed)) return false;
+  return SAFE_CHECK_COMMAND.test(trimmed);
 }

@@ -5,7 +5,9 @@ import {
   type AgentRunRequest,
   type AgentRunResult,
   type ArchitectBrief,
+  type AutonomyMode,
   type RoleTarget,
+  type RouteMode,
   type AutoLogEntry,
   type AutoProviderRef,
   type AutoSplitDirective,
@@ -106,6 +108,11 @@ export interface AutoSessionPorts {
   setPacer(pacer: RequestPacer | undefined): void;
   /** Takes the window to the conversation the agent is working in, so the person can watch. */
   openConversation(ownerWindowId: number, conversation: ConversationRecord): void;
+  /**
+   * Puts the composer's own agent, mode, route and access back on the conversation when a split run ends: each role's
+   * run records itself as the conversation's agent, and a tab reopened elsewhere would otherwise show the last role.
+   */
+  restoreComposer?(conversationId: string, composer: { agent: AutoStartInput['agent']; execution: 'cli' | 'api'; route: RouteMode; autonomy: AutonomyMode }): Promise<void>;
   /** Adds a tab for a split's remainder and takes the window to it. */
   openNewTab(ownerWindowId: number, conversation: ConversationRecord): void;
   announce(ownerWindowId: number, status: AutoStatus): void;
@@ -136,6 +143,8 @@ interface ActiveAutoRun {
   pendingAnswer: string | null;
   /** Set when the Architect / Implementer split is on: the brief being worked from and how the review has gone. */
   architect: {
+    /** What the composer showed when the run began, put back on the conversation when it ends. */
+    composer: { agent: AutoStartInput['agent']; execution: 'cli' | 'api'; route: RouteMode; autonomy: AutonomyMode };
     brief: ArchitectBrief | null;
     /** Reviews in a row that sent the work back. */
     revisions: number;
@@ -275,6 +284,7 @@ export class DesktopAutoSession {
       pendingAnswer: null,
       architect: architectSplitActive(input.architect)
         ? {
+            composer: { agent: requested.agent, execution: requested.execution, route: requested.route, autonomy: requested.autonomy },
             brief: null,
             revisions: 0,
             steppedInOn: null,
@@ -585,8 +595,13 @@ export class DesktopAutoSession {
     const coach = this.coach!;
     const owner = active.ownerWindowId;
     this.phase(conversationId, owner, 'working', 'The Architect is reviewing the work.');
-    const reviewed = await coach.review(arch.context, arch.brief, input.prompt, implementerNote);
+    const reviewed = await coach.review(arch.context, arch.brief, input.prompt, implementerNote, active.controller.signal);
     this.state(conversationId).costUsd += reviewed.costUsd;
+    if (reviewed.check) {
+      this.record(conversationId, owner, 'check', reviewed.check.ran
+        ? `The brief's check "${reviewed.check.command}" ${reviewed.check.passed ? 'passed' : 'failed'}.`
+        : `The brief's check "${reviewed.check.command}" was not run: ${reviewed.check.skipped ?? 'no reason'}.`);
+    }
     const verdict = reviewed.verdict;
     this.record(conversationId, owner, 'info', `Architect (${reviewed.label}): ${verdict.verdict.toUpperCase()}. ${verdict.summary}`);
     if (!reviewed.readable) this.record(conversationId, owner, 'warn', 'The review could not be read, so the work was sent back rather than waved through.');
@@ -947,6 +962,9 @@ export class DesktopAutoSession {
     state.waitDetail = null;
     this.record(conversationId, owner, phase === 'failed' ? 'warn' : 'info', message);
     this.phase(conversationId, owner, phase, message);
+    // A split run leaves the conversation recorded as whichever role ran last; put the composer's own choices back.
+    const run = this.runs.get(conversationId);
+    if (run?.architect) void Promise.resolve(this.ports.restoreComposer?.(conversationId, run.architect.composer)).catch(() => undefined);
   }
 
   private record(conversationId: string, owner: number, kind: AutoLogEntry['kind'], text: string): void {

@@ -159,7 +159,7 @@ export function ArchitectToggle({ state, disabled }: { state: ArchitectSplitStat
       <Switch checked={state.split.enabled} disabled={disabled} aria-label="Plan and review with an Architect, build with an Implementer" onChange={(event) => state.setEnabled(event.target.checked)} />
       <span className="flex min-w-0 flex-col">
         <span>Use an Architect and an Implementer</span>
-        <small className="text-[11px] leading-snug text-[var(--text-dim)]">One agent plans and reviews, another builds. Applies to normal sends and to Auto.</small>
+        <small className="text-[11px] leading-snug text-[var(--text-dim)]">One agent plans and reviews, another builds. Applies to normal sends and to Auto. A second account for the same provider? Save its key in Settings, under Credentials, as provider.&lt;name&gt;-&lt;label&gt; (for example provider.anthropic-work) and it appears in these lists.</small>
       </span>
     </label>
   );
@@ -313,6 +313,11 @@ export function ArchitectStatusLine({ status }: { status: ArchitectStatus | null
       <strong>{who}</strong>
       <span>{status.message || PHASE_WORDS[status.phase]}{status.round > 0 && active ? ` · round ${status.round}` : ''}</span>
       {status.fallbackUsed && <span title="The Architect was not available, so its stand-in worked instead">· stand-in working</span>}
+      {status.architectCostUsd + status.implementerCostUsd > 0 && (
+        <span title={`Architect $${status.architectCostUsd.toFixed(4)} · Implementer $${status.implementerCostUsd.toFixed(4)}`}>
+          · ${(status.architectCostUsd + status.implementerCostUsd).toFixed(2)} (Architect ${status.architectCostUsd.toFixed(2)}, Implementer ${status.implementerCostUsd.toFixed(2)})
+        </span>
+      )}
       {waiting && (
         <>
           <UiButton type="button" className="secondary-button" onClick={() => void window.kaiDesktop.answerArchitect({ conversationId: status.conversationId, carryOn: true })}>Continue</UiButton>

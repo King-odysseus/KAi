@@ -1443,9 +1443,27 @@ async function startApplication(): Promise<void> {
     const capability = await directApi.capability(target.api);
     return capability.available ? { ready: true } : { ready: false, reason: capability.unavailableReason ?? 'the API is unavailable' };
   };
+  // Each role's run records itself as the conversation's agent. When a split run ends, the composer's own choices go
+  // back on the record, so a tab reopened elsewhere shows what the person had selected rather than the last role.
+  const restoreComposerRecord = async (
+    conversationId: string,
+    composer: { agent: AgentRunRequest['agent']; execution: 'cli' | 'api'; route: AgentRunRequest['route']; autonomy: AgentRunRequest['autonomy'] },
+  ): Promise<void> => {
+    const conversation = await conversations.get(conversationId);
+    if (!conversation) return;
+    await conversations.save({ ...conversation, activeAgent: composer.agent, execution: composer.execution, route: composer.route, autonomy: composer.autonomy });
+  };
   const architectPorts = {
     runAgent: (request: AgentRunRequest, ownerWindowId: number) => runConversationAgent(ipcContext!, request, ownerWindowId),
     cancelAgent: (conversationId: string) => cancelConversationRun(ipcContext!, conversationId),
+    // The brief's check command, once it has passed the safe-command test. Recorded like any other verification run.
+    runCheck: async (projectId: string, command: string, signal: AbortSignal) => {
+      const projectPath = await projectRootFor(projectId);
+      const check = await runCheckCommand(projectPath, command, signal);
+      await recordVerification(ipcContext!.verification, projectId, projectPath, check).catch(() => null);
+      return { passed: check.exitCode === 0, exitCode: check.exitCode, output: check.output };
+    },
+    restoreComposer: restoreComposerRecord,
     ready: roleReadiness,
     // What the Architect reads to review: the changed files and their diffs, bounded so a big change cannot flood it.
     reviewMaterial: async (projectId: string) => {
@@ -1486,6 +1504,7 @@ async function startApplication(): Promise<void> {
     createConversation: (projectId, title) => createBlankConversation(projectId, title),
     runAgent: (request, ownerWindowId) => runConversationAgent(ipcContext!, request, ownerWindowId),
     cancelAgent: (conversationId) => cancelConversationRun(ipcContext!, conversationId),
+    restoreComposer: restoreComposerRecord,
     runCheck: async (projectId, command, signal) => {
       const projectPath = await projectRootFor(projectId);
       const check = await runCheckCommand(projectPath, command, signal);
