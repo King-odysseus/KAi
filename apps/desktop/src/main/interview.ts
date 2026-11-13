@@ -19,6 +19,7 @@ import {
   directProviderPreset,
   interviewReplySchema,
   interviewIdeaReadResultSchema,
+  interviewLongAnswerResultSchema,
   interviewStateSchema,
   isLocalProvider,
   type AppSettings,
@@ -32,6 +33,7 @@ import {
   type InterviewState,
   type InterviewTopicAskInput,
   type InterviewIdeaReadResult,
+  type InterviewLongAnswerResult,
   type StudioProjectArchiveInput,
   type StudioReadiness,
   type StudioProjectSummary,
@@ -82,6 +84,16 @@ const IDEA_READ_JSON_SCHEMA = {
     summary: { type: 'string' },
     stated: { type: 'array', items: { type: 'string', enum: Object.keys(INTERVIEW_TOPICS) } },
     gaps: { type: 'array', items: { type: 'string', enum: Object.keys(INTERVIEW_TOPICS) } },
+  },
+} as const;
+const LONG_ANSWER_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['summaries'],
+  properties: {
+    summaries: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['question', 'summary', 'topics'], properties: {
+      question: { type: 'string' }, summary: { type: 'string' }, topics: { type: 'array', items: { type: 'string', enum: Object.keys(INTERVIEW_TOPICS) } },
+    } } },
   },
 } as const;
 
@@ -180,12 +192,27 @@ export class DesktopInterview {
     const last = state.rounds[state.rounds.length - 1];
     if (!last) throw new Error('The interview has no questions waiting.');
     const answers = mergeAnswers(last, input.answers);
-    const rounds = [...state.rounds.slice(0, -1), { ...last, answers }];
+    let rounds = [...state.rounds.slice(0, -1), { ...last, answers }];
+    let topics = state.topics;
+    const longAnswers = answers.filter((item) => item.answer.length > 600);
+    if (longAnswers.length > 0) {
+      const analyzed = await this.summarizeLongAnswers(longAnswers);
+      let answerNumber = state.rounds.flatMap((round) => round.answers).filter((item) => item.answer).length;
+      const summaries = new Map(analyzed.summaries.map((item) => [normalise(item.question), item]));
+      const updatedAnswers = answers.map((item) => {
+        if (item.answer) answerNumber += 1;
+        const summary = summaries.get(normalise(item.question));
+        if (!summary) return item;
+        for (const topic of summary.topics) topics = { ...topics, [topic]: { status: 'decided', source: `answer ${answerNumber}` } };
+        return { ...item, summary: summary.summary };
+      });
+      rounds = [...rounds.slice(0, -1), { ...last, answers: updatedAnswers }];
+    }
     // The round budget is spent: ask the user to review before writing the brief.
     if (rounds.flatMap((round) => round.questions).length >= interviewQuestionBudget(state)) {
-      return this.persist({ ...state, rounds, status: 'reviewing', updatedAt: this.ports.now() });
+      return this.persist({ ...state, rounds, topics, status: 'reviewing', updatedAt: this.ports.now() });
     }
-    return this.persist(await this.ask({ ...state, rounds }));
+    return this.persist(await this.ask({ ...state, rounds, topics }));
   }
 
   /**
@@ -385,6 +412,26 @@ export class DesktopInterview {
     );
   }
 
+  private async summarizeLongAnswers(answers: InterviewAnswer[]): Promise<InterviewLongAnswerResult> {
+    const settings = await this.ports.settings();
+    return this.ports.requester.structuredRequest(
+      settings.promptGuide,
+      NAMES,
+      {
+        system: [
+          'Summarize each long project interview answer for future turns.',
+          'Return one result per question with a concise summary in at most three short lines and the topic keys the answer settles.',
+          `Topic keys: ${Object.keys(INTERVIEW_TOPICS).join(', ')}. Only include topics the answer explicitly covers.`,
+          'The original answer remains saved for the brief; later interview prompts use your summary instead.',
+        ].join('\n'),
+        user: JSON.stringify(answers.map(({ question, answer }) => ({ question, answer }))),
+      },
+      'kai_project_long_answer',
+      LONG_ANSWER_JSON_SCHEMA,
+      parseInterviewLongAnswer,
+    );
+  }
+
   /** Asks the model for the next round, updating the goal and assumptions as it learns more. */
   private async ask(state: InterviewState): Promise<InterviewState> {
     const [settings, root] = await Promise.all([
@@ -539,7 +586,7 @@ export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal'
   const answered: string[] = [];
   const skipped: string[] = [];
   for (const round of state.rounds) {
-    for (const item of round.answers) (item.answer ? answered : skipped).push(item.answer ? `Q: ${item.question}\nA: ${item.answer}` : item.question);
+    for (const item of round.answers) (item.answer ? answered : skipped).push(item.answer ? `Q: ${item.question}\nA: ${item.summary ?? item.answer}` : item.question);
   }
   const user = [
     `Project described by the user:\n${state.idea}`,
@@ -627,6 +674,15 @@ export function parseInterviewIdeaRead(content: string): InterviewIdeaReadResult
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     throw new Error(`The Project Studio idea read did not match the expected shape (${issue ? `${issue.path.join('.') || 'result'}: ${issue.message}` : 'unknown error'}).`);
+  }
+  return parsed.data;
+}
+
+export function parseInterviewLongAnswer(content: string): InterviewLongAnswerResult {
+  const parsed = interviewLongAnswerResultSchema.safeParse(parseJsonResponse(content, 'Project Studio long answer summary'));
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new Error(`The long answer summary did not match the expected shape (${issue ? `${issue.path.join('.') || 'result'}: ${issue.message}` : 'unknown error'}).`);
   }
   return parsed.data;
 }

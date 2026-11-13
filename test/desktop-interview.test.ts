@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewGivenAnswers, interviewOpenQuestions, interviewRecap, interviewStateSchema, INTERVIEW_TOPICS, projectTitleFrom, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
-import { briefMarkdown, buildInterviewPrompt, DesktopInterview, parseInterviewIdeaRead, parseInterviewReply, type InterviewPorts } from '../apps/desktop/src/main/interview';
+import { briefMarkdown, buildInterviewPrompt, DesktopInterview, parseInterviewIdeaRead, parseInterviewLongAnswer, parseInterviewReply, type InterviewPorts } from '../apps/desktop/src/main/interview';
 import { SpecStore, specHistoryPath } from '../apps/desktop/src/main/spec-store';
 
 const NOW = '2026-09-28T12:00:00.000Z';
@@ -153,12 +153,38 @@ describe('idea read before the interview', () => {
   });
 });
 
+describe('long interview answers', () => {
+  it('keeps the full answer, records its summary and topics, and sends only the summary in later prompts', async () => {
+    const longAnswer = 'A detailed pasted plan covering users, workflows, design, storage and a chosen stack. '.repeat(12).trim();
+    const prompts: Array<{ schemaName: string; user: string }> = [];
+    const requester = requesterOf([
+      JSON.stringify({ goal: 'Build a booking app.', assumptions: [], questions: ['What should the project do?'] }),
+      JSON.stringify({ goal: 'Build a booking app.', assumptions: [], questions: ['Who manages it?'] }),
+    ], undefined, JSON.stringify({ summaries: [{ question: 'What should the project do?', summary: 'A barber booking app with customer accounts, saved appointments and a branded look.', topics: ['stack', 'design'] }] }), (schemaName, user) => prompts.push({ schemaName, user }));
+    const interview = new DesktopInterview(ports({ requester }));
+    const started = await interview.start({ projectId: 'p1', idea: 'A booking site.' });
+    const next = await interview.answer({ projectId: 'p1', answers: [{ question: 'What should the project do?', answer: longAnswer }] });
+    const storedAnswer = next.rounds[0]?.answers[0];
+    expect(storedAnswer?.answer).toBe(longAnswer);
+    expect(storedAnswer?.summary).toContain('barber booking app');
+    expect(next.topics.stack).toEqual({ status: 'decided', source: 'answer 1' });
+    expect(next.topics.design).toEqual({ status: 'decided', source: 'answer 1' });
+    const followup = prompts.filter((item) => item.schemaName === 'kai_project_interview').at(-1);
+    expect(followup?.user).toContain(storedAnswer?.summary ?? '');
+    expect(followup?.user).not.toContain(longAnswer);
+    expect(briefMarkdown(next, NOW)).toContain(longAnswer);
+    expect(started.status).toBe('asking');
+  });
+});
+
 /** A requester that replays canned replies in order; the last one repeats if the interview asks again. */
-function requesterOf(replies: string[], ideaRead = JSON.stringify({ summary: 'A project idea.', stated: [], gaps: [] })): InterviewPorts['requester'] {
+function requesterOf(replies: string[], ideaRead = JSON.stringify({ summary: 'A project idea.', stated: [], gaps: [] }), longAnswer = JSON.stringify({ summaries: [{ question: 'What should the project do?', summary: 'The answer covers the key requirements.', topics: ['stack', 'design'] }] }), capturePrompt?: (schemaName: string, user: string) => void): InterviewPorts['requester'] {
   let call = 0;
   return {
-    structuredRequest: <T,>(_connection, _names, _prompt, schemaName) => {
+    structuredRequest: <T,>(_connection, _names, prompt, schemaName) => {
+      capturePrompt?.(schemaName, prompt.user);
       if (schemaName === 'kai_project_idea_read') return Promise.resolve(parseInterviewIdeaRead(ideaRead) as unknown as T);
+      if (schemaName === 'kai_project_long_answer') return Promise.resolve(parseInterviewLongAnswer(longAnswer) as unknown as T);
       const reply = replies[call] ?? replies[replies.length - 1] ?? '{}';
       call += 1;
       return Promise.resolve(parseInterviewReply(reply) as unknown as T);

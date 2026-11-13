@@ -67,6 +67,7 @@ export const interviewAnswerSchema = z
     // Interview answers are often a short requirements note, not a one-line reply.
     // Keep this aligned with the idea field so a complete v1 scope can be submitted.
     answer: z.string().trim().max(4_000),
+    summary: z.string().trim().max(1_200).optional(),
   })
   .strict();
 export type InterviewAnswer = z.infer<typeof interviewAnswerSchema>;
@@ -104,6 +105,7 @@ export const interviewTopicSchema = z.object({
   status: z.enum(['decided', 'assumed', 'open']),
   source: z.string().trim().min(1).max(120),
 }).strict();
+export const interviewTopicKeySchema = z.enum(Object.keys(INTERVIEW_TOPICS) as [InterviewTopic, ...InterviewTopic[]]);
 export const interviewTopicsSchema = z.object({
   users: interviewTopicSchema.optional(),
   data: interviewTopicSchema.optional(),
@@ -122,6 +124,14 @@ export const interviewIdeaReadResultSchema = z.object({
   gaps: z.array(z.enum(Object.keys(INTERVIEW_TOPICS) as [InterviewTopic, ...InterviewTopic[]])),
 }).strict();
 export type InterviewIdeaReadResult = z.infer<typeof interviewIdeaReadResultSchema>;
+export const interviewLongAnswerResultSchema = z.object({
+  summaries: z.array(z.object({
+    question: z.string().trim().min(1).max(400),
+    summary: z.string().trim().min(1).max(1_200),
+    topics: z.array(interviewTopicKeySchema),
+  }).strict()),
+}).strict();
+export type InterviewLongAnswerResult = z.infer<typeof interviewLongAnswerResultSchema>;
 
 const savedAssumptionsSchema = z.preprocess((value) => Array.isArray(value)
   ? value.map((item) => typeof item === 'string' ? { text: item, risk: 'medium', status: 'assumed' } : item)
