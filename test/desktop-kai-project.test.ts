@@ -62,6 +62,10 @@ class Server {
     return this.spec;
   }
 
+  async setAcceptanceRequired(required: boolean): Promise<void> {
+    await this.ports.board.setAcceptanceRequired('current', required);
+  }
+
   async board(): Promise<BoardCard[]> {
     return (await this.ports.board.read('current')).cards;
   }
@@ -202,6 +206,8 @@ describe('working the board', () => {
   });
 
   it('refuses to move a card to done with no passing check, and leaves the status alone', async () => {
+    await expect(server.tool('move_task')({ cardId: 'button', status: 'done' })).rejects.toThrow('accepted Review decision');
+    await server.setAcceptanceRequired(false);
     await expect(server.tool('move_task')({ cardId: 'button', status: 'done' })).rejects.toThrow('no record of a passing check');
     expect((await server.board())[0]!.status).toBe('ready');
   });
