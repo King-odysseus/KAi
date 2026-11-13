@@ -393,3 +393,31 @@ export function studioBriefChangeDiff(before: string, after: string): string | n
   const text = ['Brief changed since this run began:', ...removed, ...added].join('\n');
   return text.length <= 3_500 ? text : `${text.slice(0, 3_450)}\n…diff shortened`;
 }
+
+/** Stack choices found in past answers, used only for a local recommendation in Project Studio. */
+export function stackRecommendationFromHistory(states: readonly InterviewState[]): { stack: string; projectCount: number } | null {
+  const counts = new Map<string, { stack: string; projectCount: number; newest: string }>();
+  for (const state of [...states].filter((item) => item.status === 'done').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))) {
+    const stack = interviewChoice(state, 'stack');
+    if (!stack) continue;
+    const key = stack.toLowerCase().replace(/\s+/g, ' ').trim();
+    const existing = counts.get(key);
+    if (existing) existing.projectCount += 1;
+    else counts.set(key, { stack, projectCount: 1, newest: state.updatedAt });
+  }
+  const winner = [...counts.values()].filter((item) => item.projectCount >= 2).sort((a, b) => b.projectCount - a.projectCount || b.newest.localeCompare(a.newest))[0];
+  return winner ? { stack: winner.stack, projectCount: winner.projectCount } : null;
+}
+
+/** Pulls a concise answer to a stack, hosting or design question from a locally saved interview. */
+export function interviewChoice(state: InterviewState, kind: 'stack' | 'hosting' | 'design'): string | null {
+  const patterns = {
+    stack: /\b(stack|framework|technology|built with|database)\b/i,
+    hosting: /\b(host|hosting|hosted|deploy|where.*run)\b/i,
+    design: /\b(design|visual|look|style|theme|colour|color|brand)\b/i,
+  } as const;
+  const answer = [...state.rounds].reverse().flatMap((round) => [...round.answers].reverse())
+    .find((item) => item.answer.trim() && patterns[kind].test(item.question) && !/not sure|you decide|i will decide/i.test(item.answer));
+  if (!answer) return null;
+  return clipToLength(answer.answer.replace(/\s*\(recommended\)/ig, '').trim(), 120);
+}

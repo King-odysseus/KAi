@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewGivenAnswers, interviewOpenQuestions, interviewRecap, interviewStateSchema, INTERVIEW_TOPICS, projectTitleFrom, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, studioBriefChangeDiff, studioCrewGoal, type InterviewState } from '../packages/contracts/src';
+import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewGivenAnswers, interviewOpenQuestions, interviewRecap, interviewStateSchema, INTERVIEW_TOPICS, projectTitleFrom, stackRecommendationFromHistory, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, studioBriefChangeDiff, studioCrewGoal, type InterviewState } from '../packages/contracts/src';
 import { briefMarkdown, buildInterviewPrompt, DesktopInterview, parseInterviewIdeaRead, parseInterviewLongAnswer, parseInterviewReply, type InterviewPorts } from '../apps/desktop/src/main/interview';
 import { SpecStore, specHistoryPath } from '../apps/desktop/src/main/spec-store';
 
@@ -202,6 +202,32 @@ describe('Studio to Crew handoff', () => {
     expect(diff).toContain('- Payments: offline');
     expect(diff).toContain('+ Payments: card');
     expect(studioBriefChangeDiff('same', 'same')).toBeNull();
+  });
+});
+
+describe('local stack recommendations', () => {
+  it('recommends a shared stack from three finished projects and falls back with no history', () => {
+    const history = ['p1', 'p2', 'p3'].map((projectId, index) => state({
+      projectId,
+      status: 'done',
+      updatedAt: `2026-10-0${index + 1}T00:00:00.000Z`,
+      rounds: [{ questions: ['What stack should it be built with?'], options: [], answers: [{ question: 'What stack should it be built with?', answer: 'Django + PostgreSQL on Railway' }] }],
+    }));
+    expect(stackRecommendationFromHistory(history)).toEqual({ stack: 'Django + PostgreSQL on Railway', projectCount: 3 });
+    expect(stackRecommendationFromHistory([])).toBeNull();
+  });
+
+  it('offers the shared local stack first in the stack topic question', async () => {
+    const history = ['old1', 'old2', 'old3'].map((projectId) => state({
+      projectId, status: 'done', rounds: [{ questions: ['What technology stack?'], options: [], answers: [{ question: 'What technology stack?', answer: 'Django + PostgreSQL on Railway' }] }],
+    }));
+    const store = memoryStore();
+    store.list = () => Promise.resolve(history);
+    const read = JSON.stringify({ summary: 'A booking application.', stated: [], gaps: ['stack'] });
+    const interview = new DesktopInterview(ports({ store }, [JSON.stringify({ goal: 'Build an app.', assumptions: [], questions: [] })], read));
+    const started = await interview.start({ projectId: 'new-project', idea: 'An application.' });
+    expect(started.rounds[0]?.options[0]?.[0]).toContain('Django + PostgreSQL on Railway');
+    expect(started.rounds[0]?.options[0]?.[0]).toContain('recommended');
   });
 });
 

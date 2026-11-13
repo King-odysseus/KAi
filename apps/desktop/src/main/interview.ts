@@ -21,6 +21,7 @@ import {
   interviewIdeaReadResultSchema,
   interviewLongAnswerResultSchema,
   interviewStateSchema,
+  stackRecommendationFromHistory,
   isLocalProvider,
   type AppSettings,
   type InterviewAnswer,
@@ -440,10 +441,12 @@ export class DesktopInterview {
     ]);
     const context = await loadProjectContext(root, undefined, INTERVIEW_CONTEXT_CHARS).catch(() => null);
     const styleReference = (await this.ports.spec.read?.(root, STUDIO_STYLE_REFERENCE_NOTES_PATH).catch(() => null)) ?? null;
+    const history = await this.ports.store.list();
+    const stackRecommendation = stackRecommendationFromHistory(history.filter((item) => item.projectId !== state.projectId));
     const reply = await this.ports.requester.structuredRequest(
       settings.promptGuide,
       NAMES,
-      buildInterviewPrompt(state, context, styleReference),
+      buildInterviewPrompt({ ...state, stackRecommendation }, context, styleReference),
       'kai_project_interview',
       INTERVIEW_JSON_SCHEMA,
       parseInterviewReply,
@@ -463,6 +466,18 @@ export class DesktopInterview {
       ? hasTopicMap ? missingOpenTopicQuestion(state.idea, reply.topics) : missingRequiredQuestion(state)
       : null;
     if (required && remaining > 0) fresh.push(required);
+    if (stackRecommendation) {
+      const stack = clipToLength(stackRecommendation.stack, 72);
+      const recommended = clipOption(`${stack} (recommended; used by last ${stackRecommendation.projectCount} projects)`);
+      fresh = fresh.map((item) => /\b(stack|framework|technology|built with|database)\b/i.test(item.question)
+        ? (() => {
+          const alternatives = item.options.filter((option) => normalise(option) !== normalise(recommended));
+          const notSure = alternatives.find((option) => /not sure|you decide/i.test(option));
+          const options = [recommended, ...alternatives.filter((option) => option !== notSure)].slice(0, STUDIO_MAX_OPTIONS - (notSure ? 1 : 0));
+          return { ...item, options: notSure ? [...options, notSure] : options };
+        })()
+        : item);
+    }
     const questions = fresh.map((item) => item.question);
     const next: InterviewState = {
       ...state,
@@ -564,7 +579,7 @@ function summaryOf(state: InterviewState): StudioProjectSummary {
  * The interview prompt. It shows everything the user has said so far, marks what they skipped, and tells the model
  * to stop asking when it can already write a specific goal.
  */
-export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal' | 'assumptions' | 'rounds'> & Partial<Pick<InterviewState, 'topics' | 'ideaSummary' | 'ideaGaps' | 'ideaStated'>> & { extraQuestions?: number }, context: string | null, styleReference: string | null = null): { system: string; user: string } {
+export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal' | 'assumptions' | 'rounds'> & Partial<Pick<InterviewState, 'topics' | 'ideaSummary' | 'ideaGaps' | 'ideaStated'>> & { extraQuestions?: number; stackRecommendation?: { stack: string; projectCount: number } | null }, context: string | null, styleReference: string | null = null): { system: string; user: string } {
   const system = [
     'You are the Project Studio inside KAI, a desktop workbench where a team of coding agents builds software.',
     'The user has described a project in a paragraph. Your job is to close the gaps that would make the agents guess, before anything is written down as a requirement.',
@@ -574,6 +589,7 @@ export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal'
     '- "goal": the project restated as one clear, specific goal (what is built, for whom, and what "done" looks like).',
     `- "assumptions": objects with "text", "risk" (high, medium or low: how much a wrong guess changes what is built), and "status" (assumed). Keep them short and concrete, under ${STUDIO_MAX_ASSUMPTION_CHARS} characters, and order high risk first.`,
     '- "topics": for each project topic, return status decided, assumed or open, and a short source such as "idea", "answer 2" or "assumed: ...". Include all topic keys even when open.',
+    state.stackRecommendation ? `- The user's last ${state.stackRecommendation.projectCount} projects shared ${state.stackRecommendation.stack}. Offer it first as the recommended stack option.` : '',
     `- "questions": at most ${roundLimit(state.rounds.length)} question, the single most important one only the user can answer, as an object {"question", "options"}. The whole interview may ask no more than ${interviewQuestionBudget(state)} questions; it has already asked ${state.rounds.flatMap((round) => round.questions).length}. It is shown in a chat, so write it as one short, conversational question of at most ${STUDIO_MAX_QUESTION_CHARS} characters that opens with a few words acknowledging the user's last answer (nothing, when there is none yet). Ask about the things that would change what gets built: who uses it, the data and where it lives, accounts and permissions, payments, the platform, and how the result is judged.`,
     `Give each question 2 to ${STUDIO_MAX_OPTIONS} "options": short, concrete answers fitted to THIS project and to everything the user has told you so far, so that a later question's options follow from the earlier answers (a payment question after "deposit" offers deposit styles, not generic ones). Keep every option to ${STUDIO_MAX_OPTION_CHARS} characters or fewer: they are shown as chips beside the answer box, and a longer one is cut short. Put the option you would recommend first and end its text with " (recommended)". Always make the last option "Not sure, you decide". If the user picked it, or skipped, decide yourself and add the decision to "assumptions" with a few words of reason. Use an empty options array only for a question that is truly open-ended.`,
     'Many users are new to building software. When their wording suggests that (no technical terms, "I don\'t know", very broad answers), write in plain language, explain what each option means in a few words, and prefer the simplest choice that works. Never assume they know what a framework, database or hosting service is.',
