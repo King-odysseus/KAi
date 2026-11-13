@@ -44,20 +44,24 @@ try {
   await waitForProjectName(page, 'Sample Project');
   await verifyBuildIdentifier(page);
 
-  await verifyCodeEditor(page);
-  await verifySettingsCheckboxRetention(page);
-  if (!process.env.KAI_TUTOR_SMOKE) {
-  await verifyEditorAutosave(page);
-  await verifyLivePreview(electronApp, page);
-  await verifyGitAndTerminal(page);
-  await verifyOperations(page);
-  await verifyTasksAndSettings(page);
-  await verifyStudioAndGraph(page);
-  await verifyStudioArtifacts(page);
-  await verifySettingsSearch(page);
-  await verifyEqualizer(page);
-  await verifyThemes(page);
-  await verifyIndependentWindows(electronApp, page);
+  if (process.argv.includes('--recipes-only')) {
+    await verifySavedRecipeFlow(electronApp, page);
+  } else {
+    await verifyCodeEditor(page);
+    await verifySettingsCheckboxRetention(page);
+    if (!process.env.KAI_TUTOR_SMOKE) {
+      await verifyEditorAutosave(page);
+      await verifyLivePreview(electronApp, page);
+      await verifyGitAndTerminal(page);
+      await verifyOperations(page);
+      await verifyTasksAndSettings(page);
+      await verifyStudioAndGraph(page);
+      await verifyStudioArtifacts(page);
+      await verifySettingsSearch(page);
+      await verifyEqualizer(page);
+      await verifyThemes(page);
+      await verifyIndependentWindows(electronApp, page);
+    }
   }
 
   if (rendererErrors.length > 0) throw new Error(`Renderer errors: ${rendererErrors.join(' | ')}`);
@@ -76,6 +80,87 @@ try {
 } finally {
   await electronApp?.close().catch(() => undefined);
   await rm(userData, { recursive: true, force: true }).catch(() => undefined);
+}
+
+/** Exercises saving a prompt from a real conversation and reusing its persisted recipe in the composer. */
+async function verifySavedRecipeFlow(application, page) {
+  await application.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('agents:run');
+    globalThis.__kaiRecipeSmokeRequests = [];
+    globalThis.__kaiRecipeSmokeConversation = null;
+    ipcMain.handle('agents:run', async (_event, request) => {
+      globalThis.__kaiRecipeSmokeRequests.push(request);
+      const now = new Date().toISOString();
+      const conversation = globalThis.__kaiRecipeSmokeConversation ?? {
+        schemaVersion: 1,
+        id: request.conversationId,
+        projectId: 'project-workbench-smoke',
+        title: request.prompt.slice(0, 80),
+        createdAt: now,
+        updatedAt: now,
+        archived: false,
+        unread: false,
+        activeAgent: request.agent,
+        route: request.route,
+        autonomy: request.autonomy,
+        execution: request.execution ?? 'cli',
+        turns: [],
+        events: [],
+      };
+      conversation.turns.push(
+        { id: `smoke-user-${conversation.turns.length}`, role: 'user', text: request.prompt, createdAt: now },
+        { id: `smoke-assistant-${conversation.turns.length + 1}`, role: 'assistant', text: 'Recipe smoke response.', createdAt: now },
+      );
+      conversation.updatedAt = now;
+      globalThis.__kaiRecipeSmokeConversation = conversation;
+      return { ok: true, data: { conversation, status: 'completed', output: 'Recipe smoke response.' } };
+    });
+  });
+
+  await navigateTo(page, 'Workspace');
+  await page.getByLabel('Task prompt').waitFor();
+  await page.getByRole('button', { name: 'Task type' }).click();
+  await page.getByRole('listbox', { name: 'Task type' }).getByRole('option', { name: 'Build' }).click();
+  const recipePicker = page.getByRole('button', { name: 'Recipe', exact: true });
+  await recipePicker.waitFor();
+  await recipePicker.click();
+  await page.getByRole('listbox', { name: 'Recipe' }).getByRole('option', { name: 'From a spec' }).click();
+
+  const originalPrompt = 'Create a small fixture change and verify it.';
+  await page.getByLabel('Task prompt').fill(originalPrompt);
+  await page.getByRole('button', { name: 'Start conversation' }).click();
+  await page.getByText('Recipe smoke response.').waitFor();
+  const userTurn = page.locator('article.message.user').filter({ hasText: originalPrompt }).first();
+  await userTurn.getByRole('button', { name: 'Save this prompt as a recipe' }).click();
+  await page.getByRole('heading', { name: 'Save as a recipe' }).waitFor();
+  await page.getByLabel('Name (it will appear under Build)').fill('Smoke recipe');
+  await page.getByRole('button', { name: 'Save recipe' }).click();
+  await page.getByText('Saved "Smoke recipe" under Build.').waitFor();
+
+  const saved = await page.evaluate(async () => (await window.kaiDesktop.getPreferences('project-workbench-smoke')).data);
+  const recipe = saved?.recipes?.find((entry) => entry.label === 'Smoke recipe');
+  if (!recipe || recipe.starter !== originalPrompt || !recipe.skills.includes('spec-implementer')) {
+    throw new Error(`The saved recipe did not preserve its prompt and selected skill: ${JSON.stringify(recipe)}`);
+  }
+
+  await recipePicker.click();
+  await page.getByRole('listbox', { name: 'Recipe' }).getByRole('option', { name: 'Feature' }).click();
+  await recipePicker.click();
+  await page.getByRole('listbox', { name: 'Recipe' }).getByRole('option', { name: 'Smoke recipe' }).click();
+  if (await page.getByLabel('Task prompt').inputValue() !== originalPrompt) throw new Error('Choosing the saved recipe did not restore its prompt.');
+  await page.getByRole('button', { name: 'Send message' }).click();
+  await page.getByText('Recipe smoke response.').last().waitFor();
+  const requests = await application.evaluate(() => globalThis.__kaiRecipeSmokeRequests);
+  if (requests.length !== 2 || !requests[1].skills?.includes('spec-implementer')) {
+    throw new Error(`Sending the saved recipe did not carry its saved skill: ${JSON.stringify(requests)}`);
+  }
+
+  await page.getByRole('button', { name: 'Remove saved recipe' }).click();
+  await page.getByRole('heading', { name: 'Remove "Smoke recipe"?' }).waitFor();
+  await page.getByRole('button', { name: 'Remove recipe' }).click();
+  await page.getByRole('button', { name: 'Remove saved recipe' }).waitFor({ state: 'detached' });
+  const afterRemoval = await page.evaluate(async () => (await window.kaiDesktop.getPreferences('project-workbench-smoke')).data);
+  if (afterRemoval?.recipes?.some((entry) => entry.id === recipe.id)) throw new Error('Removing the saved recipe did not persist.');
 }
 
 async function verifyCodeEditor(page) {

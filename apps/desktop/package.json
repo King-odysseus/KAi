@@ -12,6 +12,7 @@
     "test": "npm run test --prefix ../..",
     "smoke": "node scripts/smoke.mjs",
     "smoke:workbench": "node scripts/smoke-workbench.mjs",
+    "smoke:recipes": "node scripts/smoke-workbench.mjs --recipes-only",
     "smoke:team": "node scripts/smoke-team.mjs",
     "smoke:mobile": "node scripts/smoke-mobile.mjs",
     "stage:engines": "node scripts/stage-engines.mjs",
