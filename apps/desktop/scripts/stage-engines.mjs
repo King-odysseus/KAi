@@ -206,13 +206,33 @@ async function validateSourceFiles(engine, sourceRoot) {
   }
 }
 
+/**
+ * Renames a folder, waiting out the Windows lock that antivirus and the search indexer put on one that was just written.
+ *
+ * The staged engines are thousands of fresh files, and until the scanner lets go of any one of them Windows refuses to
+ * rename the folder that holds them (EPERM or EBUSY), a refusal that clears by itself within seconds. Failing on the
+ * first one made the whole package step fail at random, and the same build succeeded when run again.
+ */
+async function renameWhenFree(from, to, { attempts = 8, delayMs = 750 } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const locked = error && typeof error === 'object' && ['EPERM', 'EBUSY', 'EACCES'].includes(error.code);
+      if (!locked || attempt >= attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
+    }
+  }
+}
+
 async function publishStagedEngines() {
   const hadPrevious = existsSync(resourcesRoot);
-  if (hadPrevious) await rename(resourcesRoot, previousRoot);
+  if (hadPrevious) await renameWhenFree(resourcesRoot, previousRoot);
   try {
-    await rename(stagingRoot, resourcesRoot);
+    await renameWhenFree(stagingRoot, resourcesRoot);
   } catch (error) {
-    if (hadPrevious && !existsSync(resourcesRoot)) await rename(previousRoot, resourcesRoot);
+    if (hadPrevious && !existsSync(resourcesRoot)) await renameWhenFree(previousRoot, resourcesRoot);
     throw error;
   }
   await rm(previousRoot, { recursive: true, force: true });
