@@ -114,7 +114,17 @@ if (process.env.KAI_DESKTOP_USER_DATA) {
   app.setPath('userData', path.resolve(process.env.KAI_DESKTOP_USER_DATA));
 }
 
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
+/**
+ * Codex, Claude, Qwen and Gemini each hold an MCP entry that runs this very binary on `kai-project.cjs`, with
+ * `ELECTRON_RUN_AS_NODE=1` so it behaves as plain Node. An app that drops that variable launches the whole of KAI
+ * instead: with KAI running, the second-instance handler below pops its window up; with it closed, a window opens and
+ * goes again. Every such launch ends here, before it can ask for the instance lock and so before it can signal the
+ * copy that is running.
+ */
+const launchedAsBoardServer =
+  !process.env.ELECTRON_RUN_AS_NODE && process.argv.slice(1).some((argument) => /[\\/]kai-project\.cjs$/i.test(argument));
+if (launchedAsBoardServer) app.exit(0);
+const hasSingleInstanceLock = launchedAsBoardServer ? false : app.requestSingleInstanceLock();
 let ipcContext: IpcContext | null = null;
 let serviceController: DesktopServiceController | null = null;
 /** Held here as well as in `startApplication`, because the quit handler runs after that scope has gone. */
@@ -232,7 +242,7 @@ installCrashRecord();
 // Mockups are served from their own scheme with their own policy; see mockup-server.ts. Registered before ready.
 protocol.registerSchemesAsPrivileged([{ scheme: MOCKUP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 
-app.whenReady().then(startApplication).catch(reportStartupFailure);
+if (!launchedAsBoardServer) app.whenReady().then(startApplication).catch(reportStartupFailure);
 
 app.on('window-all-closed', () => {
   if (process.platform === 'darwin') return;
