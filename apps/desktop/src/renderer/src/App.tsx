@@ -1242,6 +1242,23 @@ export function App(): ReactNode {
     setView('studio');
   }
 
+  async function openProjectInStudio(projectId: string): Promise<void> {
+    const opened = await openProject(projectId, 'stay');
+    if (!opened) return;
+    setStudioPlanRequest({ projectId, nonce: Date.now() });
+    setView('studio');
+  }
+
+  async function openProjectInCrew(projectId: string): Promise<void> {
+    const opened = await openProject(projectId, 'stay');
+    if (opened) setView('crew');
+  }
+
+  async function openProjectInWorkflows(projectId: string): Promise<void> {
+    const opened = await openProject(projectId, 'stay');
+    if (opened) setView('workflows');
+  }
+
   async function openStudioProject(
     studioProjectId: string,
     destination: 'composer' | 'editor' | 'generate' | 'crew',
@@ -2336,6 +2353,10 @@ export function App(): ReactNode {
             onChoose={() => void chooseProject()}
             onOpen={(id, destination) => void openProject(id, destination)}
             onOpenInNewWindow={(id) => void openProjectInNewWindow(id)}
+            onOpenConversation={(id) => void openConversation(id)}
+            onOpenStudio={(id) => void openProjectInStudio(id)}
+            onOpenCrew={(id) => void openProjectInCrew(id)}
+            onOpenWorkflows={(id) => void openProjectInWorkflows(id)}
             onRemove={(id) => void removeProject(id)}
           />
         );

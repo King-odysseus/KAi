@@ -8,6 +8,7 @@ import {
   Code2,
   Clock3,
   Copy,
+  ArrowLeft,
   FolderKanban,
   FolderOpen,
   GitBranch,
@@ -43,6 +44,9 @@ import type {
   WorkflowRun,
   WorkflowStep,
   WorkflowTemplate,
+  CrewRun,
+  StudioBoard,
+  StudioProjectSummary,
 } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
 import { confirmDialog, promptDialog } from './AppDialog';
@@ -54,12 +58,17 @@ import { UiButton } from './UiButton';
 import { Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
 import { PageHeader } from './ui/PageHeader';
+import { projectOverviewActivity } from '../project-overview';
 export function ProjectsView({
   projects,
   activeProjectId,
   onChoose,
   onOpen,
   onOpenInNewWindow,
+  onOpenConversation,
+  onOpenStudio,
+  onOpenCrew,
+  onOpenWorkflows,
   onRemove,
 }: {
   projects: ProjectRecord[];
@@ -67,8 +76,79 @@ export function ProjectsView({
   onChoose: () => void;
   onOpen: (id: string, destination: 'workspace' | 'code' | 'import') => void;
   onOpenInNewWindow: (id: string) => void;
+  onOpenConversation: (id: string) => void;
+  onOpenStudio: (id: string) => void;
+  onOpenCrew: (id: string) => void;
+  onOpenWorkflows: (id: string) => void;
   onRemove: (id: string) => void;
 }): ReactNode {
+  const [overviewId, setOverviewId] = useState<string | null>(null);
+  const [overview, setOverview] = useState<{ studio: StudioProjectSummary | null; board: StudioBoard | null; crew: CrewRun[]; workflows: WorkflowRun[]; conversations: ConversationRecord[] } | null>(null);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
+  const [overviewBusy, setOverviewBusy] = useState(false);
+  const selected = projects.find((project) => project.id === overviewId) ?? null;
+  useEffect(() => {
+    let cancelled = false;
+    if (!selected) { setOverview(null); setOverviewError(null); setOverviewBusy(false); return; }
+    setOverviewBusy(true);
+    setOverviewError(null);
+    void Promise.all([
+      window.kaiDesktop.studioProjects().then(unwrap),
+      window.kaiDesktop.listCrewRuns(selected.id).then(unwrap),
+      window.kaiDesktop.listWorkflowRuns(selected.id).then(unwrap),
+      window.kaiDesktop.listConversations().then(unwrap),
+    ]).then(async ([studios, crew, workflows, allConversations]) => {
+      const activity = projectOverviewActivity(selected.id, studios, crew, workflows, allConversations);
+      const board = activity.studio ? await window.kaiDesktop.studioBoard(activity.studio.id).then(unwrap).catch(() => null) : null;
+      if (cancelled) return;
+      setOverview({ ...activity, board });
+    }).catch((error: unknown) => {
+      if (!cancelled) setOverviewError(error instanceof Error ? error.message : String(error));
+    }).finally(() => { if (!cancelled) setOverviewBusy(false); });
+    return () => { cancelled = true; };
+  }, [selected?.id]);
+
+  if (selected) return (
+    <div className="page-view">
+      <PageHeader title={selected.name} detail="Project overview" actions={<UiButton type="button" className="secondary-button" onClick={() => setOverviewId(null)}><ArrowLeft size={14} /><span>All projects</span></UiButton>} />
+      <section className="ops-panel" aria-label="Project folder">
+        <h2>Folder</h2>
+        <p className="mono project-card-path" title={selected.path}>{selected.path}</p>
+        <div className="page-actions">
+          <UiButton type="button" className="secondary-button" onClick={() => onOpen(selected.id, 'workspace')}>Open composer</UiButton>
+          <UiButton type="button" className="secondary-button" onClick={() => onOpenStudio(selected.id)}>Open Studio</UiButton>
+          <UiButton type="button" className="secondary-button" onClick={() => onOpenCrew(selected.id)}>Open Crew</UiButton>
+          <UiButton type="button" className="secondary-button" onClick={() => onOpenWorkflows(selected.id)}>Open Workflows</UiButton>
+        </div>
+      </section>
+      {overviewBusy && <p role="status">Loading project activity…</p>}
+      {overviewError && <div className="workbench-error" role="alert">{overviewError}</div>}
+      {overview && <>
+        <section className="ops-panel" aria-label="Studio plan and board">
+          <h2>Studio plan and board</h2>
+          {overview.studio ? <>
+            <p><strong>{overview.studio.title}</strong> · {overview.studio.status}</p>
+            <p>{overview.studio.idea}</p>
+            <small>Plan file: {overview.studio.briefPath ?? 'Brief not written yet'}</small>
+            {!overview.board || overview.board.cards.length === 0 ? <p>No board cards yet.</p> : <ul className="studio-list">{overview.board.cards.map((card) => <li key={card.id}><strong>{card.title}</strong> · {card.status}{card.reviewDecision ? ` · ${card.reviewDecision}` : ''}</li>)}</ul>}
+          </> : <p>No Studio plan is linked to this folder yet.</p>}
+        </section>
+        <section className="ops-panel" aria-label="Crew runs">
+          <h2>Crew runs ({overview.crew.length})</h2>
+          {overview.crew.length ? <ul className="studio-list">{overview.crew.map((run) => <li key={run.id}><strong>{run.goal}</strong> · {run.status} · {run.tasks.filter((task) => task.status === 'accepted').length}/{run.tasks.length} accepted</li>)}</ul> : <p>No Crew runs yet.</p>}
+        </section>
+        <section className="ops-panel" aria-label="Workflow runs">
+          <h2>Workflow runs ({overview.workflows.length})</h2>
+          {overview.workflows.length ? <ul className="studio-list">{overview.workflows.map((run) => <li key={run.conversationId}><strong>{run.workflow.title}</strong> · {run.workflow.status}</li>)}</ul> : <p>No workflow runs yet.</p>}
+        </section>
+        <section className="ops-panel" aria-label="Conversations">
+          <h2>Conversations ({overview.conversations.length})</h2>
+          {overview.conversations.length ? <ul className="studio-list">{overview.conversations.slice(0, 20).map((conversation) => <li key={conversation.id}><strong>{conversation.title || 'Untitled conversation'}</strong> · {conversation.turns.length} turns · <UiButton type="button" className="secondary-button" onClick={() => onOpenConversation(conversation.id)}>Open</UiButton></li>)}</ul> : <p>No conversations yet.</p>}
+        </section>
+      </>}
+    </div>
+  );
+
   return (
     <div className="page-view">
       <PageHeader
@@ -91,6 +171,7 @@ export function ProjectsView({
               </div>
               <span className="mono project-card-path" title={project.path}>{project.path}</span>
               <div className="project-card-actions">
+                <UiButton type="button" className="secondary-button" onClick={() => setOverviewId(project.id)}><span>Overview</span></UiButton>
                 <UiButton type="button" className="secondary-button" onClick={() => onOpen(project.id, 'workspace')} title={`Open ${project.name} in the composer`}><span>Composer</span></UiButton>
                 <UiButton type="button" className="secondary-button" onClick={() => onOpen(project.id, 'import')} title={`Scan ${project.name} for what it is missing`}><span>Scan</span></UiButton>
                 <UiButton type="button" className="secondary-button" onClick={() => onOpen(project.id, 'code')} title={`Open ${project.name} in the editor`}><span>Editor</span></UiButton>
