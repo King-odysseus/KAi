@@ -364,3 +364,32 @@ export function interviewRecap(state: InterviewState): {
     leftToAgents: asked.filter((question) => !answers.get(question)?.trim()),
   };
 }
+
+/** Studio-to-Crew handoff: inline the decision context only when the whole goal fits Crew's limit. */
+export function studioCrewGoal(state: InterviewState): string {
+  const header = 'Build this project from the Project Studio plan. Read .kai/spec/brief.md first, then the other files under .kai/spec (artifacts, board) and follow them; the brief is the source of truth for the stack, roles and design.';
+  const goal = state.goal.trim() || state.idea.trim();
+  const pointer = `${header}\n\nGoal: ${goal}`;
+  const coverage = ['| Topic | Status | Source |', '| --- | --- | --- |', ...Object.entries(INTERVIEW_TOPICS).map(([key, label]) => {
+    const topic = state.topics[key as InterviewTopic];
+    return `| ${label} | ${topic?.status ?? 'open'} | ${topic?.source ?? 'not covered'} |`;
+  })].join('\n');
+  const assumptions = state.assumptions.filter((item) => item.status === 'assumed');
+  const enriched = `${pointer}\n\n## Coverage\n\n${coverage}\n\n## Open assumptions\n\n${assumptions.length ? assumptions.map((item) => `- ${item.text}`).join('\n') : '- None.'}`;
+  return enriched.length <= STUDIO_MAX_GOAL_CHARS ? enriched : `${header}\n\nGoal: ${clipToLength(goal, 1_500)}`;
+}
+
+/** A compact line diff suitable for pasting to the Crew Lead as guidance. */
+export function studioBriefChangeDiff(before: string, after: string): string | null {
+  if (before === after) return null;
+  const oldLines = before.split(/\r?\n/);
+  const newLines = after.split(/\r?\n/);
+  let prefix = 0;
+  while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix += 1;
+  let suffix = 0;
+  while (suffix < oldLines.length - prefix && suffix < newLines.length - prefix && oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]) suffix += 1;
+  const removed = oldLines.slice(prefix, oldLines.length - suffix).map((line) => `- ${line}`);
+  const added = newLines.slice(prefix, newLines.length - suffix).map((line) => `+ ${line}`);
+  const text = ['Brief changed since this run began:', ...removed, ...added].join('\n');
+  return text.length <= 3_500 ? text : `${text.slice(0, 3_450)}\n…diff shortened`;
+}

@@ -1058,6 +1058,11 @@ async function startApplication(): Promise<void> {
     save: (run) => crewStore.save(run),
     load: (id) => crewStore.get(id),
     list: (projectId) => crewStore.list(projectId),
+    readBrief: async (projectId) => {
+      const project = (await ipcContext!.projects.list()).find((candidate) => candidate.id === projectId);
+      if (!project) return null;
+      return readFile(path.join(project.path, '.kai', 'spec', 'brief.md'), 'utf8').catch(() => null);
+    },
     notifyChanged: (ownerWindowId, run) => { desktopWindows.send(ownerWindowId, 'crew:changed', run); },
     changedFiles: async (projectId) => {
       const project = (await ipcContext!.projects.list()).find((candidate) => candidate.id === projectId);

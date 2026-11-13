@@ -220,6 +220,15 @@ export function answerAsk(run: CrewRun, answer: 'continue' | 'skip' | 'finish', 
   return { ...next, status: 'running' };
 }
 
+/** Adds fresh project guidance to a live run without requiring the crew to be stopped on an Ask. */
+export function guideCrewRun(run: CrewRun, guidance: string, at: string): CrewRun {
+  const note = guidance.trim().slice(0, 2_000);
+  if (!note) return run;
+  const heading = '\n\nNew guidance from you:\n';
+  const goal = `${run.goal.slice(0, Math.max(0, 4_000 - heading.length - note.length))}${heading}${note}`;
+  return feed({ ...run, goal, updatedAt: at }, { who: 'you', kind: 'info', text: `Told the Lead: ${shorten(note)}` }, at);
+}
+
 /** A limit that has been reached, as a question for the user, or null while the run is inside all of them. */
 export function limitReached(run: CrewRun, now: Date): CrewAsk | null {
   const { maxUsd, maxMinutes } = run.config.limits;

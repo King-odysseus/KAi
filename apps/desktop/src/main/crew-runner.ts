@@ -3,7 +3,7 @@ import { classifyWork, crewRunSchema } from '@kai/contracts';
 import type { AgentRunRequest, AgentRunResult, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
 import {
   addCheckFix, addSpend, addTasks, answerAsk, enforceLimits, failBuild, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
-  roleAccess, settle, startTask, submitTask, subAgentsFor, taskBrief, unfinishedReason,
+  roleAccess, settle, startTask, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun,
 } from './crew-engine';
 import { parsePlan, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt } from './crew-prompts';
 
@@ -15,6 +15,8 @@ export interface CrewRunnerPorts {
   save(run: CrewRun): Promise<void>;
   load(id: string): Promise<CrewRun | null>;
   list(projectId?: string): Promise<CrewRun[]>;
+  /** Reads the Studio brief in this project, if one exists. */
+  readBrief?(projectId: string): Promise<string | null>;
   notifyChanged(ownerWindowId: number, run: CrewRun): void;
   /** A few lines on how this developer usually builds things, for the goal. Optional: no conventions, no lines. */
   conventions?(projectId: string, goal: string): Promise<string>;
@@ -75,8 +77,9 @@ export class DesktopCrewRunner {
   async start(input: CrewStartInput, ownerWindowId: number): Promise<CrewRun> {
     const at = this.now().toISOString();
     const conversation = await this.ports.createConversation(input.projectId, `Crew: ${input.goal.slice(0, 50)}`);
+    const briefSnapshot = await this.ports.readBrief?.(input.projectId).catch(() => null) ?? null;
     const run = crewRunSchema.parse({
-      schemaVersion: 1, id: `crew_${randomUUID()}`, projectId: input.projectId, goal: input.goal, status: 'planning',
+      schemaVersion: 1, id: `crew_${randomUUID()}`, projectId: input.projectId, goal: input.goal, briefSnapshot, status: 'planning',
       config: input.config, tasks: [], feed: [], startedAt: at, updatedAt: at,
     });
     const active = this.attach(run, ownerWindowId, conversation.id);
@@ -105,7 +108,18 @@ export class DesktopCrewRunner {
   /** The user answered the question the run stopped on. */
   async answer(runId: string, answer: 'continue' | 'skip' | 'finish', guidance: string, ownerWindowId: number): Promise<CrewRun> {
     const run = await this.require(runId);
-    if (!run.ask) throw new Error('This crew is not waiting on a question.');
+    if (!run.ask) {
+      if (!guidance.trim() || answer !== 'continue') throw new Error('This crew is not waiting on a question.');
+      if (run.status === 'completed' || run.status === 'stopped') throw new Error('This crew has finished.');
+      const next = guideCrewRun(run, guidance, this.now().toISOString());
+      const active = this.active.get(runId);
+      if (active) {
+        await this.commit(active, next);
+        return active.run;
+      }
+      await this.ports.save(next);
+      return next;
+    }
     return this.resumeWith(run, ownerWindowId, answerAsk(run, answer, guidance, this.now().toISOString()));
   }
 

@@ -67,6 +67,7 @@ import {
   type WorkflowRun,
   type WorkflowStartInput,
   createDefaultCrewConfig,
+  studioCrewGoal,
   parseIpcInput,
   parseSecurityFindingsReport,
   parseTasks,
@@ -4235,13 +4236,11 @@ async function launchStudioProject(
   if (destination === 'crew') {
     // A crew goal is capped well below a full brief, and the crew's agents can read files: point at the brief
     // and the artifacts instead of pasting them, so nothing is cut off mid-sentence.
-    const goal = (state.goal.trim() || state.idea.trim()).slice(0, 1_500);
+    const goal = studioCrewGoal(state);
     return {
       projectId: project.id,
       projectName: project.name,
-      prompt: `Build this project from the Project Studio plan. Read .kai/spec/brief.md first, then the other files under .kai/spec (artifacts, board) and follow them; the brief is the source of truth for the stack, roles and design.
-
-Goal: ${goal}`,
+      prompt: goal,
     };
   }
   const prompt = brief

@@ -208,6 +208,8 @@ export const crewRunSchema = z
     id: z.string().min(1),
     projectId: z.string().min(1),
     goal: z.string().trim().min(1).max(4_000),
+    // The brief as the user handed it to this run, used to detect later Studio edits.
+    briefSnapshot: z.string().max(200_000).nullable().default(null),
     status: crewRunStatusSchema,
     config: crewConfigSchema,
     tasks: z.array(crewTaskSchema).max(300),

@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewGivenAnswers, interviewOpenQuestions, interviewRecap, interviewStateSchema, INTERVIEW_TOPICS, projectTitleFrom, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
+import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewGivenAnswers, interviewOpenQuestions, interviewRecap, interviewStateSchema, INTERVIEW_TOPICS, projectTitleFrom, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, studioBriefChangeDiff, studioCrewGoal, type InterviewState } from '../packages/contracts/src';
 import { briefMarkdown, buildInterviewPrompt, DesktopInterview, parseInterviewIdeaRead, parseInterviewLongAnswer, parseInterviewReply, type InterviewPorts } from '../apps/desktop/src/main/interview';
 import { SpecStore, specHistoryPath } from '../apps/desktop/src/main/spec-store';
 
@@ -174,6 +174,34 @@ describe('long interview answers', () => {
     expect(followup?.user).not.toContain(longAnswer);
     expect(briefMarkdown(next, NOW)).toContain(longAnswer);
     expect(started.status).toBe('asking');
+  });
+});
+
+describe('Studio to Crew handoff', () => {
+  it('includes coverage and open assumptions when the Crew goal fits, and keeps the pointer when it does not', () => {
+    const small = state({
+      goal: 'Build a booking site.',
+      topics: { stack: { status: 'decided', source: 'answer 2' } },
+      assumptions: [{ text: 'Staff manage refunds.', risk: 'medium', status: 'assumed' }],
+    });
+    const full = studioCrewGoal(small);
+    expect(full).toContain('## Coverage');
+    expect(full).toContain('| Technology stack | decided | answer 2 |');
+    expect(full).toContain('Staff manage refunds.');
+    expect(full.length).toBeLessThanOrEqual(4_000);
+
+    const large = studioCrewGoal(state({ goal: 'A'.repeat(3_950), assumptions: small.assumptions, topics: small.topics }));
+    expect(large.length).toBeLessThanOrEqual(4_000);
+    expect(large).toContain('Read .kai/spec/brief.md first');
+    expect(large).not.toContain('## Coverage');
+  });
+
+  it('detects a changed brief and returns the diff guidance used by the Crew banner', () => {
+    const diff = studioBriefChangeDiff('# Booking\n\nPayments: offline', '# Booking\n\nPayments: card');
+    expect(diff).toContain('Brief changed since this run began');
+    expect(diff).toContain('- Payments: offline');
+    expect(diff).toContain('+ Payments: card');
+    expect(studioBriefChangeDiff('same', 'same')).toBeNull();
   });
 });
 

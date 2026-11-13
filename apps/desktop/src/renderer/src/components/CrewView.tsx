@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  CLI_MODEL_SUGGESTIONS, CREW_ROLE_INFO, CREW_ROLE_KINDS, MAX_CREW_ROLES, MAX_SUB_AGENTS_PER_ROLE, buildReport, createDefaultCrewConfig, crewConfigSchema, roleAccess,
+  CLI_MODEL_SUGGESTIONS, CREW_ROLE_INFO, CREW_ROLE_KINDS, MAX_CREW_ROLES, MAX_SUB_AGENTS_PER_ROLE, buildReport, createDefaultCrewConfig, crewConfigSchema, roleAccess, studioBriefChangeDiff,
 } from '@kai/contracts';
 import type { AgentCapability, AgentId, AppSettings, AutonomyMode, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask, ProjectRecord } from '@kai/contracts';
 import { unwrap } from '../types';
@@ -89,6 +89,7 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
   const [working, setWorking] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [design, setDesign] = useState<CrewDesign | null>(null);
+  const [briefDiff, setBriefDiff] = useState<string | null>(null);
 
   // A handed-over goal needs the new-crew form, so the run list loading afterwards must not pick an old run over it.
   const wantsNewRun = useRef(false);
@@ -102,6 +103,25 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
   const config = activeRun?.config ?? draft;
   const readOnly = Boolean(activeRun);
+
+  useEffect(() => {
+    if (!activeRun?.briefSnapshot || !activeProject) { setBriefDiff(null); return; }
+    let mounted = true;
+    const refresh = async () => {
+      try {
+        const studios = unwrap(await window.kaiDesktop.studioProjects());
+        const studio = studios.find((item) => item.linkedProjectId === activeProject.id || item.id === activeProject.id);
+        if (!studio) { if (mounted) setBriefDiff(null); return; }
+        const current = unwrap(await window.kaiDesktop.studioArtifactText({ projectId: studio.id, kind: 'brief' }));
+        if (mounted) setBriefDiff(current ? studioBriefChangeDiff(activeRun.briefSnapshot!, current) : null);
+      } catch {
+        if (mounted) setBriefDiff(null);
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 5_000);
+    return () => { mounted = false; window.clearInterval(timer); };
+  }, [activeRunId, activeRun?.briefSnapshot, activeProject?.id]);
 
   function reconcile(run: CrewRun): void {
     setRuns((current) => [run, ...current.filter((item) => item.id !== run.id)].sort((a, b) => b.startedAt.localeCompare(a.startedAt)));
@@ -224,6 +244,12 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
       {activeProject && (
         <>
           {activeRun && <RunBar run={activeRun} working={working} onPause={() => void run(async () => unwrap(await window.kaiDesktop.pauseCrew(activeRun.id)))} onResume={() => void run(async () => unwrap(await window.kaiDesktop.resumeCrew(activeRun.id)))} onStop={() => void run(async () => unwrap(await window.kaiDesktop.stopCrew(activeRun.id)))} onApprove={() => void run(async () => unwrap(await window.kaiDesktop.approveCrew(activeRun.id)))} />}
+          {activeRun && briefDiff && (
+            <div className="workbench-notice" role="status">
+              <span><strong>The brief changed since this run began.</strong> Tell the Lead so upcoming work follows the latest scope.</span>
+              <UiButton type="button" className="primary-button" disabled={working} onClick={() => void run(async () => { const next = unwrap(await window.kaiDesktop.answerCrew(activeRun.id, 'continue', briefDiff)); setBriefDiff(null); return next; })}>Tell the Lead</UiButton>
+            </div>
+          )}
           {activeRun?.ask && (
             <div className="needs-you tone-needs-you" role="status">
               <span className="needs-you-icon" aria-hidden="true"><AlertTriangle size={15} /></span>

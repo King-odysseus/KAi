@@ -4,7 +4,7 @@ import type { AgentRunRequest, AgentRunResult, CrewConfig, CrewRun } from '@kai/
 import { DesktopCrewRunner } from '../apps/desktop/src/main/crew-runner';
 import type { CrewRunnerPorts } from '../apps/desktop/src/main/crew-runner';
 import { parsePlan } from '../apps/desktop/src/main/crew-prompts';
-import { helperChoiceFor } from '../apps/desktop/src/main/crew-engine';
+import { guideCrewRun, helperChoiceFor } from '../apps/desktop/src/main/crew-engine';
 
 const PLAN = JSON.stringify({
   tasks: [
@@ -66,6 +66,16 @@ async function runToIdle(runner: DesktopCrewRunner, runId: string): Promise<Crew
 }
 
 describe('crew runner', () => {
+  it('captures the Studio brief when a crew starts and accepts later lead guidance', async () => {
+    const f = fixture();
+    f.ports.readBrief = async () => '# Brief at run start\n\nPayments: offline';
+    const run = await f.runner.start({ projectId: 'project', goal: 'Build a booking app.', config: f.config }, 1);
+    expect(run.briefSnapshot).toContain('Payments: offline');
+    const updated = guideCrewRun(run, 'Brief changed since this run began:\n- Payments: offline\n+ Payments: card', '2026-11-01T10:01:00.000Z');
+    expect(updated.goal).toContain('Payments: card');
+    expect(updated.feed.at(-1)?.text).toContain('Told the Lead');
+  });
+
   it('plans, builds each task, has the Lead accept it, and finishes when the board says so', async () => {
     const f = fixture();
     const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
