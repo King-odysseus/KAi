@@ -81,7 +81,7 @@ export const interviewRoundSchema = z
   .strict();
 export type InterviewRound = z.infer<typeof interviewRoundSchema>;
 
-export const interviewStatusSchema = z.enum(['asking', 'done']);
+export const interviewStatusSchema = z.enum(['asking', 'reviewing', 'done']);
 export type InterviewStatus = z.infer<typeof interviewStatusSchema>;
 
 export const interviewStateSchema = z
@@ -251,7 +251,7 @@ export function interviewQuestionBudget(state: { extraQuestions?: number }): num
 /** The questions of the round the user still has to answer, empty when the interview is done. */
 export function interviewOpenQuestions(state: InterviewState): string[] {
   const last = state.rounds[state.rounds.length - 1];
-  if (!last || state.status === 'done') return [];
+  if (!last || state.status !== 'asking') return [];
   const answered = new Set(last.answers.map((item) => item.question));
   return last.questions.filter((question) => !answered.has(question));
 }
@@ -259,7 +259,7 @@ export function interviewOpenQuestions(state: InterviewState): string[] {
 /** The suggested answers for each open question, aligned with `interviewOpenQuestions`. */
 export function interviewOpenOptions(state: InterviewState): string[][] {
   const last = state.rounds[state.rounds.length - 1];
-  if (!last || state.status === 'done') return [];
+  if (!last || state.status !== 'asking') return [];
   const answered = new Set(last.answers.map((item) => item.question));
   return last.questions.flatMap((question, index) => (answered.has(question) ? [] : [last.options[index] ?? []]));
 }

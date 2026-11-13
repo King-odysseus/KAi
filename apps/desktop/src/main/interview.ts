@@ -156,9 +156,9 @@ export class DesktopInterview {
     if (!last) throw new Error('The interview has no questions waiting.');
     const answers = mergeAnswers(last, input.answers);
     const rounds = [...state.rounds.slice(0, -1), { ...last, answers }];
-    // The round budget is spent: write the brief from what we have instead of paying for another round.
+    // The round budget is spent: ask the user to review before writing the brief.
     if (rounds.length >= interviewQuestionBudget(state)) {
-      return this.persist(await this.complete({ ...state, rounds }));
+      return this.persist({ ...state, rounds, status: 'reviewing', updatedAt: this.ports.now() });
     }
     return this.persist(await this.ask({ ...state, rounds }));
   }
@@ -202,7 +202,21 @@ export class DesktopInterview {
   /** Writes the brief on demand, for a user who would rather stop answering now. */
   async finish(input: InterviewProjectInput): Promise<InterviewState> {
     const state = await this.requireAsking(input.projectId);
+    return this.persist({ ...state, status: 'reviewing', updatedAt: this.ports.now() });
+  }
+
+  /** Writes the brief only after the user confirms the review screen. */
+  async confirm(input: InterviewProjectInput): Promise<InterviewState> {
+    const state = await this.ports.store.read(input.projectId);
+    if (!state || state.status !== 'reviewing') throw new Error('This interview is not waiting for review.');
     return this.persist(await this.complete(state));
+  }
+
+  /** Returns to the saved questions and answers without clearing anything. */
+  async reopen(input: InterviewProjectInput): Promise<InterviewState> {
+    const state = await this.ports.store.read(input.projectId);
+    if (!state || state.status !== 'reviewing') throw new Error('This interview is not waiting for review.');
+    return this.persist({ ...state, status: 'asking', updatedAt: this.ports.now() });
   }
 
   async reset(input: InterviewProjectInput): Promise<null> {
@@ -272,8 +286,8 @@ export class DesktopInterview {
       rounds: [...state.rounds, { questions, options: fresh.map((item) => item.options), answers: [] }],
       updatedAt: this.ports.now(),
     };
-    // A round with no questions means the model knows enough: stop asking and write the brief.
-    return questions.length > 0 ? next : this.complete({ ...next, rounds: state.rounds });
+    // A round with no questions means the model knows enough: stop asking and invite review.
+    return questions.length > 0 ? next : { ...next, rounds: state.rounds, status: 'reviewing' };
   }
 
   /** Marks the interview done and writes the brief the rest of the studio reads. */

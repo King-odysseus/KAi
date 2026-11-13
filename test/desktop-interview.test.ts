@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewOpenQuestions, interviewRecap, interviewStateSchema, projectTitleFrom, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
+import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewGivenAnswers, interviewOpenQuestions, interviewRecap, interviewStateSchema, projectTitleFrom, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
 import { briefMarkdown, buildInterviewPrompt, DesktopInterview, parseInterviewReply, type InterviewPorts } from '../apps/desktop/src/main/interview';
 import { SpecStore, specHistoryPath } from '../apps/desktop/src/main/spec-store';
 
@@ -215,14 +215,23 @@ describe('Project Studio interview', () => {
     expect(answered.rounds[1]?.questions).toEqual(['Who cancels?']);
   });
 
-  it('finishes and writes the brief when the model has nothing left to ask', async () => {
+  it('waits for review confirmation before writing the brief when the model has nothing left to ask', async () => {
     const memory = memoryStore();
     const interview = new DesktopInterview(ports({ store: memory }, [
       JSON.stringify({ goal: 'Take deposits.', assumptions: ['Two chairs'], questions: ['How many chairs?'] }),
       JSON.stringify({ goal: 'Take deposits.', assumptions: ['Two chairs'], questions: [] }),
     ]));
     await interview.start({ projectId: 'p1', idea: 'Booking site in Next.js with a light colour palette.' });
-    const done = await interview.answer({ projectId: 'p1', answers: [{ question: 'How many chairs?', answer: 'Two' }] });
+    const review = await interview.answer({ projectId: 'p1', answers: [{ question: 'How many chairs?', answer: 'Two' }] });
+    expect(review.status).toBe('reviewing');
+    expect(review.briefPath).toBeNull();
+    expect(await new SpecStore().read(root, 'brief.md')).toBeNull();
+    const reopened = await interview.reopen({ projectId: 'p1' });
+    expect(reopened.status).toBe('asking');
+    expect(interviewGivenAnswers(reopened)).toEqual([{ question: 'How many chairs?', answer: 'Two' }]);
+    const backToReview = await interview.finish({ projectId: 'p1' });
+    expect(backToReview.status).toBe('reviewing');
+    const done = await interview.confirm({ projectId: 'p1' });
     expect(done.status).toBe('done');
     expect(done.briefPath).toBe('.kai/spec/brief.md');
     // The brief is read back off disk, which is exactly what the board and the agents will do.
@@ -246,7 +255,7 @@ describe('Project Studio interview', () => {
       expect(current.status).toBe('asking');
     }
     current = await interview.answer({ projectId: 'p1', answers: [] });
-    expect(current.status).toBe('done');
+    expect(current.status).toBe('reviewing');
     expect(current.rounds).toHaveLength(STUDIO_MAX_ROUNDS);
   });
 

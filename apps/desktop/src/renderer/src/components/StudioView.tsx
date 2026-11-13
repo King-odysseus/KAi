@@ -659,6 +659,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     // Adopting state settles whatever correction was in flight: it has either just been sent or been overtaken.
     setCorrecting(null);
     if (next.status === 'done') setTab('artifacts');
+    else setTab('interview');
   }
 
   /** Opens an artifact in the viewer. Clicking the open one again closes it. */
@@ -1201,7 +1202,6 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     }
     const sent = await sendAnswers(next);
     if (!sent) setDraft(value);
-    else if (sent.status === 'done') void buildEverything(sent.projectId);
   }
 
   /**
@@ -1314,13 +1314,39 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       const done = unwrap(await window.kaiDesktop.finishStudioInterview(projectId));
       adopt(done);
       setProjectsVersion((current) => current + 1);
-      setBusy(null);
-      void buildEverything(done.projectId);
-      return;
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
       setBusy((current) => (current === 'finish' ? null : current));
+    }
+  }
+
+  async function confirmReview(): Promise<void> {
+    if (!projectId || busy !== null) return;
+    setBusy('finish');
+    setError(null);
+    try {
+      const done = unwrap(await window.kaiDesktop.confirmStudioInterview(projectId));
+      adopt(done);
+      setProjectsVersion((current) => current + 1);
+      void buildEverything(done.projectId);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy((current) => (current === 'finish' ? null : current));
+    }
+  }
+
+  async function backToQuestions(): Promise<void> {
+    if (!projectId || busy !== null) return;
+    setBusy('answer');
+    setError(null);
+    try {
+      adopt(unwrap(await window.kaiDesktop.reopenStudioInterview(projectId)));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -2397,7 +2423,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const openOptions = state ? interviewOpenOptions(state) : [];
   const asking = state?.status === 'asking';
   const decided = state ? interviewGivenAnswers(state) : [];
-  const recap = state?.status === 'done' ? interviewRecap(state) : null;
+  const recap = state && (state.status === 'done' || state.status === 'reviewing') ? interviewRecap(state) : null;
   const showHandoff = Boolean(state?.status === 'done' && projectId && artifacts && board && board.cards.length > 0 && !handoffDismissed && busy !== 'generate' && busy !== 'plan');
   const building = Boolean(state?.status === 'done' && (busy === 'generate' || busy === 'plan'));
   // A finished interview has written its brief, whatever the catalog on screen happens to list.
@@ -2754,6 +2780,27 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               )}
               {recap && recap.leftToAgents.length > 0 && <Notes title="Left to the agents" items={recap.leftToAgents} />}
               {state.assumptions.length > 0 && <Notes title="Assumed" items={state.assumptions} />}
+            </>
+          )}
+          {state?.status === 'reviewing' && (
+            <>
+              <p className="studio-note">Review the goal and decisions below. Nothing will be written until you choose “Write the brief”.</p>
+              <h3>Goal</h3>
+              <p className="studio-goal">{state.goal || state.idea}</p>
+              {recap && recap.decided.length > 0 && (
+                <>
+                  <h3>Decided</h3>
+                  <div className="studio-interview-recap">
+                    {recap.decided.map((item) => <details key={item.question}><summary><strong>{item.question}</strong><span>Decided</span></summary><p>{item.answer}</p></details>)}
+                  </div>
+                </>
+              )}
+              {recap && recap.leftToAgents.length > 0 && <Notes title="Left to the agents" items={recap.leftToAgents} />}
+              {state.assumptions.length > 0 && <Notes title="Assumed" items={state.assumptions} />}
+              <div className="studio-actions">
+                <UiButton type="button" className="secondary-button" onClick={() => void backToQuestions()} disabled={busy !== null}><ArrowLeft size={14} /> Back to questions</UiButton>
+                <UiButton type="button" className="primary-button" onClick={() => void confirmReview()} disabled={busy !== null}>{busy === 'finish' ? <Loader2 className="spin" size={14} /> : <FileText size={14} />} Write the brief</UiButton>
+              </div>
             </>
           )}
           {asking && state && (
