@@ -50,10 +50,11 @@ export const TOUR_LESSONS: TourLesson[] = [
     summary: 'Turn an idea into a brief, artifacts and a board',
     steps: [
       RAIL,
-      { title: 'Start with an idea', body: 'Plan a new project and describe it in a sentence or two. KAI then asks questions one at a time, with suggested answers you can pick or replace. New to this? Use the "ask me more" button for extra questions, or pick "Not sure, you decide".' },
+      { target: '[data-tour="first-run-project-type"]', title: 'Choose a project type', body: 'On your first visit, pick the closest project type and describe the idea in your own words. Studio asks about gaps, then shows a recap of your answers before writing the brief.' },
+      { target: '.studio-interview-recap', title: 'Check the interview recap', body: 'Review what you decided, what you left to the agents and the assumptions. The brief and artifacts wait until you approve the interview and choose Generate all.' },
       { target: '.studio-tabs', title: 'Interview, Artifacts, Board, Design', body: 'When the interview ends, these tabs hold what was built. Artifacts are the documents; the Board is the work cards; Design is where the screens get drawn.' },
       { title: 'Artifacts', body: 'Click an artifact to read or edit it. Generate all writes what is missing, and Regenerate all rewrites everything from the brief. The flows artifact opens as a diagram.' },
-      { title: 'Board', body: 'Cards move from Backlog to Done. Drag them between columns. A card only reaches Done through a passing check, so work is never marked finished by guesswork.' },
+      { target: '.studio-tabs', title: 'Land on the board', body: 'After you approve generation, Studio plans the board from the artifacts and opens it. Cards move from Backlog to Done through the board’s checks.' },
       { title: 'Design and open-pencil', body: 'Connect open-pencil under Settings, Design tools. Then copy the foundation prompt and one prompt per screen into the Workspace composer, letting each finish before the next. Pull the design to tick off the screens it finds.' },
       { title: 'Senior dev and automation', body: 'The Senior dev tab helps turn the plan into coding work. The board can hand cards to agents, while you inspect the brief, artifacts, checks and design as work progresses.' },
     ],

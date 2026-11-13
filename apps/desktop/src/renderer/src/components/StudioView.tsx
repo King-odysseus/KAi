@@ -70,6 +70,7 @@ import { ActionsMenu, type ActionsMenuItem } from './ui/ActionsMenu';
 import { UiTextInput } from './UiTextInput';
 import { UiNativeSelect } from './UiNativeSelect';
 import { PageHeader } from './ui/PageHeader';
+import { FIRST_RUN_PROJECT_TYPES, firstRunIdea } from '../first-run-onboarding';
 
 /**
  * The board's column headings in words. The status is a camelCase identifier, so printing it raw gave "INPROGRESS" as
@@ -122,11 +123,13 @@ type DesignBuildAction = { kind: 'redraw'; target: 'all' | string } | { kind: 'c
  * and `.kai/spec/brief.md` out. The artifacts, the board and the design layer all read that brief, so this screen
  * is the front door to the rest of the studio.
  */
-export function StudioView({ activeProject, projects: desktopProjects, planRequest, cardRequest, onOpenSettings, onLaunchProject, onPlanForTeam, onLearnCard, onOpenConversation }: {
+export function StudioView({ activeProject, projects: desktopProjects, planRequest, firstRunRequest, cardRequest, onOpenSettings, onLaunchProject, onPlanForTeam, onLearnCard, onOpenConversation }: {
   activeProject: ProjectRecord | null;
   projects: ProjectRecord[];
   /** Set by the composer's "Plan in Studio" button: open a fresh plan attached to this project's folder. */
   planRequest?: { projectId: string; nonce: number } | null;
+  /** Opens the guided first project path from first-run setup. */
+  firstRunRequest?: { nonce: number } | null;
   /** Follow a Studio-origin conversation back to the card it was created for. */
   cardRequest?: { projectId: string; cardId: string; nonce: number } | null;
   onOpenSettings: () => void;
@@ -152,6 +155,11 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const [artifacts, setArtifacts] = useState<StudioArtifacts | null>(null);
   const [board, setBoard] = useState<StudioBoard | null>(null);
   const [idea, setIdea] = useState('');
+  const [firstRunMode, setFirstRunMode] = useState(false);
+  const [firstRunProjectType, setFirstRunProjectType] = useState('Web app');
+  const [firstRunProjectId, setFirstRunProjectId] = useState<string | null>(() => {
+    try { return window.localStorage.getItem('kai.studio.firstRunProject'); } catch { return null; }
+  });
   const [answers, setAnswers] = useState<string[]>([]);
   // The chat asks one question of the round at a time: `step` is the one on screen, `draft` the reply being written.
   const [step, setStep] = useState(0);
@@ -270,6 +278,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const designChatStepId = useRef<string | null>(null);
   // The last composer request acted on, so a re-render does not open the new-project screen twice for one press.
   const handledPlanRequest = useRef<number | null>(null);
+  const handledFirstRunRequest = useRef<number | null>(null);
   const handledCardRequest = useRef<number | null>(null);
   const scrolledCardRequest = useRef<number | null>(null);
   // Identifies the Studio chat turn on screen. Stopping waiting bumps this, so a late answer from the provider is
@@ -395,6 +404,15 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
    * so the interview and the design read the code that is already there. The nonce is what makes a second press do
    * the same thing again, rather than looking like a request this screen has already handled.
    */
+  useEffect(() => {
+    if (!firstRunRequest || handledFirstRunRequest.current === firstRunRequest.nonce || busy !== null || projectsBusy) return;
+    handledFirstRunRequest.current = firstRunRequest.nonce;
+    setFirstRunMode(true);
+    setFirstRunProjectType('Web app');
+    setIdea('');
+    startNewProject(false);
+  }, [firstRunRequest, busy, projectsBusy]);
+
   useEffect(() => {
     if (!planRequest || !activeProject || planRequest.projectId !== activeProject.id) return;
     // Wait for the plan list, so a project that already has a plan reopens it instead of gaining a duplicate.
@@ -1137,10 +1155,15 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     try {
       const next = unwrap(await window.kaiDesktop.startStudioInterview({
         projectId,
-        idea: idea.trim(),
+        idea: firstRunMode ? firstRunIdea(firstRunProjectType, idea) : idea.trim(),
         linkedProjectId: useCurrentFolder && currentFolder ? currentFolder.id : null,
       }));
       adopt(next);
+      if (firstRunMode) {
+        setFirstRunProjectId(projectId);
+        try { window.localStorage.setItem('kai.studio.firstRunProject', projectId); } catch { /* The path still works in this session. */ }
+        setFirstRunMode(false);
+      }
       setViewedProjectId(projectId);
       setDraftProjectId(null);
       setScreen('project');
@@ -1480,6 +1503,13 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     try {
       const problems = await writeArtifacts(projectId, everything);
       if (problems.length > 0) setError(problems.join(' '));
+      else if (firstRunProjectId === projectId) {
+        setBusy('plan');
+        setBoard(unwrap(await window.kaiDesktop.planStudioBoard(projectId)));
+        setTab('board');
+        setFirstRunProjectId(null);
+        try { window.localStorage.removeItem('kai.studio.firstRunProject'); } catch { /* The board is already open. */ }
+      }
     } catch (caught) {
       setError(messageOf(caught));
       await reloadSpec(projectId);
@@ -3877,6 +3907,13 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       {screen === 'new' && !state && (
         <div className="studio-composer-dock">
           <div className="studio-composer">
+            {firstRunMode && <section className="studio-folder-choice" data-tour="first-run-project-type" aria-labelledby="first-run-type-title">
+              <span className="studio-project-label" id="first-run-type-title">What are you planning?</span>
+              <div role="radiogroup" aria-label="Project type">
+                {FIRST_RUN_PROJECT_TYPES.map((type) => <UiButton key={type} type="button" className={firstRunProjectType === type ? 'selected' : undefined} role="radio" aria-checked={firstRunProjectType === type} onClick={() => setFirstRunProjectType(type)} disabled={busy !== null}>{type}</UiButton>)}
+              </div>
+              <small>Pick the closest fit. You can explain the details in your own words.</small>
+            </section>}
             <div className="studio-folder-choice">
               <span className="studio-project-label">Project location</span>
               <div role="radiogroup" aria-label="Project location">

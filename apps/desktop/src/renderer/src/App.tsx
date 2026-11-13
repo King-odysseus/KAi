@@ -284,6 +284,7 @@ export function App(): ReactNode {
   // ended a run that was drawing, and coming back found it idle. The Code view is kept the same way.
   const [studioKept, setStudioKept] = useState(false);
   const [studioCardRequest, setStudioCardRequest] = useState<{ projectId: string; cardId: string; nonce: number } | null>(null);
+  const [studioFirstRunRequest, setStudioFirstRunRequest] = useState<{ nonce: number } | null>(null);
   useEffect(() => { if (view === 'studio') setStudioKept(true); }, [view]);
   // The guided tour's progress is a per-viewer convenience, so it lives in this window's storage, not in settings.
   const [tourProgress, setTourProgress] = useState<TourProgress>(() => {
@@ -2802,6 +2803,7 @@ export function App(): ReactNode {
                   activeProject={activeProject}
                   projects={bootstrap.projects}
                   planRequest={studioPlanRequest}
+                  firstRunRequest={studioFirstRunRequest}
                   cardRequest={studioCardRequest}
                   onOpenSettings={() => setView('settings')}
                   onLaunchProject={openStudioProject}
@@ -2954,6 +2956,12 @@ export function App(): ReactNode {
           busy={Boolean(busy)}
           onAction={(action) => void runSetupAction(action)}
           onComplete={() => void completeSetup()}
+          onStartProject={() => {
+            setSetupOpen(false);
+            setStudioKept(true);
+            setStudioFirstRunRequest({ nonce: Date.now() });
+            setView('studio');
+          }}
           onDismiss={() => setSetupOpen(false)}
           onAskGuide={(question, conversationContext) => window.kaiDesktop.answerSetupGuide({ question, conversationContext }).then(unwrap)}
         />

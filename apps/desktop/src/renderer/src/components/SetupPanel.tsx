@@ -12,6 +12,7 @@ export function SetupPanel({
   busy,
   onAction,
   onComplete,
+  onStartProject,
   onDismiss,
   onAskGuide,
 }: {
@@ -19,6 +20,7 @@ export function SetupPanel({
   busy: boolean;
   onAction: (action: NonNullable<SetupCheck['action']>) => void;
   onComplete: () => void;
+  onStartProject: () => void;
   onDismiss: () => void;
   onAskGuide: (question: string, conversationContext?: string) => Promise<SetupGuideAnswer>;
 }): ReactNode {
@@ -128,6 +130,7 @@ export function SetupPanel({
           ))}
         </div>
         <footer className="setup-footer">
+          <UiButton type="button" className="secondary-button" disabled={busy} onClick={onStartProject}>Plan your first project</UiButton>
           <UiButton type="button" className="secondary-button" disabled={busy} onClick={onDismiss}>Set up later</UiButton>
           <UiButton type="button" className="primary-button" disabled={busy || blocked} onClick={onComplete}>
             <Check size={15} />
