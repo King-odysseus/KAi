@@ -1273,33 +1273,6 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     return [`Wrote ${todo.length - names.length} of ${todo.length} artifacts. Could not write: ${names.join(', ')}.${cause ? ` ${cause[0]}: ${cause[1]}` : ''}`];
   }
 
-  /**
-   * The interview is over, so write the artifacts and build the board without waiting for two more clicks. Each
-   * step reports its own failure, and what was written stays: a failed board never throws the artifacts away.
-   */
-  async function buildEverything(id: string): Promise<void> {
-    setError(null);
-    setHandoffDismissed(false);
-    setTab('artifacts');
-    const problems: string[] = [];
-    try {
-      setBusy('generate');
-      problems.push(...(await writeArtifacts(id)));
-    } catch (caught) {
-      problems.push(messageOf(caught));
-      await reloadSpec(id);
-    }
-    try {
-      setBusy('plan');
-      setBoard(unwrap(await window.kaiDesktop.planStudioBoard(id)));
-    } catch (caught) {
-      problems.push(`The board was not built: ${messageOf(caught)}`);
-    }
-    setBusy(null);
-    setProjectsVersion((current) => current + 1);
-    if (problems.length > 0) setError(`${problems.join(' ')} What was written is kept: fix the connection if needed, then use Generate all and Build the board.`);
-  }
-
   /** Five more questions, for someone who wants to be walked through the choices instead of deciding fast. */
   async function extendInterview(): Promise<void> {
     if (!projectId || busy !== null) return;
@@ -1354,7 +1327,6 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       const done = unwrap(await window.kaiDesktop.confirmStudioInterview(projectId));
       adopt(done);
       setProjectsVersion((current) => current + 1);
-      void buildEverything(done.projectId);
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -2857,7 +2829,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               <>
                 <p className="studio-goal">{state.goal || state.idea}</p>
                 <p className="studio-note"><FileText size={13} /> Written to <code>{state.briefPath ?? '.kai/spec/brief.md'}</code></p>
-                <p className="studio-note">The artifacts, the board, and the design layer are built from this brief. Scroll down to review them.</p>
+                <p className="studio-note">Your interview is saved. Review it here, then choose Generate all on the Artifacts screen when you’re happy to start building.</p>
               </>
             ) : (
               <>
@@ -2905,7 +2877,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
           )}
           {state?.status === 'reviewing' && (
             <>
-              <p className="studio-note">Review the goal and decisions below. Nothing will be written until you choose “Write the brief”.</p>
+              <p className="studio-note">Review the goal and decisions below. Choosing “Write the brief” saves your interview; artifact generation waits until you start it from the Artifacts screen.</p>
               <h3 className="m-0 mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Goal</h3>
               <p className="studio-goal">{state.goal || state.idea}</p>
               {recap && recap.decided.length > 0 && (
@@ -3137,6 +3109,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
           <>
           <article className={`studio-card studio-artifacts-card${viewing ? ' split' : ''}`}>
             <h2><FileText size={16} /> Artifacts</h2>
+            {!artifacts?.artifacts.some((item) => item.kind !== 'brief') && (
+              <p className="studio-note" role="status">Your interview and brief are saved. Review the interview first if needed; generation starts only when you choose Generate all or Generate selected.</p>
+            )}
             <p className="studio-note">
               One file each under <code>.kai/spec</code>. Regenerating one flags everything that reads it stale, so the board never trusts a document built on an old decision.
             </p>
