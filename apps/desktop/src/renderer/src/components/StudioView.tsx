@@ -1518,6 +1518,20 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     }
   }
 
+  async function exportBrief(): Promise<void> {
+    if (!projectId || busy !== null) return;
+    setBusy('load');
+    setError(null);
+    try {
+      const result = unwrap(await window.kaiDesktop.exportStudioBrief(projectId));
+      if (!result.canceled && result.path) setNotice(`Brief exported to ${result.path}.`);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function generateOne(kind: ArtifactKind): Promise<void> {
     if (!projectId) return;
     setBusy('generate');
@@ -3146,6 +3160,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               One file each under <code>.kai/spec</code>. Regenerating one flags everything that reads it stale, so the board never trusts a document built on an old decision.
             </p>
             <div className="page-actions">
+              <UiButton type="button" className="secondary-button" onClick={() => void exportBrief()} disabled={busy !== null}>Export brief &amp; coverage</UiButton>
               <UiButton type="button" className="primary-button" onClick={() => void generate()} disabled={busy !== null || !readiness?.ready} title="Write the artifacts that are missing or stale">
                 {busy === 'generate' ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />} Generate all
               </UiButton>

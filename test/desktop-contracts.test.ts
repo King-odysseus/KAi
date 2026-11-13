@@ -14,6 +14,11 @@ import {
 } from '../packages/contracts/src';
 
 describe('desktop contracts', () => {
+  it('accepts a Studio brief export request with a project id', () => {
+    expect(parseIpcInput('studio:brief-export', { projectId: 'studio-1' })).toEqual({ projectId: 'studio-1' });
+    expect(() => parseIpcInput('studio:brief-export', { projectId: '' })).toThrow();
+  });
+
   it('creates a valid default settings record', () => {
     const settings = createDefaultSettings();
     expect(appSettingsV1Schema.parse(settings)).toEqual(settings);

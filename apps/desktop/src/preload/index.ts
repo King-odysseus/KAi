@@ -142,6 +142,7 @@ const bridge: KaiDesktopBridge = {
   studioArtifacts: (projectId) => ipcRenderer.invoke('studio:artifacts-read', { projectId }),
   studioArtifactFiles: (projectId) => ipcRenderer.invoke('studio:artifacts-files', { projectId }),
   studioArtifactText: (input) => ipcRenderer.invoke('studio:artifacts-text', input),
+  exportStudioBrief: (projectId) => ipcRenderer.invoke('studio:brief-export', { projectId }),
   saveStudioArtifact: (input) => ipcRenderer.invoke('studio:artifacts-save', input),
   studioStyleReferences: (projectId) => ipcRenderer.invoke('studio:style-refs-read', { projectId }),
   addStudioStyleReference: (input) => ipcRenderer.invoke('studio:style-refs-add', input),

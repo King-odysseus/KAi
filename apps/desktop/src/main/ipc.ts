@@ -657,6 +657,23 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'studio:artifacts-read', async ({ projectId }) => context.studio.artifacts(projectId));
   handle(context, 'studio:artifacts-files', async ({ projectId }) => context.studio.files(projectId));
   handle(context, 'studio:artifacts-text', async ({ projectId, kind }) => context.studio.artifactText(projectId, kind));
+  handle(context, 'studio:brief-export', async ({ projectId }, request) => {
+    const brief = await context.studio.artifactText(projectId, 'brief');
+    if (!brief?.trim()) throw new Error('This project does not have a brief to export yet.');
+    const options = {
+      title: 'Export project brief',
+      buttonLabel: 'Export brief',
+      defaultPath: 'project-brief.md',
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    };
+    const owner = BrowserWindow.fromId(request.ownerWindowId) ?? context.getMainWindow() ?? undefined;
+    const selection = owner
+      ? await dialog.showSaveDialog(owner, options)
+      : await dialog.showSaveDialog(options);
+    if (selection.canceled || !selection.filePath) return { canceled: true };
+    await fs.writeFile(selection.filePath, brief.trimEnd() + '\n', 'utf8');
+    return { canceled: false, path: selection.filePath };
+  });
   handle(context, 'studio:artifacts-save', async ({ projectId, kind, content }) => context.studio.saveArtifact(projectId, kind, content));
   handle(context, 'studio:style-refs-read', async ({ projectId }) => context.styleReferences.list(projectId));
   handle(context, 'studio:style-refs-add', async ({ projectId, name, data }) => context.styleReferences.add(projectId, name, data));

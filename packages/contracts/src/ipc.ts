@@ -603,6 +603,7 @@ export const ipcChannels = [
   'studio:artifacts-read',
   'studio:artifacts-files',
   'studio:artifacts-text',
+  'studio:brief-export',
   'studio:artifacts-save',
   'studio:style-refs-read',
   'studio:style-refs-add',
@@ -1021,6 +1022,7 @@ export const ipcInputSchemas = {
   'studio:artifacts-read': studioProjectInputSchema,
   'studio:artifacts-files': studioProjectInputSchema,
   'studio:artifacts-text': studioArtifactInputSchema,
+  'studio:brief-export': studioProjectInputSchema,
   'studio:artifacts-save': studioArtifactSaveInputSchema,
   'studio:style-refs-read': studioProjectInputSchema,
   'studio:style-refs-add': studioStyleReferenceAddInputSchema,
@@ -1618,6 +1620,8 @@ export interface KaiDesktopBridge {
   testOpenPencil(): Promise<IpcResponse<OpenPencilTestResult>>;
   /** One artifact's text, or null when it has not been written yet. */
   studioArtifactText(input: StudioArtifactInput): Promise<IpcResponse<string | null>>;
+  /** Saves the reviewed brief (including its coverage table) as a shareable Markdown file. */
+  exportStudioBrief(projectId: string): Promise<IpcResponse<{ canceled: boolean; path?: string }>>;
   /** Saves a hand edit of one artifact and flags everything that reads it as stale. */
   saveStudioArtifact(input: StudioArtifactSaveInput): Promise<IpcResponse<StudioArtifacts>>;
   /** The reference images for the project's look, and the description written from them. */
