@@ -167,7 +167,7 @@ export type StudioProjectArchiveInput = z.infer<typeof studioProjectArchiveInput
 export const studioProjectLaunchInputSchema = z
   .object({
     projectId: z.string().min(1),
-    destination: z.enum(['composer', 'editor', 'generate']),
+    destination: z.enum(['composer', 'editor', 'generate', 'crew']),
   })
   .strict();
 export type StudioProjectLaunchInput = z.infer<typeof studioProjectLaunchInputSchema>;

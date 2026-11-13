@@ -122,7 +122,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   /** Follow a Studio-origin conversation back to the card it was created for. */
   cardRequest?: { projectId: string; cardId: string; nonce: number } | null;
   onOpenSettings: () => void;
-  onLaunchProject: (studioProjectId: string, destination: 'composer' | 'editor' | 'generate') => Promise<boolean>;
+  onLaunchProject: (studioProjectId: string, destination: 'composer' | 'editor' | 'generate' | 'crew') => Promise<boolean>;
   onPlanForTeam: (plan: TeamPlanDraft) => void;
   /**
    * Hands one card, and the plan that owns it, to the Learning tutor. The plan is needed as well as the card: the
@@ -611,7 +611,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     }
   }
 
-  async function launchProject(studioProjectId: string, destination: 'composer' | 'editor' | 'generate'): Promise<void> {
+  async function launchProject(studioProjectId: string, destination: 'composer' | 'editor' | 'generate' | 'crew'): Promise<void> {
     if (busy !== null) return;
     setBusy('launch');
     setError(null);
@@ -2467,6 +2467,10 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                             </UiButton>
                           </div>
                           <div className="studio-project-action-row">
+                            <UiButton type="button" className="secondary-button" onClick={() => void launchProject(project.id, 'crew')} disabled={busy !== null}>
+                              <Users size={14} />
+                              <span>Send to Crew</span>
+                            </UiButton>
                             <UiButton type="button" className="secondary-button" onClick={() => void launchProject(project.id, 'editor')} disabled={busy !== null}>
                               <Code2 size={14} />
                               <span>Open in code editor</span>
@@ -2690,6 +2694,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
           <div className="studio-actions">
             <UiButton type="button" className="secondary-button" onClick={dismissHandoff}>Review the artifacts and board first</UiButton>
             <UiButton type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'composer')} disabled={busy !== null}><Send size={14} /> Start on composer</UiButton>
+            <UiButton type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'crew')} disabled={busy !== null}><Users size={14} /> Send to Crew</UiButton>
           </div>
           <p className="studio-note">A status file and an <code>AGENTS.md</code> in the project root keep any agent, KAI's or another, pointed at the right files as the board moves.</p>
         </article>
@@ -2882,6 +2887,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               {state.status === 'done' && projectId && (
                 <div className="studio-rail-actions">
                   <UiButton type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'composer')} disabled={busy !== null}>Start on composer</UiButton>
+                  <UiButton type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'crew')} disabled={busy !== null}>Send to Crew</UiButton>
                   <UiButton type="button" className="primary-button" onClick={() => void launchProject(projectId, 'generate')} disabled={busy !== null}>Start generating</UiButton>
                 </div>
               )}

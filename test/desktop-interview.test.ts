@@ -195,7 +195,7 @@ describe('Project Studio interview', () => {
       JSON.stringify({ goal: 'Take deposits.', assumptions: ['Two chairs'], questions: ['How many chairs?'] }),
       JSON.stringify({ goal: 'Take deposits.', assumptions: ['Two chairs'], questions: [] }),
     ]));
-    await interview.start({ projectId: 'p1', idea: 'Booking site.' });
+    await interview.start({ projectId: 'p1', idea: 'Booking site in Next.js with a light colour palette.' });
     const done = await interview.answer({ projectId: 'p1', answers: [{ question: 'How many chairs?', answer: 'Two' }] });
     expect(done.status).toBe('done');
     expect(done.briefPath).toBe('.kai/spec/brief.md');
@@ -509,4 +509,13 @@ describe('Project Studio interview', () => {
     // History is bookkeeping, not an artifact: the studio must not list it as something to build.
     expect(await store.list(root)).toEqual(['brief.md']);
   });
+  it('asks for the stack instead of finishing when the model assumed it', async () => {
+    const interview = new DesktopInterview(ports({ store: memoryStore() }, [
+      JSON.stringify({ goal: 'A booking site.', assumptions: ['Web app'], questions: [] }),
+    ]));
+    const state = await interview.start({ projectId: 'p2', idea: 'Booking site for a salon.' });
+    expect(state.status).toBe('asking');
+    expect(state.rounds[0].questions[0]).toMatch(/built with/i);
+  });
 });
+

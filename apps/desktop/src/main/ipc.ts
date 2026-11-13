@@ -4218,7 +4218,7 @@ async function chooseStudioProjectFolder(
 async function launchStudioProject(
   context: IpcContext,
   studioProjectId: string,
-  _destination: 'composer' | 'editor' | 'generate',
+  destination: 'composer' | 'editor' | 'generate' | 'crew',
 ): Promise<{ projectId: string; projectName: string; prompt: string }> {
   const state = await context.interview.read({ projectId: studioProjectId });
   if (!state) throw new NotFoundError('Studio project not found.');
@@ -4227,6 +4227,18 @@ async function launchStudioProject(
   const project = await ensureStudioDesktopProject(context, studioProjectId, state);
 
   const brief = (await context.studio.artifactText(studioProjectId, 'brief'))?.trim();
+  if (destination === 'crew') {
+    // A crew goal is capped well below a full brief, and the crew's agents can read files: point at the brief
+    // and the artifacts instead of pasting them, so nothing is cut off mid-sentence.
+    const goal = (state.goal.trim() || state.idea.trim()).slice(0, 1_500);
+    return {
+      projectId: project.id,
+      projectName: project.name,
+      prompt: `Build this project from the Project Studio plan. Read .kai/spec/brief.md first, then the other files under .kai/spec (artifacts, board) and follow them; the brief is the source of truth for the stack, roles and design.
+
+Goal: ${goal}`,
+    };
+  }
   const prompt = brief
     ? `Use this Project Studio brief as the source of truth. Start by confirming the smallest implementation plan, then build it.\n\n${brief}`
     : `Build this project from the Project Studio plan.\n\n${state.goal.trim() || state.idea.trim()}`;

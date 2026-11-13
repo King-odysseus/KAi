@@ -257,9 +257,13 @@ export class DesktopInterview {
     );
     const asked = new Set(state.rounds.flatMap((round) => round.questions.map(normalise)));
     const remaining = Math.max(0, interviewQuestionBudget(state) - asked.size);
-    const fresh = reply.questions
+    const fresh: Array<{ question: string; options: string[] }> = reply.questions
       .filter((item) => !asked.has(normalise(item.question)))
       .slice(0, Math.min(roundLimit(state.rounds.length), remaining));
+    // The prompt says the stack and the design must be settled before finishing, and a model that ignores that
+    // used to end the interview having assumed both. Settling them is not optional, so it is enforced here.
+    const required = fresh.length === 0 ? missingRequiredQuestion(state) : null;
+    if (required && remaining > 0) fresh.push(required);
     const questions = fresh.map((item) => item.question);
     const next: InterviewState = {
       ...state,
@@ -293,6 +297,33 @@ export class DesktopInterview {
   }
 }
 
+/** True when the idea or any question or answer so far already covers the pattern. */
+function covered(state: Pick<InterviewState, 'idea' | 'rounds'>, pattern: RegExp): boolean {
+  const said = [state.idea, ...state.rounds.flatMap((round) => [...round.questions, ...round.answers.map((item) => item.answer)])];
+  return said.some((text) => pattern.test(text));
+}
+
+const STACK_PATTERN = /\b(tech(nology)? stack|stack|framework|react|next\.?js|vue|svelte|angular|django|laravel|rails|node|python|typescript|php|postgres|mysql|sqlite|supabase|firebase|mongodb|flutter|electron|swift|kotlin)\b/i;
+const DESIGN_PATTERN = /\b(colou?rs?|palette|visual design|look and feel|brand|dark mode|light mode|style|theme)\b/i;
+const SCREEN_PATTERN = /\b(app|web ?site|dashboard|portal|page|screen|ui|interface|platform|store|game)\b/i;
+
+/** The stack, then the design, when the interview is about to end without either having been settled. */
+function missingRequiredQuestion(state: Pick<InterviewState, 'idea' | 'rounds'>): { question: string; options: string[] } | null {
+  if (!covered(state, STACK_PATTERN)) {
+    return {
+      question: 'What should it be built with? Pick a stack, or let me choose one that suits it.',
+      options: ['Next.js + TypeScript + PostgreSQL (recommended)', 'React + Node.js + a hosted database', 'Python (Django) + PostgreSQL', 'Laravel (PHP) + MySQL', 'Not sure, you decide'],
+    };
+  }
+  if (SCREEN_PATTERN.test(state.idea) && !covered(state, DESIGN_PATTERN)) {
+    return {
+      question: 'What look should it have? You can attach reference images of a style you like with the image button.',
+      options: ['Clean and light, one accent colour (recommended)', 'Dark and modern', 'Bold and colourful', 'Match my brand colours', 'Not sure, you decide'],
+    };
+  }
+  return null;
+}
+
 function summaryOf(state: InterviewState): StudioProjectSummary {
   return {
     id: state.projectId,
@@ -318,7 +349,7 @@ export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal'
     '',
     'Write:',
     '- "goal": the project restated as one clear, specific goal (what is built, for whom, and what "done" looks like).',
-    '- "assumptions": decisions you made where the description was silent, each short and concrete and under ${STUDIO_MAX_ASSUMPTION_CHARS} characters. Carry forward the ones you still believe.',
+    `- "assumptions": decisions you made where the description was silent, each short and concrete and under ${STUDIO_MAX_ASSUMPTION_CHARS} characters. Carry forward the ones you still believe.`,
     `- "questions": at most ${roundLimit(state.rounds.length)} question, the single most important one only the user can answer, as an object {"question", "options"}. The whole interview may ask no more than ${interviewQuestionBudget(state)} questions; it has already asked ${state.rounds.flatMap((round) => round.questions).length}. It is shown in a chat, so write it as one short, conversational question of at most ${STUDIO_MAX_QUESTION_CHARS} characters that opens with a few words acknowledging the user's last answer (nothing, when there is none yet). Ask about the things that would change what gets built: who uses it, the data and where it lives, accounts and permissions, payments, the platform, and how the result is judged.`,
     `Give each question 2 to ${STUDIO_MAX_OPTIONS} "options": short, concrete answers fitted to THIS project and to everything the user has told you so far, so that a later question's options follow from the earlier answers (a payment question after "deposit" offers deposit styles, not generic ones). Keep every option to ${STUDIO_MAX_OPTION_CHARS} characters or fewer: they are shown as chips beside the answer box, and a longer one is cut short. Put the option you would recommend first and end its text with " (recommended)". Always make the last option "Not sure, you decide". If the user picked it, or skipped, decide yourself and add the decision to "assumptions" with a few words of reason. Use an empty options array only for a question that is truly open-ended.`,
     'Many users are new to building software. When their wording suggests that (no technical terms, "I don\'t know", very broad answers), write in plain language, explain what each option means in a few words, and prefer the simplest choice that works. Never assume they know what a framework, database or hosting service is.',

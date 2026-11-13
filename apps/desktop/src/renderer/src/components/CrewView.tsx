@@ -3,7 +3,7 @@ import { Switch } from './ui/Switch';
 import {
   Activity, AlertTriangle, ClipboardList, Coins, Compass, FileCheck, FileText, FlaskConical, Kanban, Lock, Minus, Palette, Pause, Pencil, Play, Plus, RefreshCw, Rocket, RotateCcw, Save, Scale, ScanSearch, ShieldCheck, Square, Trash2, Users, Wrench,
 } from 'lucide-react';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   CLI_MODEL_SUGGESTIONS, CREW_ROLE_INFO, CREW_ROLE_KINDS, MAX_CREW_ROLES, MAX_SUB_AGENTS_PER_ROLE, buildReport, createDefaultCrewConfig, crewConfigSchema, roleAccess,
 } from '@kai/contracts';
@@ -72,7 +72,9 @@ function money(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
-export function CrewView({ activeProject, agentCapabilities, settings }: {
+export function CrewView({ activeProject, agentCapabilities, settings, goalRequest = null }: {
+  /** A goal handed over from elsewhere (the Project Studio); it fills the box and the user still presses Start. */
+  goalRequest?: { goal: string; nonce: number } | null;
   activeProject: ProjectRecord | null;
   agentCapabilities: AgentCapability[];
   settings: AppSettings;
@@ -88,6 +90,15 @@ export function CrewView({ activeProject, agentCapabilities, settings }: {
   const [notice, setNotice] = useState<string | null>(null);
   const [design, setDesign] = useState<CrewDesign | null>(null);
 
+  // A handed-over goal needs the new-crew form, so the run list loading afterwards must not pick an old run over it.
+  const wantsNewRun = useRef(false);
+  useEffect(() => {
+    if (!goalRequest) return;
+    setGoal(goalRequest.goal);
+    setActiveRunId(null);
+    wantsNewRun.current = true;
+  }, [goalRequest?.nonce]);
+
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
   const config = activeRun?.config ?? draft;
   const readOnly = Boolean(activeRun);
@@ -100,6 +111,7 @@ export function CrewView({ activeProject, agentCapabilities, settings }: {
     setActiveRunId(null);
     void window.kaiDesktop.listCrewRuns(activeProject?.id).then(unwrap).then((loaded) => {
       setRuns(loaded);
+      if (wantsNewRun.current) { wantsNewRun.current = false; return; }
       setActiveRunId(loaded.find((run) => run.status !== 'completed' && run.status !== 'stopped')?.id ?? loaded[0]?.id ?? null);
     }).catch((caught) => setError(messageOf(caught)));
   }, [activeProject?.id]);

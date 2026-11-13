@@ -313,6 +313,7 @@ export function App(): ReactNode {
   const [settingsDestination, setSettingsDestination] = useState<{ category: 'connections' | 'services'; nonce: number } | null>(null);
   // The composer's "Plan in Studio" request. The nonce makes a second press work even for the same project: the
   // Studio opens a fresh plan each time rather than treating the request as one it has already handled.
+  const [crewGoalRequest, setCrewGoalRequest] = useState<{ goal: string; nonce: number } | null>(null);
   const [studioPlanRequest, setStudioPlanRequest] = useState<{ projectId: string; nonce: number } | null>(null);
   const [previewOpen, setPreviewOpen] = useState(() => {
     try {
@@ -1243,17 +1244,22 @@ export function App(): ReactNode {
 
   async function openStudioProject(
     studioProjectId: string,
-    destination: 'composer' | 'editor' | 'generate',
+    destination: 'composer' | 'editor' | 'generate' | 'crew',
   ): Promise<boolean> {
     const launch = await perform(
       () => window.kaiDesktop.launchStudioProject({ projectId: studioProjectId, destination }).then(unwrap),
-      destination === 'composer' ? 'Preparing the composer' : destination === 'generate' ? 'Starting project generation' : 'Opening the code editor',
+      destination === 'crew' ? 'Preparing the crew' : destination === 'composer' ? 'Preparing the composer' : destination === 'generate' ? 'Starting project generation' : 'Opening the code editor',
     );
     if (!launch) return false;
     const next = await openProject(launch.projectId, 'stay');
     if (!next) return false;
     if (destination === 'editor') {
       setView('code');
+      return true;
+    }
+    if (destination === 'crew') {
+      setCrewGoalRequest({ goal: launch.prompt, nonce: Date.now() });
+      setView('crew');
       return true;
     }
 
@@ -2384,7 +2390,7 @@ export function App(): ReactNode {
           />
         );
       case 'crew':
-        return <CrewView activeProject={activeProject} agentCapabilities={agentCapabilities} settings={bootstrap.settings} />;
+        return <CrewView goalRequest={crewGoalRequest} activeProject={activeProject} agentCapabilities={agentCapabilities} settings={bootstrap.settings} />;
       case 'history':
         return (
           <HistoryView
