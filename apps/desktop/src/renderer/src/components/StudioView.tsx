@@ -21,6 +21,7 @@ import {
   explainBlocked,
   machineBlocked,
   interviewGivenAnswers,
+  interviewRecap,
   interviewOpenOptions,
   interviewOpenQuestions,
   projectTitleFrom,
@@ -2396,6 +2397,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const openOptions = state ? interviewOpenOptions(state) : [];
   const asking = state?.status === 'asking';
   const decided = state ? interviewGivenAnswers(state) : [];
+  const recap = state?.status === 'done' ? interviewRecap(state) : null;
   const showHandoff = Boolean(state?.status === 'done' && projectId && artifacts && board && board.cards.length > 0 && !handoffDismissed && busy !== 'generate' && busy !== 'plan');
   const building = Boolean(state?.status === 'done' && (busy === 'generate' || busy === 'plan'));
   // A finished interview has written its brief, whatever the catalog on screen happens to list.
@@ -2736,15 +2738,22 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
           {state?.status === 'done' && (
             <>
               <p className="studio-note"><Check size={13} /> The interview is finished.</p>
-              {state.assumptions.length > 0 && <Notes title="Assumed" items={state.assumptions} />}
-              {decided.length > 0 && (
+              <p className="studio-note">Questions asked: {recap?.asked ?? 0} of {STUDIO_MAX_QUESTIONS}</p>
+              {recap && recap.decided.length > 0 && (
                 <>
                   <h3>Decided</h3>
-                  <dl className="studio-decisions">
-                    {decided.map((item) => <div key={item.question}><dt>{item.question}</dt><dd>{item.answer}</dd></div>)}
-                  </dl>
+                  <div className="studio-interview-recap">
+                    {recap.decided.map((item) => (
+                      <details key={item.question}>
+                        <summary><strong>{item.question}</strong><span>Decided</span></summary>
+                        <p>{item.answer}</p>
+                      </details>
+                    ))}
+                  </div>
                 </>
               )}
+              {recap && recap.leftToAgents.length > 0 && <Notes title="Left to the agents" items={recap.leftToAgents} />}
+              {state.assumptions.length > 0 && <Notes title="Assumed" items={state.assumptions} />}
             </>
           )}
           {asking && state && (

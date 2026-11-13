@@ -268,3 +268,21 @@ export function interviewOpenOptions(state: InterviewState): string[][] {
 export function interviewGivenAnswers(state: InterviewState): InterviewAnswer[] {
   return state.rounds.flatMap((round) => round.answers.filter((item) => item.answer));
 }
+
+/** Finished interview recap, preserving skipped questions as visible handoffs to the agents. */
+export function interviewRecap(state: InterviewState): {
+  asked: number;
+  decided: InterviewAnswer[];
+  leftToAgents: string[];
+} {
+  const asked = state.rounds.flatMap((round) => round.questions);
+  const answers = new Map(state.rounds.flatMap((round) => round.answers.map((item) => [item.question, item.answer] as const)));
+  return {
+    asked: asked.length,
+    decided: asked.flatMap((question) => {
+      const answer = answers.get(question)?.trim();
+      return answer ? [{ question, answer }] : [];
+    }),
+    leftToAgents: asked.filter((question) => !answers.get(question)?.trim()),
+  };
+}

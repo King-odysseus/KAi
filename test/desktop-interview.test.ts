@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewOpenQuestions, interviewStateSchema, projectTitleFrom, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
+import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewOpenQuestions, interviewRecap, interviewStateSchema, projectTitleFrom, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
 import { briefMarkdown, buildInterviewPrompt, DesktopInterview, parseInterviewReply, type InterviewPorts } from '../apps/desktop/src/main/interview';
 import { SpecStore, specHistoryPath } from '../apps/desktop/src/main/spec-store';
 
@@ -32,6 +32,32 @@ function state(overrides: Partial<InterviewState> = {}): InterviewState {
     ...overrides,
   });
 }
+
+describe('finished interview recap', () => {
+  it('keeps answers, skipped questions and assumptions available to the finished view', () => {
+    const finished = state({
+      status: 'done',
+      assumptions: ['Payments are handled offline.', 'Staff manage appointments.'],
+      rounds: [
+        { questions: ['Who books?', 'How do they pay?', 'Who manages the calendar?'], options: [], answers: [
+          { question: 'Who books?', answer: 'Customers book online.' },
+          { question: 'How do they pay?', answer: '' },
+        ] },
+        { questions: ['Which region?'], options: [], answers: [{ question: 'Which region?', answer: 'Accra.' }] },
+      ],
+    });
+
+    expect(interviewRecap(finished)).toEqual({
+      asked: 4,
+      decided: [
+        { question: 'Who books?', answer: 'Customers book online.' },
+        { question: 'Which region?', answer: 'Accra.' },
+      ],
+      leftToAgents: ['How do they pay?', 'Who manages the calendar?'],
+    });
+    expect(finished.assumptions).toHaveLength(2);
+  });
+});
 
 /** A requester that replays canned replies in order; the last one repeats if the interview asks again. */
 function requesterOf(replies: string[]): InterviewPorts['requester'] {
