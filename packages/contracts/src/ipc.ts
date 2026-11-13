@@ -6,6 +6,7 @@ import { autoModelSettingsSchema } from './model-tiers';
 import {
   interviewAnswerInputSchema,
   interviewCorrectionInputSchema,
+  interviewAssumptionInputSchema,
   interviewProjectInputSchema,
   interviewStartInputSchema,
   studioProjectArchiveInputSchema,
@@ -16,6 +17,7 @@ import {
   studioProjectSummarySchema,
   type InterviewAnswerInput,
   type InterviewCorrectionInput,
+  type InterviewAssumptionInput,
   type InterviewStartInput,
   type InterviewState,
   type StudioReadiness,
@@ -584,6 +586,7 @@ export const ipcChannels = [
   'studio:interview-start',
   'studio:interview-answer',
   'studio:interview-correct',
+  'studio:interview-assumption',
   'studio:interview-finish',
   'studio:interview-confirm',
   'studio:interview-reopen',
@@ -997,6 +1000,7 @@ export const ipcInputSchemas = {
   'studio:interview-start': interviewStartInputSchema,
   'studio:interview-answer': interviewAnswerInputSchema,
   'studio:interview-correct': interviewCorrectionInputSchema,
+  'studio:interview-assumption': interviewAssumptionInputSchema,
   'studio:interview-finish': interviewProjectInputSchema,
   'studio:interview-confirm': interviewProjectInputSchema,
   'studio:interview-reopen': interviewProjectInputSchema,
@@ -1569,6 +1573,7 @@ export interface KaiDesktopBridge {
   answerStudioInterview(request: InterviewAnswerInput): Promise<IpcResponse<InterviewState>>;
   /** Replaces an answer already given and asks again from that point, dropping the rounds that followed it. */
   correctStudioInterviewAnswer(request: InterviewCorrectionInput): Promise<IpcResponse<InterviewState>>;
+  actOnStudioAssumption(request: InterviewAssumptionInput): Promise<IpcResponse<InterviewState>>;
   finishStudioInterview(projectId: string): Promise<IpcResponse<InterviewState>>;
   /** Writes the reviewed brief after the user confirms the summary. */
   confirmStudioInterview(projectId: string): Promise<IpcResponse<InterviewState>>;

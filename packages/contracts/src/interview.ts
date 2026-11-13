@@ -81,6 +81,17 @@ export const interviewRoundSchema = z
   .strict();
 export type InterviewRound = z.infer<typeof interviewRoundSchema>;
 
+export const interviewAssumptionSchema = z.object({
+  text: z.string().trim().min(1).max(STUDIO_MAX_ASSUMPTION_CHARS),
+  risk: z.enum(['high', 'medium', 'low']),
+  status: z.enum(['assumed', 'confirmed', 'changed']),
+}).strict();
+export type InterviewAssumption = z.infer<typeof interviewAssumptionSchema>;
+
+const savedAssumptionsSchema = z.preprocess((value) => Array.isArray(value)
+  ? value.map((item) => typeof item === 'string' ? { text: item, risk: 'medium', status: 'assumed' } : item)
+  : value, z.array(interviewAssumptionSchema).max(12).default([]));
+
 export const interviewStatusSchema = z.enum(['asking', 'reviewing', 'done']);
 export type InterviewStatus = z.infer<typeof interviewStatusSchema>;
 
@@ -93,7 +104,9 @@ export const interviewStateSchema = z
     // The idea restated as one clear goal, refreshed each round; empty until the first reply lands.
     goal: z.string().trim().max(STUDIO_MAX_GOAL_CHARS).default(''),
     // What the model assumed where the idea was silent. The user can correct any of them in the brief.
-    assumptions: z.array(z.string().trim().min(1).max(STUDIO_MAX_ASSUMPTION_CHARS)).max(12).default([]),
+    assumptions: savedAssumptionsSchema,
+    // Changes made from the assumption controls, retained as explicit user decisions in the brief.
+    assumptionDecisions: z.array(interviewAnswerSchema).default([]),
     rounds: z.array(interviewRoundSchema).max(STUDIO_QUESTION_CEILING).default([]),
     // Questions the user asked for beyond the first ten, because they wanted to be walked through more.
     extraQuestions: z.number().int().min(0).max(STUDIO_EXTRA_QUESTIONS * STUDIO_MAX_EXTENSIONS).default(0),
@@ -120,7 +133,7 @@ export type InterviewStartInput = z.infer<typeof interviewStartInputSchema>;
 export const interviewReplySchema = z
   .object({
     goal: z.string().trim().min(1).max(STUDIO_MAX_GOAL_CHARS),
-    assumptions: z.array(z.string().trim().min(1).max(STUDIO_MAX_ASSUMPTION_CHARS)).max(STUDIO_MAX_ASSUMPTIONS).default([]),
+    assumptions: z.array(interviewAssumptionSchema).max(STUDIO_MAX_ASSUMPTIONS).default([]),
     // A bare string is accepted too, for models that ignore the object shape.
     questions: z
       .array(z.union([
@@ -155,6 +168,14 @@ export const interviewCorrectionInputSchema = z
   })
   .strict();
 export type InterviewCorrectionInput = z.infer<typeof interviewCorrectionInputSchema>;
+
+export const interviewAssumptionInputSchema = z.object({
+  projectId: z.string().min(1),
+  text: z.string().trim().min(1).max(STUDIO_MAX_ASSUMPTION_CHARS),
+  action: z.enum(['confirm', 'change', 'ask']),
+  replacement: z.string().trim().min(1).max(STUDIO_MAX_ASSUMPTION_CHARS).optional(),
+}).strict();
+export type InterviewAssumptionInput = z.infer<typeof interviewAssumptionInputSchema>;
 
 export const interviewProjectInputSchema = z.object({ projectId: z.string().min(1) }).strict();
 export type InterviewProjectInput = z.infer<typeof interviewProjectInputSchema>;

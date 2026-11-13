@@ -22,6 +22,7 @@ import {
   type AppSettings,
   type InterviewAnswer,
   type InterviewAnswerInput,
+  type InterviewAssumptionInput,
   type InterviewCorrectionInput,
   type InterviewProjectInput,
   type InterviewRound,
@@ -53,7 +54,7 @@ const INTERVIEW_JSON_SCHEMA = {
   required: ['goal', 'assumptions', 'questions'],
   properties: {
     goal: { type: 'string' },
-    assumptions: { type: 'array', items: { type: 'string' } },
+    assumptions: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, risk: { type: 'string', enum: ['high', 'medium', 'low'] }, status: { type: 'string', enum: ['assumed', 'confirmed', 'changed'] } }, required: ['text', 'risk', 'status'], additionalProperties: false } },
     questions: {
       type: 'array',
       items: {
@@ -136,6 +137,7 @@ export class DesktopInterview {
       idea: input.idea,
       goal: '',
       assumptions: [],
+      assumptionDecisions: [],
       rounds: [],
       extraQuestions: 0,
       status: 'asking',
@@ -224,6 +226,44 @@ export class DesktopInterview {
     return null;
   }
 
+  /** Keeps, changes or turns an assumption into a question without discarding interview rounds. */
+  async assumption(input: InterviewAssumptionInput): Promise<InterviewState> {
+    const state = await this.ports.store.read(input.projectId);
+    if (!state) throw new Error('Project not found.');
+    const index = state.assumptions.findIndex((item) => item.text === input.text);
+    if (index < 0) throw new Error('That assumption is no longer in this interview.');
+    if (input.action === 'ask') {
+      const asked = state.rounds.flatMap((round) => round.questions).length;
+      if (asked >= interviewQuestionBudget(state)) throw new Error('The question budget is spent. Add five more questions to continue.');
+      const question = `Should we keep this assumption: ${state.assumptions[index]!.text}?`;
+      return this.persist({
+        ...state,
+        status: 'asking',
+        rounds: [...state.rounds, { questions: [question], options: [['Yes, keep it', 'No, change it', 'Not sure']], answers: [] }],
+        updatedAt: this.ports.now(),
+      });
+    }
+    const current = state.assumptions[index]!;
+    const replacement = input.action === 'change' ? input.replacement?.trim() : current.text;
+    if (!replacement) throw new Error('Enter the new assumption text first.');
+    const assumptions = [...state.assumptions];
+    assumptions[index] = { ...current, text: replacement, status: input.action === 'confirm' ? 'confirmed' : 'changed' };
+    let next: InterviewState = {
+      ...state,
+      assumptions,
+      assumptionDecisions: input.action === 'change'
+        ? [...state.assumptionDecisions, { question: current.text, answer: replacement }]
+        : state.assumptionDecisions,
+      updatedAt: this.ports.now(),
+    };
+    if (next.status === 'done') {
+      const root = await this.ports.projectRoot(next.projectId, next.linkedProjectId);
+      const written = await this.ports.spec.write(root, INTERVIEW_BRIEF_PATH, briefMarkdown(next, this.ports.now()));
+      next = { ...next, briefPath: written.path };
+    }
+    return this.persist(next);
+  }
+
   async setArchived(input: StudioProjectArchiveInput): Promise<StudioProjectSummary> {
     const state = await this.ports.store.read(input.projectId);
     if (!state) throw new Error('Project not found.');
@@ -282,7 +322,7 @@ export class DesktopInterview {
     const next: InterviewState = {
       ...state,
       goal: reply.goal,
-      assumptions: reply.assumptions.slice(0, STUDIO_MAX_ASSUMPTIONS),
+      assumptions: mergeAssumptions(reply.assumptions, state.assumptions).slice(0, STUDIO_MAX_ASSUMPTIONS),
       rounds: [...state.rounds, { questions, options: fresh.map((item) => item.options), answers: [] }],
       updatedAt: this.ports.now(),
     };
@@ -363,7 +403,7 @@ export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal'
     '',
     'Write:',
     '- "goal": the project restated as one clear, specific goal (what is built, for whom, and what "done" looks like).',
-    `- "assumptions": decisions you made where the description was silent, each short and concrete and under ${STUDIO_MAX_ASSUMPTION_CHARS} characters. Carry forward the ones you still believe.`,
+    `- "assumptions": objects with "text", "risk" (high, medium or low: how much a wrong guess changes what is built), and "status" (assumed). Keep them short and concrete, under ${STUDIO_MAX_ASSUMPTION_CHARS} characters, and order high risk first.`,
     `- "questions": at most ${roundLimit(state.rounds.length)} question, the single most important one only the user can answer, as an object {"question", "options"}. The whole interview may ask no more than ${interviewQuestionBudget(state)} questions; it has already asked ${state.rounds.flatMap((round) => round.questions).length}. It is shown in a chat, so write it as one short, conversational question of at most ${STUDIO_MAX_QUESTION_CHARS} characters that opens with a few words acknowledging the user's last answer (nothing, when there is none yet). Ask about the things that would change what gets built: who uses it, the data and where it lives, accounts and permissions, payments, the platform, and how the result is judged.`,
     `Give each question 2 to ${STUDIO_MAX_OPTIONS} "options": short, concrete answers fitted to THIS project and to everything the user has told you so far, so that a later question's options follow from the earlier answers (a payment question after "deposit" offers deposit styles, not generic ones). Keep every option to ${STUDIO_MAX_OPTION_CHARS} characters or fewer: they are shown as chips beside the answer box, and a longer one is cut short. Put the option you would recommend first and end its text with " (recommended)". Always make the last option "Not sure, you decide". If the user picked it, or skipped, decide yourself and add the decision to "assumptions" with a few words of reason. Use an empty options array only for a question that is truly open-ended.`,
     'Many users are new to building software. When their wording suggests that (no technical terms, "I don\'t know", very broad answers), write in plain language, explain what each option means in a few words, and prefer the simplest choice that works. Never assume they know what a framework, database or hosting service is.',
@@ -406,9 +446,14 @@ function withinShape(raw: unknown): unknown {
   if (Array.isArray(reply.assumptions)) {
     const stated: unknown[] = reply.assumptions;
     reply.assumptions = stated
-      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-      .slice(0, STUDIO_MAX_ASSUMPTIONS)
-      .map((item) => clipToLength(item, STUDIO_MAX_ASSUMPTION_CHARS));
+      .flatMap((item) => {
+        if (typeof item === 'string') return item.trim() ? [{ text: clipToLength(item, STUDIO_MAX_ASSUMPTION_CHARS), risk: 'medium', status: 'assumed' }] : [];
+        if (typeof item !== 'object' || item === null) return [];
+        const assumption = item as Record<string, unknown>;
+        if (typeof assumption.text !== 'string' || !assumption.text.trim()) return [];
+        return [{ text: clipToLength(assumption.text, STUDIO_MAX_ASSUMPTION_CHARS), risk: assumption.risk, status: assumption.status }];
+      })
+      .slice(0, STUDIO_MAX_ASSUMPTIONS);
   }
   if (Array.isArray(reply.questions)) {
     const listed: unknown[] = reply.questions;
@@ -434,7 +479,7 @@ function heldQuestion(item: unknown): unknown {
 }
 
 /** Reads the model's reply, dropping duplicate questions and options. */
-export function parseInterviewReply(content: string): { goal: string; assumptions: string[]; questions: Array<{ question: string; options: string[] }> } {
+export function parseInterviewReply(content: string): { goal: string; assumptions: InterviewState['assumptions']; questions: Array<{ question: string; options: string[] }> } {
   const raw = withinShape(parseJsonResponse(content, 'Project Studio'));
   const parsed = interviewReplySchema.safeParse(raw);
   if (!parsed.success) {
@@ -465,9 +510,9 @@ export function briefMarkdown(state: InterviewState, writtenAt: string): string 
     '## The idea',
     state.idea,
     '## Assumptions',
-    state.assumptions.length > 0 ? state.assumptions.map((item) => `- ${item}`).join('\n') : '- None recorded.',
+    state.assumptions.length > 0 ? state.assumptions.map((item) => `- [${item.risk} risk; ${item.status}] ${item.text}`).join('\n') : '- None recorded.',
     '## What you decided',
-    decided.length > 0 ? decided.map((item) => `**${item.question}**\n\n${item.answer}`).join('\n\n') : 'No questions were answered.',
+    [...state.assumptionDecisions, ...decided].length > 0 ? [...state.assumptionDecisions, ...decided].map((item) => `**${item.question}**\n\n${item.answer}`).join('\n\n') : 'No questions were answered.',
     open.length > 0 ? `## Left to the agents\n\n${open.map((question) => `- ${question}`).join('\n')}` : '',
     unanswered.length > 0 ? `## Still open\n\n${unanswered.map((question) => `- ${question}`).join('\n')}` : '',
     '## Next',
@@ -515,6 +560,19 @@ function mergeAnswers(round: InterviewRound, incoming: readonly InterviewAnswer[
     const given = incoming.find((item) => normalise(item.question) === normalise(question));
     return { question, answer: given?.answer.trim() ?? '' };
   });
+}
+
+/** Retains user-confirmed or changed assumptions when the model supplies the next set. */
+function mergeAssumptions(reply: InterviewState['assumptions'], previous: InterviewState['assumptions']): InterviewState['assumptions'] {
+  const merged = [...reply];
+  for (const item of previous) {
+    if (item.status === 'assumed') continue;
+    const at = merged.findIndex((candidate) => normalise(candidate.text) === normalise(item.text));
+    if (at >= 0) merged[at] = item;
+    else merged.push(item);
+  }
+  const order = { high: 0, medium: 1, low: 2 } as const;
+  return merged.sort((left, right) => order[left.risk] - order[right.risk]);
 }
 
 function normalise(value: string): string {

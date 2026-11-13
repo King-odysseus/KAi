@@ -59,6 +59,42 @@ describe('finished interview recap', () => {
   });
 });
 
+describe('assumption controls', () => {
+  it('loads saved string assumptions with a safe medium risk and assumed status', () => {
+    const restored = interviewStateSchema.parse({
+      projectId: 'legacy', idea: 'A booking site.', updatedAt: NOW, assumptions: ['Payments are offline.'],
+    });
+    expect(restored.assumptions).toEqual([{ text: 'Payments are offline.', risk: 'medium', status: 'assumed' }]);
+  });
+
+  it('confirms or changes an assumption without dropping rounds and rewrites a finished brief', async () => {
+    const assumption = { text: 'Payments are offline.', risk: 'high' as const, status: 'assumed' as const };
+    const seed = state({ status: 'done', assumptions: [assumption], rounds: [{ questions: ['Who books?'], options: [], answers: [{ question: 'Who books?', answer: 'Customers.' }] }] });
+    const memory = memoryStore(seed);
+    const interview = new DesktopInterview(ports({ store: memory }));
+    const kept = await interview.assumption({ projectId: 'p1', text: assumption.text, action: 'confirm' });
+    expect(kept.assumptions[0]?.status).toBe('confirmed');
+    expect(kept.rounds).toEqual(seed.rounds);
+    const changed = await interview.assumption({ projectId: 'p1', text: assumption.text, action: 'change', replacement: 'Kuza processes card payments.' });
+    expect(changed.assumptions[0]).toMatchObject({ text: 'Kuza processes card payments.', status: 'changed' });
+    expect(changed.rounds).toEqual(seed.rounds);
+    expect(changed.assumptionDecisions).toEqual([{ question: assumption.text, answer: 'Kuza processes card payments.' }]);
+    expect(await new SpecStore().read(root, 'brief.md')).toContain('Kuza processes card payments.');
+  });
+
+  it('turns an assumption into the next question and refuses when the question budget is spent', async () => {
+    const assumption = { text: 'Payments are offline.', risk: 'medium' as const, status: 'assumed' as const };
+    const seed = state({ assumptions: [assumption] });
+    const interview = new DesktopInterview(ports({ store: memoryStore(seed) }));
+    const queued = await interview.assumption({ projectId: 'p1', text: assumption.text, action: 'ask' });
+    expect(queued.status).toBe('asking');
+    expect(queued.rounds.at(-1)?.questions[0]).toContain(assumption.text);
+    const spent = state({ assumptions: [assumption], rounds: Array.from({ length: STUDIO_MAX_QUESTIONS }, (_value, index) => ({ questions: [`Question ${index}`], options: [], answers: [] })) });
+    const noBudget = new DesktopInterview(ports({ store: memoryStore(spent) }));
+    await expect(noBudget.assumption({ projectId: 'p1', text: assumption.text, action: 'ask' })).rejects.toThrow(/budget is spent/);
+  });
+});
+
 /** A requester that replays canned replies in order; the last one repeats if the interview asks again. */
 function requesterOf(replies: string[]): InterviewPorts['requester'] {
   let call = 0;
@@ -153,13 +189,13 @@ describe('Project Studio interview', () => {
   it('asks a first round, keeping the reply on the model side of the contract', async () => {
     const interview = new DesktopInterview(ports({}, [JSON.stringify({
       goal: 'Let a barber shop take deposits online.',
-      assumptions: ['Card payments only'],
+      assumptions: [{ text: 'Card payments only', risk: 'medium', status: 'assumed' }],
       questions: ['How many chairs?', 'Who cancels a booking?', 'How many chairs?'],
     })]));
     const started = await interview.start({ projectId: 'p1', idea: 'A booking site for a barber shop.' });
     expect(started.status).toBe('asking');
     expect(started.goal).toMatch(/deposits/);
-    expect(started.assumptions).toEqual(['Card payments only']);
+    expect(started.assumptions).toEqual([{ text: 'Card payments only', risk: 'medium', status: 'assumed' }]);
     // Each model call asks one question, so the next one can react to the answer before it.
     expect(started.rounds[0]?.questions).toEqual(['How many chairs?']);
     expect(interviewOpenQuestions(started)).toHaveLength(1);
@@ -456,7 +492,7 @@ describe('Project Studio interview', () => {
     const parsed = parseInterviewReply(reply);
 
     expect(parsed.goal).toBe('Build ZuriAi.');
-    expect(parsed.assumptions).toEqual(['Naira pricing.']);
+    expect(parsed.assumptions).toEqual([{ text: 'Naira pricing.', risk: 'medium', status: 'assumed' }]);
     expect(parsed.questions[0].question).toBe('How should a mode work?');
     const [first] = parsed.questions[0].options;
     expect(first.length).toBeLessThanOrEqual(STUDIO_MAX_OPTION_CHARS);
@@ -505,8 +541,8 @@ describe('Project Studio interview', () => {
     expect(parsed.goal).toBe('Build ZuriAi.');
     expect(parsed.questions[0].question).toBe('How should a mode work?');
     expect(parsed.assumptions).toHaveLength(2);
-    for (const assumption of parsed.assumptions) expect(assumption.length).toBeLessThanOrEqual(STUDIO_MAX_ASSUMPTION_CHARS);
-    expect(parsed.assumptions[0]?.endsWith('…')).toBe(true);
+    for (const assumption of parsed.assumptions) expect(assumption.text.length).toBeLessThanOrEqual(STUDIO_MAX_ASSUMPTION_CHARS);
+    expect(parsed.assumptions[0]?.text.endsWith('…')).toBe(true);
   });
 
   it('shortens an over-long question, and drops blank assumptions and blank answers', () => {
@@ -519,7 +555,7 @@ describe('Project Studio interview', () => {
 
     const parsed = parseInterviewReply(reply);
 
-    expect(parsed.assumptions).toEqual(['Naira pricing.']);
+    expect(parsed.assumptions).toEqual([{ text: 'Naira pricing.', risk: 'medium', status: 'assumed' }]);
     expect(parsed.questions[0].question.length).toBeLessThanOrEqual(STUDIO_MAX_QUESTION_CHARS);
     expect(parsed.questions[0].options).toEqual(['Web app', 'Desktop app']);
   });

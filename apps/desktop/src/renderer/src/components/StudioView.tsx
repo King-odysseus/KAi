@@ -35,6 +35,7 @@ import {
   type BoardStatus,
   type GuideAction,
   type InterviewState,
+  type InterviewAssumption,
   type PersistedEvent,
   type ProjectRecord,
   type StudioArtifacts,
@@ -234,6 +235,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const [guide, setGuide] = useState<StudioGuideView | null>(null);
   const [explaining, setExplaining] = useState(false);
   const [handoffDismissed, setHandoffDismissed] = useState(false);
+  const [editingAssumption, setEditingAssumption] = useState<{ original: string; value: string } | null>(null);
   const [dropColumn, setDropColumn] = useState<BoardStatus | null>(null);
   const threadEnd = useRef<HTMLDivElement | null>(null);
   const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'enhance' | 'finish' | 'reset' | 'generate' | 'plan' | 'arrange' | 'card' | 'team' | 'work' | 'design' | 'design-build' | 'page-op' | 'archive' | 'delete' | 'folder' | 'launch' | 'link' | 'guide' | 'plan-chat' | null>(null);
@@ -1348,6 +1350,48 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     } finally {
       setBusy(null);
     }
+  }
+
+  async function actOnAssumption(assumption: InterviewAssumption, action: 'confirm' | 'change' | 'ask', replacement?: string): Promise<void> {
+    if (!projectId || busy !== null) return;
+    setBusy('answer');
+    setError(null);
+    try {
+      const next = unwrap(await window.kaiDesktop.actOnStudioAssumption({ projectId, text: assumption.text, action, replacement }));
+      adopt(next);
+      setEditingAssumption(null);
+      setProjectsVersion((current) => current + 1);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function assumptionControls(items: InterviewAssumption[]): ReactNode {
+    return (
+      <ul className="prompt-guide-list">
+        {items.map((assumption) => (
+          <li key={assumption.text}>
+            <strong>{assumption.risk[0]?.toUpperCase()}{assumption.risk.slice(1)} risk:</strong> {assumption.text}
+            {assumption.status !== 'assumed' ? <Pill tone="success">{assumption.status === 'confirmed' ? 'Kept' : 'Changed'}</Pill> : (
+              <div className="studio-assumption-actions">
+                <UiButton type="button" className="composer-text-button" onClick={() => void actOnAssumption(assumption, 'confirm')} disabled={busy !== null}>Keep</UiButton>
+                <UiButton type="button" className="composer-text-button" onClick={() => setEditingAssumption({ original: assumption.text, value: assumption.text })} disabled={busy !== null}>Change</UiButton>
+                <UiButton type="button" className="composer-text-button" onClick={() => void actOnAssumption(assumption, 'ask')} disabled={busy !== null}>Ask me</UiButton>
+              </div>
+            )}
+            {editingAssumption?.original === assumption.text && (
+              <div className="studio-assumption-edit">
+                <Textarea value={editingAssumption.value} onChange={(event) => setEditingAssumption({ ...editingAssumption, value: event.target.value })} rows={2} aria-label="Change assumption" />
+                <UiButton type="button" className="primary-button" onClick={() => void actOnAssumption(assumption, 'change', editingAssumption.value)} disabled={busy !== null || !editingAssumption.value.trim()}>Save change</UiButton>
+                <UiButton type="button" className="secondary-button" onClick={() => setEditingAssumption(null)} disabled={busy !== null}>Cancel</UiButton>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    );
   }
 
   async function reset(): Promise<void> {
@@ -2742,7 +2786,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
             ) : (
               <>
                 <p className="studio-goal">{state.goal || state.idea}</p>
-                {state.assumptions.length > 0 && <Notes title="Assumptions" items={state.assumptions} />}
+                {state.assumptions.length > 0 && <><h3>Assumptions</h3>{assumptionControls(state.assumptions)}</>}
                 {decided.length > 0 && (
                   <>
                     <h3>Decisions</h3>
@@ -2779,7 +2823,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 </>
               )}
               {recap && recap.leftToAgents.length > 0 && <Notes title="Left to the agents" items={recap.leftToAgents} />}
-              {state.assumptions.length > 0 && <Notes title="Assumed" items={state.assumptions} />}
+              {state.assumptions.length > 0 && <><h3>Assumptions</h3>{assumptionControls(state.assumptions)}</>}
             </>
           )}
           {state?.status === 'reviewing' && (
@@ -2796,7 +2840,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 </>
               )}
               {recap && recap.leftToAgents.length > 0 && <Notes title="Left to the agents" items={recap.leftToAgents} />}
-              {state.assumptions.length > 0 && <Notes title="Assumed" items={state.assumptions} />}
+              {state.assumptions.length > 0 && <><h3>Assumptions</h3>{assumptionControls(state.assumptions)}</>}
               <div className="studio-actions">
                 <UiButton type="button" className="secondary-button" onClick={() => void backToQuestions()} disabled={busy !== null}><ArrowLeft size={14} /> Back to questions</UiButton>
                 <UiButton type="button" className="primary-button" onClick={() => void confirmReview()} disabled={busy !== null}>{busy === 'finish' ? <Loader2 className="spin" size={14} /> : <FileText size={14} />} Write the brief</UiButton>
