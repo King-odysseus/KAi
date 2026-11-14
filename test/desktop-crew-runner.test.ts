@@ -19,6 +19,8 @@ interface Script {
   /** Lead verdicts in the order reviews happen. The last one repeats. */
   lead?: string[];
   security?: string[];
+  /** The Lead's calls on a task that ran out of retries. The default hands the question to the user. */
+  stuck?: string[];
   buildFails?: number;
   costPerCall?: number;
 }
@@ -27,7 +29,7 @@ function fixture(script: Script = {}, patch: Partial<CrewConfig> = {}) {
   const requests: AgentRunRequest[] = [];
   const saved = new Map<string, CrewRun>();
   const notifications: CrewRun[] = [];
-  let plans = 0, leads = 0, securities = 0, builds = 0;
+  let plans = 0, leads = 0, securities = 0, builds = 0, stucks = 0;
   const checks: string[] = [];
   const pick = (list: string[] | undefined, index: number, fallback: string): string => (list && list.length > 0 ? list[Math.min(index, list.length - 1)]! : fallback);
 
@@ -43,6 +45,7 @@ function fixture(script: Script = {}, patch: Partial<CrewConfig> = {}) {
       if (request.prompt.includes('You are the tester.')) return reply('{"verdict":"accept"}');
       if (request.prompt.includes('You are the auditor.')) return reply('{"verdict":"accept"}');
       if (request.prompt.includes('You are the Lead. Check this finished task')) return reply(pick(script.lead, leads++, '{"verdict":"accept"}'));
+      if (request.prompt.includes('A task has failed or been sent back too many times')) return reply(pick(script.stuck, stucks++, '{"decision":"ask","reason":"Needs the user."}'));
       builds += 1;
       if (builds <= (script.buildFails ?? 0)) return reply('', 'failed', 'The agent crashed.');
       return reply('Built it.');
@@ -272,6 +275,34 @@ describe('crew runner', () => {
     await f2.runner.answer(second.id, 'continue', 'Put it in middleware.', 1);
     const finished = await runToIdle(f2.runner, second.id);
     expect(finished.status).toBe('completed');
+  });
+
+  it('lets the Lead retry a task that came back for the same problem, without asking the user', async () => {
+    const f = fixture({
+      lead: ['{"verdict":"sendBack","feedback":"No rate limit."}', '{"verdict":"sendBack","feedback":"no rate limit"}', '{"verdict":"accept"}'],
+      stuck: ['{"decision":"retry","guidance":"Put the limit in middleware."}'],
+    });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('completed');
+    expect(run.feed.some((entry) => entry.who === 'lead' && entry.text.includes('a different way'))).toBe(true);
+  });
+
+  it('lets the Lead skip a task that keeps crashing, and finishes the rest', async () => {
+    const f = fixture({ buildFails: 99, stuck: ['{"decision":"skip","reason":"Not needed for the goal."}'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).not.toBe('needsYou');
+    expect(run.tasks.every((task) => task.status === 'skipped')).toBe(true);
+  });
+
+  it('asks the user when the Lead says the question is theirs, or when its answer cannot be read', async () => {
+    const asked = fixture({ lead: ['{"verdict":"sendBack","feedback":"No rate limit."}'], stuck: ['{"decision":"ask","reason":"Needs a key."}'] });
+    const one = await asked.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: asked.config }, 1);
+    expect((await runToIdle(asked.runner, one.id)).ask?.reason).toBe('sameFailure');
+    const unreadable = fixture({ lead: ['{"verdict":"sendBack","feedback":"No rate limit."}'], stuck: ['I would try again.'] });
+    const two = await unreadable.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: unreadable.config }, 1);
+    expect((await runToIdle(unreadable.runner, two.id)).ask?.reason).toBe('sameFailure');
   });
 
   it('never accepts work when the Lead\'s reply cannot be read', async () => {

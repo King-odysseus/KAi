@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultCrewConfig, crewConfigSchema, crewRunSchema } from '@kai/contracts';
 import type { CrewRun } from '@kai/contracts';
 import {
-  acceptProposal, addTasks, answerAsk, buildReport, enforceLimits, isFinished, parseReview, pickTasks, proposeTask, readyTasks,
+  acceptProposal, addTasks, answerAsk, reassignReadOnlyTasks, resolveStuck, stuckTask, failBuild, buildReport, enforceLimits, isFinished, parseReview, pickTasks, proposeTask, readyTasks,
   reviewTask, roleAccess, sameFeedback, settle, startTask, subAgentsFor, submitTask, taskBrief, unfinishedReason,
 } from '../apps/desktop/src/main/crew-engine';
+import { parseStuckDecision } from '../apps/desktop/src/main/crew-prompts';
 
 const T0 = '2026-11-01T10:00:00.000Z';
 const T1 = '2026-11-01T10:05:00.000Z';
@@ -182,6 +183,72 @@ describe('crew review loop', () => {
 
   it('does not call an empty board finished', () => {
     expect(isFinished(newRun())).toBe(false);
+  });
+});
+
+describe('tasks given to a role that cannot edit', () => {
+  it('starts a task planned for Security with the builder instead', () => {
+    const { run, refused } = addTasks(newRun(), [{ id: 'sec', title: 'Review the spike security boundaries', role: 'security', acceptance: ['A written review'] }], T0);
+    expect(refused).toEqual([]);
+    expect(run.tasks[0]?.role).toBe('builder');
+  });
+
+  it('moves an already stuck task to the builder and clears its failure note', () => {
+    const base = newRun();
+    const stuck = { ...base, tasks: [{ ...withTasks(base).tasks[0]!, id: 'sec', role: 'security', status: 'needsYou' as const, note: 'Build failed (5): Security cannot change files, so it cannot build this.' }] };
+    const fixed = reassignReadOnlyTasks(stuck, T1);
+    expect(fixed.tasks[0]).toMatchObject({ role: 'builder', status: 'backlog', note: '' });
+    expect(fixed.feed.at(-1)?.text).toContain('cannot change files');
+  });
+
+  it('leaves tasks for roles that can edit alone', () => {
+    const run = withTasks(newRun());
+    expect(reassignReadOnlyTasks(run, T1)).toBe(run);
+  });
+});
+
+describe('the Lead settles a stuck task', () => {
+  function stuckRun(): CrewRun {
+    let run = withTasks(newRun());
+    run = startTask(run, 'schema', 'builder', T0);
+    const limit = run.config.limits.maxSendBacks;
+    for (let attempt = 0; attempt <= limit; attempt += 1) {
+      run = failBuild(run, 'schema', 'The build tool crashed.', T0);
+      if (run.status !== 'needsYou') run = startTask(run, 'schema', 'builder', T0);
+    }
+    return run;
+  }
+
+  it('recognises a task that ran out of build retries, but not a security block', () => {
+    const run = stuckRun();
+    expect(run.status).toBe('needsYou');
+    expect(stuckTask(run)?.id).toBe('schema');
+    expect(stuckTask({ ...run, ask: { ...run.ask!, reason: 'securityBlock' } })).toBeNull();
+  });
+
+  it('retries with the Lead guidance and a fresh failure count', () => {
+    const next = resolveStuck(stuckRun(), { decision: 'retry', text: 'Use the existing migration helper.' }, 'lead', T1)!;
+    expect(next.status).toBe('running');
+    expect(next.ask).toBeNull();
+    expect(next.tasks.find((task) => task.id === 'schema')).toMatchObject({ status: 'sentBack', note: '' });
+    expect(taskBrief(next, 'schema')).toContain('Use the existing migration helper.');
+  });
+
+  it('skips the task so the rest can finish', () => {
+    const next = resolveStuck(stuckRun(), { decision: 'skip', text: 'Covered by the ingestion task.' }, 'lead', T1)!;
+    expect(next.tasks.find((task) => task.id === 'schema')?.status).toBe('skipped');
+    expect(next.status).toBe('running');
+  });
+
+  it('leaves the question with the user when the Lead says ask', () => {
+    expect(resolveStuck(stuckRun(), { decision: 'ask', text: 'Needs an API key.' }, 'lead', T1)).toBeNull();
+  });
+
+  it('reads the Lead decision, and refuses a retry with nothing new to say', () => {
+    expect(parseStuckDecision('{"decision":"skip","reason":"not needed"}')).toEqual({ decision: 'skip', text: 'not needed' });
+    expect(parseStuckDecision('{"decision":"retry","guidance":"Do X"}')).toEqual({ decision: 'retry', text: 'Do X' });
+    expect(parseStuckDecision('{"decision":"retry"}')).toBeNull();
+    expect(parseStuckDecision('no idea')).toBeNull();
   });
 });
 

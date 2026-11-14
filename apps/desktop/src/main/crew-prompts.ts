@@ -192,10 +192,56 @@ export function reviewRolePrompt(kind: 'security' | 'tester' | 'auditor' | 'lice
   }
 }
 
-export function retryPrompt(kind: 'plan' | 'review'): string {
-  return kind === 'plan'
-    ? 'Your previous reply could not be used. Reply again with only the JSON object {"tasks":[...]} and no other text.'
-    : 'Your previous reply could not be used. Reply again with only one JSON object such as {"verdict":"accept"} or {"verdict":"sendBack","feedback":"..."}, and no other text.';
+export function retryPrompt(kind: 'plan' | 'review' | 'stuck'): string {
+  if (kind === 'plan') return 'Your previous reply could not be used. Reply again with only the JSON object {"tasks":[...]} and no other text.';
+  if (kind === 'stuck') return 'Your previous reply could not be used. Reply again with only one JSON object such as {"decision":"skip","reason":"..."} or {"decision":"retry","guidance":"..."} or {"decision":"ask","reason":"..."}, and no other text.';
+  return 'Your previous reply could not be used. Reply again with only one JSON object such as {"verdict":"accept"} or {"verdict":"sendBack","feedback":"..."}, and no other text.';
+}
+
+/**
+ * The Lead's call on a task that has run out of retries. The crew is meant to keep going on its own, so the Lead is
+ * asked to decide first and to hand the question to the user only for something that is genuinely theirs to choose.
+ */
+export function stuckPrompt(run: CrewRun, task: CrewTask): string {
+  const history = task.reviews.slice(-4).map((review) => `- ${review.reviewer}, round ${review.round}, ${review.verdict}${review.feedback ? `: ${review.feedback.slice(0, 400)}` : ''}`);
+  return [
+    'You are the Lead. A task has failed or been sent back too many times and the crew has stopped on it. Decide what happens next so the crew can keep working without the user.',
+    '',
+    `Project goal: ${run.goal}`,
+    `Task: ${task.title}`,
+    task.description,
+    '',
+    'Acceptance criteria:',
+    ...task.acceptance.map((criterion, index) => `${index + 1}. ${criterion}`),
+    '',
+    `Why it stopped: ${run.ask?.message ?? task.note}`,
+    ...(task.note ? [`Last note: ${task.note}`] : []),
+    ...(history.length > 0 ? ['', 'Recent verdicts:', ...history] : []),
+    '',
+    'Reply with only one JSON object:',
+    '- {"decision":"retry","guidance":"..."} when a specific, different instruction would change the outcome. The guidance must say what to do differently; repeating the same request will fail the same way.',
+    '- {"decision":"skip","reason":"..."} when the task is not needed to reach the goal, cannot be done in this project, or is covered by other tasks. The project can still be finished without it.',
+    '- {"decision":"ask","reason":"..."} only when the answer needs the user: a missing secret or account, a product choice only they can make, or something that would be unsafe to guess.',
+    'Prefer deciding. Choose ask only when retry and skip would both be wrong.',
+  ].join('\n');
+}
+
+/** Reads the Lead's call on a stuck task. Anything else reads as no decision, so the user is asked. */
+export function parseStuckDecision(text: string): { decision: 'retry' | 'skip' | 'ask'; text: string } | null {
+  const candidates = [...text.matchAll(/\{[^{}]*"decision"[^{}]*\}/g)].map((match) => match[0]);
+  for (const candidate of candidates.reverse()) {
+    try {
+      const value = JSON.parse(candidate) as { decision?: unknown; guidance?: unknown; reason?: unknown };
+      if (value.decision !== 'retry' && value.decision !== 'skip' && value.decision !== 'ask') continue;
+      const words = typeof value.guidance === 'string' && value.guidance.trim() ? value.guidance : typeof value.reason === 'string' ? value.reason : '';
+      // A retry with nothing new to say would only fail again, so it is not a usable decision.
+      if (value.decision === 'retry' && !words.trim()) continue;
+      return { decision: value.decision, text: words.trim() };
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 /**

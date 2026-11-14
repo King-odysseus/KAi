@@ -95,9 +95,42 @@ export function addTasks(run: CrewRun, drafts: readonly CrewTaskDraft[], at: str
       description: '', dependsOn: [], status: 'backlog', round: 0, reviews: [], designRef: null, proposed: false,
       assignedTo: null, files: [], costUsd: 0, note: '', ...draft, createdBy: by, updatedAt: at,
     };
+    // A task for a role that cannot edit could never be built, so it starts with a role that can.
+    const drafted = roleOf(run.config, draft.role);
+    const editor = editorRole(run.config);
+    if (drafted && editor && roleAccess(drafted) !== 'edit') task.role = editor.id;
     next = { ...next, tasks: [...next.tasks, task], updatedAt: at };
   }
   return { run: next, refused };
+}
+
+/** The role that takes work a read-only role was given: the builder, else any role that may edit files. */
+export function editorRole(config: CrewConfig): CrewConfig['roles'][number] | undefined {
+  return config.roles.find((role) => role.kind === 'builder') ?? config.roles.find((role) => roleAccess(role) === 'edit');
+}
+
+/**
+ * Tasks the plan gave to a role that cannot change files (a reviewer, Security) can never be built: every attempt
+ * fails the same way, so retrying only burns the send-back limit and then stops the whole run on a mistake the user
+ * did not make. They go to the builder instead, and the read-only reviewers still check the result as usual.
+ */
+export function reassignReadOnlyTasks(run: CrewRun, at: string): CrewRun {
+  const editor = editorRole(run.config);
+  if (!editor) return run;
+  let next = run;
+  for (const task of run.tasks) {
+    if (task.status !== 'backlog' && task.status !== 'sentBack' && task.status !== 'needsYou') continue;
+    const role = roleOf(run.config, task.role);
+    if (!role || roleAccess(role) === 'edit') continue;
+    const moved = patchTask(next, task.id, (item) => ({
+      ...item,
+      role: editor.id,
+      status: item.status === 'needsYou' ? 'backlog' : item.status,
+      note: item.note.startsWith('Build failed') ? '' : item.note,
+    }), at);
+    next = feed(moved, { who: 'crew', kind: 'info', text: `"${task.title}" was given to ${role.label}, which cannot change files, so ${editor.label} will do it. ${role.label} still reviews the result.`, taskId: task.id }, at);
+  }
+  return next;
 }
 
 /** A worker's suggestion for work the plan missed. It waits off the board until someone accepts it. */
@@ -218,6 +251,39 @@ export function answerAsk(run: CrewRun, answer: 'continue' | 'skip' | 'finish', 
     next = feed({ ...next, config: { ...next.config, limits } }, { who: 'you', kind: 'info', text: 'Continued past the limit.' }, at);
   }
   return { ...next, status: 'running' };
+}
+
+/**
+ * The task the run stopped on because it ran out of retries, when that is something the Lead can settle: a build that
+ * kept failing, or work sent back too often or for the same reason twice. A security block, or a reviewer saying a
+ * choice is the user's, is never settled for them.
+ */
+export function stuckTask(run: CrewRun): CrewTask | null {
+  const ask = run.ask;
+  if (run.status !== 'needsYou' || !ask?.taskId) return null;
+  const task = run.tasks.find((item) => item.id === ask.taskId);
+  if (!task || task.status !== 'needsYou') return null;
+  const exhausted = ask.reason === 'sendBacks' || ask.reason === 'sameFailure' || (ask.reason === 'noProgress' && task.note.startsWith('Build failed'));
+  return exhausted ? task : null;
+}
+
+/**
+ * Applies the Lead's call on a stuck task: retry with its guidance (the failure count starts again), or skip it so the
+ * rest of the project can finish. Returns null for "ask", leaving the question with the user.
+ */
+export function resolveStuck(run: CrewRun, decision: { decision: 'retry' | 'skip' | 'ask'; text: string }, leadId: string, at: string): CrewRun | null {
+  const task = stuckTask(run);
+  if (!task || decision.decision === 'ask') return null;
+  const cleared: CrewRun = { ...run, ask: null, status: 'running', updatedAt: at };
+  if (decision.decision === 'skip') {
+    const skipped = patchTask(cleared, task.id, (item) => ({ ...item, status: 'skipped', note: 'Skipped by the Lead.' }), at);
+    return feed(skipped, { who: leadId, kind: 'info', text: `Skipped "${task.title}" and went on without it${decision.text ? `: ${shorten(decision.text)}` : '.'}`, taskId: task.id }, at);
+  }
+  const retried = patchTask(cleared, task.id, (item) => ({
+    ...item, status: 'sentBack', note: '',
+    reviews: [...item.reviews.filter((review) => review.verdict !== 'sendBack'), { round: item.round, verdict: 'sendBack' as const, feedback: decision.text, reviewer: leadId, at }],
+  }), at);
+  return feed(retried, { who: leadId, kind: 'info', text: `Tried "${task.title}" a different way: ${shorten(decision.text)}`, taskId: task.id }, at);
 }
 
 /** Adds fresh project guidance to a live run without requiring the crew to be stopped on an Ask. */

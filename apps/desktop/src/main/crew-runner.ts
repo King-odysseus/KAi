@@ -3,9 +3,9 @@ import { classifyWork, crewRunSchema } from '@kai/contracts';
 import type { AgentRunRequest, AgentRunResult, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
 import {
   addCheckFix, addSpend, addTasks, answerAsk, enforceLimits, failBuild, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
-  roleAccess, settle, startTask, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun,
+  reassignReadOnlyTasks, resolveStuck, roleAccess, settle, stuckTask, startTask, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun,
 } from './crew-engine';
-import { parsePlan, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt } from './crew-prompts';
+import { parsePlan, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
 import type { ParallelSession } from './parallel-session';
 
 export interface CrewRunnerPorts {
@@ -58,6 +58,8 @@ interface ActiveRun {
   done: Promise<void>;
   wave: number;
   serialRetryTasks: string[];
+  /** Tasks the Lead has already been asked to unstick in this run; each gets one call. */
+  leadDecided: Set<string>;
   children: Set<string>;
 }
 
@@ -189,7 +191,7 @@ export class DesktopCrewRunner {
   }
 
   private attach(run: CrewRun, ownerWindowId: number, conversationId: string): ActiveRun {
-    const active: ActiveRun = { ownerWindowId, conversationId, controller: new AbortController(), run, cancelled: false, done: Promise.resolve(), wave: 0, serialRetryTasks: run.tasks.filter((task) => task.note.startsWith('Its changes conflicted with another independent task') || task.note.startsWith('Its changes conflicted with another task')).map((task) => task.id), children: new Set() };
+    const active: ActiveRun = { ownerWindowId, conversationId, controller: new AbortController(), run, cancelled: false, done: Promise.resolve(), wave: 0, leadDecided: new Set(), serialRetryTasks: run.tasks.filter((task) => task.note.startsWith('Its changes conflicted with another independent task') || task.note.startsWith('Its changes conflicted with another task')).map((task) => task.id), children: new Set() };
     this.active.set(run.id, active);
     return active;
   }
@@ -288,8 +290,10 @@ export class DesktopCrewRunner {
     await this.measureBaseline(active);
     for (;;) {
       if (active.cancelled) return;
-      let run = enforceLimits(active.run, this.now());
+      let run = reassignReadOnlyTasks(enforceLimits(active.run, this.now()), this.now().toISOString());
       if (run !== active.run) await this.commit(active, run);
+      // A task that ran out of retries goes to the Lead before it goes to the user, once per task per run.
+      if (run.status === 'needsYou' && await this.leadUnsticks(active)) continue;
       if (run.status !== 'running') return;
 
       // Work waiting for a verdict (a task whose review was cut short) is judged before anything new is started.
@@ -534,6 +538,26 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
     this.builderReply.delete(taskId);
   }
 
+  /**
+   * The crew is meant to keep going on its own, so a stuck task is put to the Lead first: try again with a different
+   * instruction, skip it, or hand it to the user. The Lead gets one call per task; if its answer is "ask", cannot be
+   * read, or the retry fails again, the question goes to the user as before. Returns true when the run can go on.
+   */
+  private async leadUnsticks(active: ActiveRun): Promise<boolean> {
+    const stuck = stuckTask(active.run);
+    if (!stuck || active.leadDecided.has(stuck.id)) return false;
+    active.leadDecided.add(stuck.id);
+    const lead = active.run.config.roles.find((role) => role.kind === 'lead');
+    if (!lead) return false;
+    const answer = await this.askJson(active, lead, stuckPrompt(active.run, stuck), 'stuck', parseStuckDecision);
+    if (active.cancelled) return true;
+    const at = this.now().toISOString();
+    const paid = addSpend(active.run, stuck.id, answer.costUsd, at);
+    const next = answer.value ? resolveStuck(paid, answer.value, lead.id, at) : null;
+    await this.commit(active, next ?? paid);
+    return next !== null;
+  }
+
   /** A designer's turn: Open Pencil is opened if needed, then the agent draws with its tools. */
   private async draw(active: ActiveRun, task: CrewTask, brief: string): Promise<CallResult> {
     const design = this.ports.design!;
@@ -552,7 +576,7 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
   }
 
   /** Asks a role for a reply that must parse; if it does not, asks once more with a stricter request. */
-  private async askJson<T>(active: ActiveRun, role: CrewRole, prompt: string, kind: 'plan' | 'review', parse: (text: string) => T | null): Promise<{ value: T | null; costUsd: number }> {
+  private async askJson<T>(active: ActiveRun, role: CrewRole, prompt: string, kind: 'plan' | 'review' | 'stuck', parse: (text: string) => T | null): Promise<{ value: T | null; costUsd: number }> {
     let costUsd = 0;
     const first = await this.call(active, role, prompt, { fresh: true });
     costUsd += first.costUsd ?? 0;
