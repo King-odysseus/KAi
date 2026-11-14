@@ -204,9 +204,20 @@ export class DesktopCrewRunner {
   }
 
   private async commit(active: ActiveRun, run: CrewRun): Promise<void> {
-    active.run = run;
-    await this.ports.save(run);
-    this.ports.notifyChanged(active.ownerWindowId, run);
+    const stamped = { ...run, liveConversations: this.liveIds(active) };
+    active.run = stamped;
+    await this.ports.save(stamped);
+    this.ports.notifyChanged(active.ownerWindowId, stamped);
+  }
+
+  private liveIds(active: ActiveRun): string[] {
+    return [active.conversationId, ...active.children];
+  }
+
+  /** Tells the screen which conversations are live now, without saving: a helper started or finished between commits. */
+  private announce(active: ActiveRun): void {
+    active.run = { ...active.run, liveConversations: this.liveIds(active) };
+    this.ports.notifyChanged(active.ownerWindowId, active.run);
   }
 
   private async drive(active: ActiveRun): Promise<void> {
@@ -350,6 +361,7 @@ export class DesktopCrewRunner {
           const conversation = await this.ports.createConversation(active.run.projectId, `Crew task: ${task.title}`);
           conversationId = conversation.id;
           active.children.add(conversationId);
+          this.announce(active);
           if (active.cancelled) return;
           const conventions = (await this.ports.conventions?.(active.run.projectId, `${active.run.goal} ${task.title}`).catch(() => '')) ?? '';
           const result = await this.call(active, role, taskBrief(active.run, task.id, conventions), { effortFrom: `${task.title}\n${task.description}`, fresh: true, cwd, conversationId });
@@ -373,7 +385,7 @@ export class DesktopCrewRunner {
         } catch (error) {
           outcomes.set(task.id, { taskId: task.id, status: 'failed', files: [], output: '', costUsd: 0, error: error instanceof Error ? error.message : String(error) });
         } finally {
-          if (conversationId !== active.conversationId) active.children.delete(conversationId);
+          if (conversationId !== active.conversationId) { active.children.delete(conversationId); this.announce(active); }
         }
       }));
       if (active.cancelled) return;

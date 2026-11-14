@@ -220,6 +220,8 @@ export const crewRunSchema = z
     ask: crewAskSchema.nullable().default(null),
     // The design as it was when the Lead planned, so the plan and the pages it names stay comparable.
     design: crewDesignSchema.nullable().default(null),
+    // The conversations the crew's agents are running in right now, so the screen can show what they are doing.
+    liveConversations: z.array(z.string().min(1)).max(60).optional(),
     spentUsd: z.number().min(0).default(0),
     startedAt: timestampSchema,
     updatedAt: timestampSchema,

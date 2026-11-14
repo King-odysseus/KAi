@@ -8,7 +8,7 @@ import {
   CLI_MODEL_SUGGESTIONS, CREW_ROLE_INFO, directProviderPreset, CREW_ROLE_KINDS, MAX_CREW_ROLES, MAX_SUB_AGENTS_PER_ROLE, buildReport, createDefaultCrewConfig, crewConfigSchema, roleAccess, studioBriefChangeDiff,
 } from '@kai/contracts';
 import { apiChoices, targetFromValue, targetValue } from './architect-settings';
-import type { RoleTarget } from '@kai/contracts';
+import type { PersistedEvent, RoleTarget } from '@kai/contracts';
 import type { AgentCapability, AgentId, AppSettings, AutonomyMode, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask, ProjectRecord } from '@kai/contracts';
 import { unwrap } from '../types';
 import { Pill, type PillTone } from './Pill';
@@ -375,12 +375,100 @@ function EmptyBoard(): ReactNode {
   );
 }
 
+const baseName = (path: string): string => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+
+/** One plain line for an agent event, or null for the ones that say nothing a person needs (most text, cost, snapshots). */
+function describeEvent(event: PersistedEvent): string | null {
+  switch (event.type) {
+    case 'tool.call': {
+      if (event.status === 'completed') return null;
+      const input = event.input && typeof event.input === 'object' ? event.input as Record<string, unknown> : {};
+      const hint = [input.file_path, input.path, input.pattern, input.command, input.url].find((value): value is string => typeof value === 'string' && value.length > 0);
+      const name = event.name.replace(/^mcp__[^_]+(?:_[^_]+)*__/, '');
+      if (event.status === 'failed') return `${name} did not work, trying another way`;
+      return hint ? `${name}: ${hint.length > 70 ? `${hint.slice(0, 67)}…` : hint}` : `Using ${name}`;
+    }
+    case 'file.edit.applied': return `Edited ${baseName(event.filePath)}`;
+    case 'file.change': return `${event.action === 'created' ? 'Created' : event.action === 'deleted' ? 'Deleted' : 'Edited'} ${baseName(event.path)}`;
+    case 'text.delta': return event.channel === 'assistant' ? 'Writing its reply' : null;
+    case 'agent.lifecycle': return event.status === 'starting' ? 'Starting the agent' : null;
+    default: return null;
+  }
+}
+
+function elapsed(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`;
+}
+
+/**
+ * Shows that the crew is alive: a moving bar, who is doing what, the agent's latest step, and how long since it last
+ * did anything. A long step with no output says so, instead of looking the same as a crew that has hung.
+ */
+function LiveActivity({ run }: { run: CrewRun }): ReactNode {
+  const [step, setStep] = useState('');
+  const [now, setNow] = useState(() => Date.now());
+  const lastAt = useRef<number | null>(null);
+  const live = run.liveConversations ?? [];
+  const liveKey = live.join('|');
+
+  useEffect(() => window.kaiDesktop.onAgentEvent(({ conversationId, event }) => {
+    if (!live.includes(conversationId)) return;
+    lastAt.current = Date.now();
+    const text = describeEvent(event);
+    if (text) setStep(text);
+  }), [liveKey]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const roleLabel = (id: string): string => run.config.roles.find((role) => role.id === id)?.label ?? id;
+  const titles = (statuses: CrewTask['status'][]): CrewTask[] => run.tasks.filter((task) => !task.proposed && statuses.includes(task.status));
+  const building = titles(['building']);
+  const reviewing = titles(['review']);
+  const lead = run.config.roles.find((role) => role.kind === 'lead')?.label ?? 'The Lead';
+  const headline = run.status === 'planning'
+    ? `${lead} is reading the project and planning the tasks`
+    : building.length > 0
+      ? `${building.map((task) => `${roleLabel(task.role)} is building "${task.title}"`).join(' · ')}`
+      : reviewing.length > 0
+        ? `Checking ${reviewing.map((task) => `"${task.title}"`).join(', ')}`
+        : `${lead} is choosing the next task`;
+  const quiet = now - (lastAt.current ?? Date.parse(run.updatedAt));
+  return (
+    <div className="crew-live" role="status" aria-live="polite">
+      <span className="crew-live-dot" aria-hidden="true" />
+      <div className="crew-live-body">
+        <strong>{headline}</strong>
+        <small>{step ? `Now: ${step}` : 'Waiting for the agent to start answering…'}</small>
+      </div>
+      <small className="crew-live-time">
+        {lastAt.current ? `Last activity ${elapsed(quiet)} ago` : `Working for ${elapsed(now - Date.parse(run.updatedAt))}`}
+        {quiet > 90_000 && <><br />Still working. Long steps can run for minutes without output.</>}
+      </small>
+      <span className="crew-live-bar" aria-hidden="true" />
+    </div>
+  );
+}
+
 function Board({ run }: { run: CrewRun }): ReactNode {
   const board = run.tasks.filter((task) => !task.proposed);
   const roleLabel = (id: string): string => run.config.roles.find((role) => role.id === id)?.label ?? id;
-  if (run.status === 'planning' && board.length === 0) return <div className="empty-list">The Lead is reading the project and writing the tasks…</div>;
+  const working = run.status === 'running' || run.status === 'planning';
+  if (run.status === 'planning' && board.length === 0) {
+    return (
+      <div className="crew-board-wrap">
+        <LiveActivity run={run} />
+      </div>
+    );
+  }
   return (
     <div className="crew-board-wrap">
+      {working && <LiveActivity run={run} />}
       <div className="crew-board" role="list">
         {COLUMNS.map((column) => {
           const tasks = board.filter((task) => column.statuses.includes(task.status));
