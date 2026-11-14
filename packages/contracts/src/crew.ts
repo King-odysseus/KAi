@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { apiConnectionSchema } from './architect';
 import { agentIdSchema, autonomyModeSchema, executionModeSchema, routeModeSchema, timestampSchema } from './primitives';
 
 /**
@@ -53,6 +54,8 @@ export const crewRoleSchema = z
     // CLI uses the subscription; API is KAI's own direct mode. The route is the proxy choice that goes with either.
     execution: executionModeSchema.default('cli'),
     route: routeModeSchema.default('direct'),
+    // The provider (DeepSeek, OpenAI, a local server...) when `execution` is `api`. Left out, Settings' direct API is used.
+    api: apiConnectionSchema.optional(),
     model: modelNameSchema.optional(),
     access: z.enum(['read', 'edit']),
     subAgents: crewSubAgentsSchema.default({ max: 0 }),

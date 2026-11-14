@@ -198,7 +198,9 @@ export class DesktopInterview {
     let topics = state.topics;
     const longAnswers = answers.filter((item) => item.answer.length > 600);
     if (longAnswers.length > 0) {
-      const analyzed = await this.summarizeLongAnswers(longAnswers);
+      // The summary only shortens later prompts. If the model call fails, the answer is still kept whole, so
+      // a failure here must never reject the answer the user just typed.
+      const analyzed: InterviewLongAnswerResult = await this.summarizeLongAnswers(longAnswers).catch(() => ({ summaries: [] }));
       let answerNumber = state.rounds.flatMap((round) => round.answers).filter((item) => item.answer).length;
       const summaries = new Map(analyzed.summaries.map((item) => [normalise(item.question), item]));
       const updatedAnswers = answers.map((item) => {

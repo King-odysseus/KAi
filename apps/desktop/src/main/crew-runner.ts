@@ -559,6 +559,7 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
       agent: role.agent,
       execution: role.execution,
       route: role.route,
+      ...(role.execution === 'api' && role.api ? { apiConnection: role.api } : {}),
       // A role that cannot edit runs in Plan, whatever the crew's autonomy says.
       autonomy: roleAccess(role) === 'edit' ? config.autonomy : 'plan',
       helpers: helperChoiceFor(subAgentsFor(config, role.id, 0)),

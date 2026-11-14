@@ -5,8 +5,10 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  CLI_MODEL_SUGGESTIONS, CREW_ROLE_INFO, CREW_ROLE_KINDS, MAX_CREW_ROLES, MAX_SUB_AGENTS_PER_ROLE, buildReport, createDefaultCrewConfig, crewConfigSchema, roleAccess, studioBriefChangeDiff,
+  CLI_MODEL_SUGGESTIONS, CREW_ROLE_INFO, directProviderPreset, CREW_ROLE_KINDS, MAX_CREW_ROLES, MAX_SUB_AGENTS_PER_ROLE, buildReport, createDefaultCrewConfig, crewConfigSchema, roleAccess, studioBriefChangeDiff,
 } from '@kai/contracts';
+import { apiChoices, targetFromValue, targetValue } from './architect-settings';
+import type { RoleTarget } from '@kai/contracts';
 import type { AgentCapability, AgentId, AppSettings, AutonomyMode, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask, ProjectRecord } from '@kai/contracts';
 import { unwrap } from '../types';
 import { Pill, type PillTone } from './Pill';
@@ -304,7 +306,7 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
             ))}
 
           {tab === 'crew' && (
-            <CrewTab config={config} readOnly={readOnly} capabilityOf={capabilityOf} agentCapabilities={agentCapabilities} onRole={updateRole} onAdd={addRole} onSaveDefault={() => void saveDefault()} onResetDefault={() => void resetDefault()}
+            <CrewTab directApi={settings.directApi} config={config} readOnly={readOnly} capabilityOf={capabilityOf} agentCapabilities={agentCapabilities} onRole={updateRole} onAdd={addRole} onSaveDefault={() => void saveDefault()} onResetDefault={() => void resetDefault()}
               onRemove={(id) => updateDraft((current) => ({ ...current, roles: current.roles.filter((role) => role.id !== id) }))}
               onLimits={(patch) => updateDraft((current) => ({ ...current, limits: { ...current.limits, ...patch } }))} />
           )}
@@ -467,7 +469,8 @@ function DesignTab({ run, design, onRead }: { run: CrewRun | null; design: CrewD
   );
 }
 
-function CrewTab({ config, readOnly, capabilityOf, agentCapabilities, onRole, onAdd, onSaveDefault, onResetDefault, onRemove, onLimits }: {
+function CrewTab({ directApi, config, readOnly, capabilityOf, agentCapabilities, onRole, onAdd, onSaveDefault, onResetDefault, onRemove, onLimits }: {
+  directApi: AppSettings['directApi'];
   config: CrewConfig;
   readOnly: boolean;
   capabilityOf: (agent: AgentId) => AgentCapability | undefined;
@@ -479,6 +482,17 @@ function CrewTab({ config, readOnly, capabilityOf, agentCapabilities, onRole, on
   onRemove: (id: string) => void;
   onLimits: (patch: Partial<CrewConfig['limits']>) => void;
 }): ReactNode {
+  // Which providers have a key saved. Read when the tab opens and when the window regains focus, so a key added in Settings shows up.
+  const [credentialIds, setCredentialIds] = useState<readonly string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const load = (): void => {
+      void window.kaiDesktop.credentialStatus().then(unwrap).then((status) => { if (alive) setCredentialIds(status.ids); }).catch(() => undefined);
+    };
+    load();
+    window.addEventListener('focus', load);
+    return () => { alive = false; window.removeEventListener('focus', load); };
+  }, []);
   return (
     <section className="ops-panel">
       <p className="tasks-tab-help">{readOnly ? 'These are the roles this crew started with. Start a new crew to change them.' : 'Every role picks its own agent and where it runs. Reviewers and the Lead can only read; builders can change files.'}</p>
@@ -490,6 +504,10 @@ function CrewTab({ config, readOnly, capabilityOf, agentCapabilities, onRole, on
           const does = role.kind === 'custom' ? 'A role you defined. Choose whether it can change files.' : CREW_ROLE_INFO[role.kind].does;
           const proxyOk = Boolean(capability?.supportsRoutes.includes('proxy'));
           const choice = runsOn(role);
+          // A role set to API but never given a provider uses the one chosen in Settings.
+          const apiTarget: RoleTarget = { execution: 'api', api: role.api ?? { provider: directApi.provider } };
+          const apiOptions = apiChoices(credentialIds, [apiTarget]);
+          const apiTargetValue = targetValue(apiTarget);
           return (
             <article key={role.id} className={`crew-role ${role.kind === 'lead' ? 'lead' : ''}`}>
               <header>
@@ -503,22 +521,36 @@ function CrewTab({ config, readOnly, capabilityOf, agentCapabilities, onRole, on
               <p className="crew-role-does">{does}</p>
               {role.kind === 'designer' && <p className="crew-role-does">Draws with the design provider chosen under Settings, Design tools, so the agent and Runs on below are not used for drawing.</p>}
               <div className="crew-role-fields">
-                <label className="workflow-field"><span>Agent</span>
-                  <Select aria-label={`${role.label} agent`} disabled={readOnly} value={role.agent} onChange={(event) => onRole(role.id, { agent: event.target.value as AgentId, route: 'direct', model: undefined })}>
-                    {agentCapabilities.map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.displayName}{item.available ? '' : ` (${item.unavailableReason ?? 'not set up'})`}</option>)}
-                  </Select>
-                </label>
+                {choice === 'api' ? (
+                  <label className="workflow-field"><span>Provider</span>
+                    <Select aria-label={`${role.label} provider`} disabled={readOnly} value={apiTargetValue} onChange={(event) => {
+                      const next = targetFromValue(event.target.value, apiTarget);
+                      if (next?.api) onRole(role.id, { api: next.api, route: 'direct', model: undefined });
+                    }}>
+                      {apiOptions.map((item) => <option key={`${item.provider}:${item.credentialId}`} value={`api:${item.provider}:${item.credentialId}`}>{item.label}{item.local ? ' (on this computer)' : item.keySaved ? '' : ' (no key saved)'}</option>)}
+                    </Select>
+                  </label>
+                ) : (
+                  <label className="workflow-field"><span>Agent</span>
+                    <Select aria-label={`${role.label} agent`} disabled={readOnly} value={role.agent} onChange={(event) => onRole(role.id, { agent: event.target.value as AgentId, route: 'direct', model: undefined })}>
+                      {agentCapabilities.map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.displayName}{item.available ? '' : ` (${item.unavailableReason ?? 'not set up'})`}</option>)}
+                    </Select>
+                  </label>
+                )}
                 <label className="workflow-field"><span>Runs on</span>
                   <Select aria-label={`${role.label} runs on`} disabled={readOnly} value={choice} onChange={(event) => {
                     const next = event.target.value as RunsOn;
-                    onRole(role.id, { execution: next === 'api' ? 'api' : 'cli', route: next === 'cli-proxy' ? 'proxy' : 'direct' });
+                    onRole(role.id, {
+                      execution: next === 'api' ? 'api' : 'cli', route: next === 'cli-proxy' ? 'proxy' : 'direct', model: undefined,
+                      ...(next === 'api' && !role.api ? { api: apiTarget.api } : {}),
+                    });
                   }}>
                     <option value="cli">Subscription (CLI)</option>
                     <option value="api">API (direct)</option>
                     {(proxyOk || choice === 'cli-proxy') && <option value="cli-proxy">Proxy (CLI)</option>}
                   </Select>
                 </label>
-                <ModelField labelClassName="workflow-field crew-field-wide" label="Model" disabled={readOnly} value={role.model ?? ''} models={CLI_MODEL_SUGGESTIONS[role.agent]} emptyLabel="Default for this agent" onChange={(value) => onRole(role.id, { model: value.trim() || undefined })} />
+                <ModelField labelClassName="workflow-field crew-field-wide" label="Model" disabled={readOnly} value={role.model ?? ''} models={choice === 'api' ? directProviderPreset(apiTarget.api!.provider).models : CLI_MODEL_SUGGESTIONS[role.agent]} emptyLabel={choice === 'api' ? 'Default for this provider' : 'Default for this agent'} onChange={(value) => onRole(role.id, { model: value.trim() || undefined })} />
               </div>
               <div className="crew-subagents">
                 <span><strong>Sub-agents</strong><small>{role.subAgents.max === 0 ? 'Works alone' : `Up to ${role.subAgents.max} helpers on a task`}</small></span>
