@@ -19,6 +19,7 @@ import { usePersistentChoice } from '../persistent-choice';
 import { UiTextInput } from './UiTextInput';
 import { PageHeader } from './ui/PageHeader';
 import { crewLimitPolicy } from '../cost-visibility';
+import { collapseFeed } from '../crew-feed';
 
 type Tab = 'board' | 'crew' | 'design' | 'cost' | 'report';
 const TABS: ReadonlyArray<{ id: Tab; label: string; icon: typeof Kanban }> = [
@@ -496,19 +497,47 @@ function Board({ run }: { run: CrewRun }): ReactNode {
           );
         })}
       </div>
-      <aside className="crew-feed" aria-label="Live feed">
-        <h3><Activity size={14} /><span>Live feed</span></h3>
-        {run.feed.length === 0 && <small className="crew-empty">Nothing has happened yet.</small>}
-        <ol>
-          {[...run.feed].reverse().slice(0, 40).map((entry) => (
-            <li key={entry.id} className={`crew-feed-${entry.kind}`}>
-              <span>{entry.text}</span>
-              <small>{entry.who} · {new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
-            </li>
-          ))}
-        </ol>
-      </aside>
+      <LiveFeed run={run} />
     </div>
+  );
+}
+
+const FEED_FIRST_PAGE = 15;
+const FEED_PAGE = 25;
+
+/**
+ * The run's feed, kept short on screen: repeats fold into one line with a count, the newest lines show first and the
+ * rest wait behind "Show earlier", and whatever is waiting on the user stays pinned above the list.
+ */
+function LiveFeed({ run }: { run: CrewRun }): ReactNode {
+  const [shown, setShown] = useState(FEED_FIRST_PAGE);
+  const groups = useMemo(() => collapseFeed(run.feed), [run.feed]);
+  const visible = groups.slice(0, shown);
+  const earlier = groups.length - visible.length;
+  return (
+    <aside className="crew-feed" aria-label="Live feed">
+      <h3><Activity size={14} /><span>Live feed</span></h3>
+      {run.status === 'needsYou' && run.ask && (
+        <p className="crew-feed-pinned" role="status"><strong>Needs you</strong> {run.ask.message}</p>
+      )}
+      {run.feed.length === 0 && <small className="crew-empty">Nothing has happened yet.</small>}
+      <ol>
+        {visible.map(({ entry, count }) => (
+          <li key={entry.id} className={`crew-feed-${entry.kind}`}>
+            <span>{entry.text}{count > 1 && <em className="crew-feed-count"> ×{count}</em>}</span>
+            <small>{entry.who} · {new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
+          </li>
+        ))}
+      </ol>
+      {earlier > 0 && (
+        <UiButton type="button" className="composer-text-button" onClick={() => setShown((current) => current + FEED_PAGE)}>
+          Show {Math.min(earlier, FEED_PAGE)} earlier{earlier > FEED_PAGE ? ` (${earlier} in all)` : ''}
+        </UiButton>
+      )}
+      {shown > FEED_FIRST_PAGE && (
+        <UiButton type="button" className="composer-text-button" onClick={() => setShown(FEED_FIRST_PAGE)}>Show less</UiButton>
+      )}
+    </aside>
   );
 }
 

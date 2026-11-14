@@ -3057,6 +3057,10 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .crew-feed ol { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .crew-feed li { display: flex; flex-direction: column; gap: 2px; padding-left: 8px; border-left: 2px solid var(--border); font-size: 12px; }
 .crew-feed li small { color: var(--text-dim); }
+/* A long run never makes the page taller than the window: the list scrolls inside the panel. */
+.crew-feed ol { max-height: 70vh; overflow-y: auto; }
+.crew-feed-count { color: var(--text-dim); font-style: normal; font-weight: 600; }
+.crew-feed-pinned { margin: 0; padding: 6px 8px; border-left: 2px solid var(--red); border-radius: 6px; background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--text); font-size: 12px; }
 .crew-feed-accepted, .crew-feed-done { border-left-color: var(--mint) !important; }
 .crew-feed-sentBack, .crew-feed-limit { border-left-color: var(--amber) !important; }
 .crew-feed-needsYou { border-left-color: var(--red) !important; }
