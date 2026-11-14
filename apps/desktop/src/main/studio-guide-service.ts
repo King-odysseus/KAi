@@ -12,6 +12,7 @@ import {
   type StudioGuideNarrative,
   type StudioGuideView,
 } from '@kai/contracts';
+import { lenient } from '@kai/contracts';
 import { parseJsonResponse } from './learning-tutor';
 import type { StructuredRequester } from './prompt-guide';
 import type { SpecStore } from './spec-store';
@@ -171,7 +172,7 @@ function count(board: StudioBoard, status: StudioBoard['cards'][number]['status'
 
 /** Reads the model's reply. Anything else is an error rather than a guess, the way the interview reads its own. */
 export function parseGuideNarrative(content: string): StudioGuideNarrative {
-  const parsed = studioGuideNarrativeSchema.safeParse(parseJsonResponse(content, 'Senior Dev'));
+  const parsed = lenient(studioGuideNarrativeSchema).safeParse(parseJsonResponse(content, 'Senior Dev'));
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     throw new Error(`The Senior Dev reply did not match the expected shape (${issue ? `${issue.path.join('.') || 'reply'}: ${issue.message}` : 'unknown error'}).`);

@@ -1,3 +1,4 @@
+import { lenient } from '@kai/contracts';
 import {
   AUTO_SPLIT_SENTINEL,
   architectSplitActive,
@@ -198,7 +199,7 @@ export function parseAutoSplitDirective(output: string): AutoSplitDirective | nu
   }
   if (end === -1) return null;
   try {
-    const parsed = autoSplitDirectiveSchema.safeParse(JSON.parse(rest.slice(start, end + 1)));
+    const parsed = lenient(autoSplitDirectiveSchema).safeParse(JSON.parse(rest.slice(start, end + 1)));
     return parsed.success ? parsed.data : null;
   } catch {
     return null;

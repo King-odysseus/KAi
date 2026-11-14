@@ -27,6 +27,7 @@ import {
   type TeachingDraft,
   type TeachingDraftGenerateInput,
 } from '@kai/contracts';
+import { lenient, lenientIfZod } from '@kai/contracts';
 import { teachingDraftJsonSchema, teachingDraftPrompt } from './teaching-library';
 import { loadLearningStudioContext } from './learning-studio-context';
 
@@ -334,7 +335,7 @@ export class DesktopLearningTutor {
       KAI_GUIDE_SCHEMA,
       (content) => {
         const parsed = parseJsonResponse(content, 'KAI Guide');
-        const result = setupGuideAnswerSchema.safeParse(parsed);
+        const result = lenient(setupGuideAnswerSchema).safeParse(parsed);
         if (!result.success) throw new Error(`KAI Guide response was incomplete: ${result.error.issues.map((issue) => issue.message).join('; ')}`);
         return result.data;
       },
@@ -892,7 +893,7 @@ export class DesktopLearningTutor {
 
 export function parseLearningTutorContent(content: string): LearningTutorResponse {
   const parsed = parseJsonResponse(content, 'tutor');
-  const repaired = learningTutorResponseSchema.safeParse(normaliseTutorResponse(parsed));
+  const repaired = lenient(learningTutorResponseSchema).safeParse(normaliseTutorResponse(parsed));
   if (repaired.success) return repaired.data;
   const issues = repaired.error.issues.slice(0, 8)
     .map((issue) => `${issue.path.join('.') || 'tutor'}: ${issue.message}`)
@@ -980,7 +981,8 @@ export class ReplyShapeError extends Error {
 }
 
 function parseStructuredResponse<T>(schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: { issues: Array<{ path: Array<string | number>; message: string }> } } }, content: string, label: string): T {
-  const parsed = schema.safeParse(parseJsonResponse(content, label));
+  // A model's reply may carry keys nobody asked for; they are ignored rather than failing an otherwise good answer.
+  const parsed = lenientIfZod(schema).safeParse(parseJsonResponse(content, label));
   if (parsed.success) return parsed.data;
   const issues = parsed.error.issues.slice(0, 8)
     .map((issue) => `${issue.path.join('.') || label}: ${issue.message}`)

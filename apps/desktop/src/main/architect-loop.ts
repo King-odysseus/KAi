@@ -1,3 +1,4 @@
+import { lenient } from '@kai/contracts';
 import {
   ARCHITECT_BRIEF_SENTINEL,
   isSafeCheckCommand,
@@ -79,14 +80,14 @@ export function extractJsonAfter(output: string, sentinel: string): unknown {
 export function parseBrief(output: string): ArchitectBrief | null {
   const raw = extractJsonAfter(output, ARCHITECT_BRIEF_SENTINEL);
   if (!raw) return null;
-  const parsed = architectBriefSchema.safeParse(raw);
+  const parsed = lenient(architectBriefSchema).safeParse(raw);
   return parsed.success ? parsed.data : null;
 }
 
 export function parseVerdict(output: string): ArchitectVerdict | null {
   const raw = extractJsonAfter(output, ARCHITECT_VERDICT_SENTINEL);
   if (!raw) return null;
-  const parsed = architectVerdictSchema.safeParse(raw);
+  const parsed = lenient(architectVerdictSchema).safeParse(raw);
   return parsed.success ? parsed.data : null;
 }
 

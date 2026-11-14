@@ -1,3 +1,4 @@
+import { lenient } from '@kai/contracts';
 import {
   ARTIFACT_KINDS,
   CARD_KINDS,
@@ -1554,7 +1555,7 @@ export function parsePlanChatReply(raw: string): StudioPlanChatResult {
           return (ARTIFACT_KINDS as readonly string[]).includes(name) ? [name] : artifactAliases[name] ?? [];
         }))];
       }
-      const action = studioPlanActionSchema.safeParse(item);
+      const action = lenient(studioPlanActionSchema).safeParse(item);
       if (action.success) actions.push(action.data);
       else dropped += 1;
     }
@@ -1919,7 +1920,7 @@ export function parseBoardDraft(content: string) {
   // Models wrap the cards with a title, a summary or a bare array; only the cards matter, so ignore the rest
   // instead of failing the whole board on a key nobody asked for.
   const cards = Array.isArray(json) ? json : json && typeof json === 'object' ? (json as { cards?: unknown }).cards : undefined;
-  const parsed = studioBoardDraftSchema.safeParse({ cards });
+  const parsed = lenient(studioBoardDraftSchema).safeParse({ cards });
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     throw new ReplyShapeError(`The Project Studio board reply did not match the expected shape (${issue ? `${issue.path.join('.') || 'reply'}: ${issue.message}` : 'unknown error'}).`);

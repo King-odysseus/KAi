@@ -1,3 +1,4 @@
+import { lenient } from '@kai/contracts';
 import {
   TEAM_ROLE_INFO,
   isBuiltInRole,
@@ -65,7 +66,7 @@ export function parseTeamPlan(output: string, team?: TeamLike): ParsedTeamPlan {
   } catch (error) {
     return { ok: false, error: `the JSON was malformed (${error instanceof Error ? error.message : String(error)})` };
   }
-  const parsed = teamPlanSchema.safeParse(value);
+  const parsed = lenient(teamPlanSchema).safeParse(value);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     return { ok: false, error: `${issue.path.join('.') || 'the plan'}: ${issue.message}` };

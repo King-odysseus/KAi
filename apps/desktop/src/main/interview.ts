@@ -39,6 +39,7 @@ import {
   type StudioReadiness,
   type StudioProjectSummary,
 } from '@kai/contracts';
+import { lenient } from '@kai/contracts';
 import { loadProjectContext, parseJsonResponse } from './learning-tutor';
 import type { StructuredRequester } from './prompt-guide';
 
@@ -672,7 +673,7 @@ function heldQuestion(item: unknown): unknown {
 /** Reads the model's reply, dropping duplicate questions and options. */
 export function parseInterviewReply(content: string): { goal: string; assumptions: InterviewState['assumptions']; topics: InterviewState['topics']; questions: Array<{ question: string; options: string[] }> } {
   const raw = withinShape(parseJsonResponse(content, 'Project Studio'));
-  const parsed = interviewReplySchema.safeParse(raw);
+  const parsed = lenient(interviewReplySchema).safeParse(raw);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     throw new Error(`The Project Studio reply did not match the expected shape (${issue ? `${issue.path.join('.') || 'reply'}: ${issue.message}` : 'unknown error'}).`);
@@ -686,7 +687,7 @@ export function parseInterviewReply(content: string): { goal: string; assumption
 }
 
 export function parseInterviewIdeaRead(content: string): InterviewIdeaReadResult {
-  const parsed = interviewIdeaReadResultSchema.safeParse(parseJsonResponse(content, 'Project Studio idea read'));
+  const parsed = lenient(interviewIdeaReadResultSchema).safeParse(parseJsonResponse(content, 'Project Studio idea read'));
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     throw new Error(`The Project Studio idea read did not match the expected shape (${issue ? `${issue.path.join('.') || 'result'}: ${issue.message}` : 'unknown error'}).`);
@@ -695,7 +696,7 @@ export function parseInterviewIdeaRead(content: string): InterviewIdeaReadResult
 }
 
 export function parseInterviewLongAnswer(content: string): InterviewLongAnswerResult {
-  const parsed = interviewLongAnswerResultSchema.safeParse(parseJsonResponse(content, 'Project Studio long answer summary'));
+  const parsed = lenient(interviewLongAnswerResultSchema).safeParse(parseJsonResponse(content, 'Project Studio long answer summary'));
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     throw new Error(`The long answer summary did not match the expected shape (${issue ? `${issue.path.join('.') || 'result'}: ${issue.message}` : 'unknown error'}).`);

@@ -1,3 +1,4 @@
+import { lenient } from '@kai/contracts';
 import {
   TEAM_ROLE_INFO,
   directProviderPreset,
@@ -179,7 +180,7 @@ export function buildPromptRefinementPrompt(input: PromptRefineInput): { system:
 
 export function parsePromptRefinementContent(content: string): PromptRefineResult {
   const raw = parseJsonResponse(content, 'Prompt refinement');
-  const parsed = promptRefineResultSchema.safeParse(raw);
+  const parsed = lenient(promptRefineResultSchema).safeParse(raw);
   if (parsed.success) return parsed.data;
   const issue = parsed.error.issues[0];
   throw new ReplyShapeError(`The prompt refinement reply did not match the expected shape (${issue ? `${issue.path.join('.') || 'reply'}: ${issue.message}` : 'unknown error'}).`);
@@ -219,7 +220,7 @@ export function parsePromptGuideContent(content: string, team: Pick<AgentTeam, '
   const raw = parseJsonResponse(content, 'Prompt Guide') as { prompts?: Array<{ role?: unknown }> } & Record<string, unknown>;
   const known = (role: unknown): boolean => typeof role === 'string' && ((isBuiltInRole(role) && role !== 'orchestrator') || (team.custom ?? []).some((item) => item.id === role));
   const prompts = Array.isArray(raw.prompts) ? raw.prompts.filter((item) => known(item?.role)).slice(0, 10) : [];
-  const parsed = promptGuideResultSchema.safeParse({
+  const parsed = lenient(promptGuideResultSchema).safeParse({
     ...raw,
     assumptions: Array.isArray(raw.assumptions) ? raw.assumptions.slice(0, 8) : [],
     questions: Array.isArray(raw.questions) ? raw.questions.slice(0, 5) : [],

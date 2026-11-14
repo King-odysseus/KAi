@@ -106,7 +106,27 @@ export const interviewTopicSchema = z.object({
   source: z.string().trim().min(1).max(120),
 }).strict();
 export const interviewTopicKeySchema = z.enum(Object.keys(INTERVIEW_TOPICS) as [InterviewTopic, ...InterviewTopic[]]);
-export const interviewTopicsSchema = z.object({
+/**
+ * Keeps the topics the interview knows, each in the shape it expects, and drops the rest. A model asked for nine
+ * named topics will sometimes add its own ("technology", "accounts") or leave a source out; one such entry used to
+ * refuse the whole reply, so the person saw an error and lost the round over a field that does not matter.
+ */
+function cleanTopics(value: unknown): unknown {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== 'object' || Array.isArray(value)) return {};
+  const input = value as Record<string, unknown>;
+  const cleaned: Record<string, { status: string; source: string }> = {};
+  for (const key of Object.keys(INTERVIEW_TOPICS)) {
+    const entry = input[key];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const { status, source } = entry as { status?: unknown; source?: unknown };
+    if (status !== 'decided' && status !== 'assumed' && status !== 'open') continue;
+    const text = typeof source === 'string' ? source.trim().slice(0, 120) : '';
+    cleaned[key] = { status, source: text || 'stated in the idea' };
+  }
+  return cleaned;
+}
+export const interviewTopicsSchema = z.preprocess(cleanTopics, z.object({
   users: interviewTopicSchema.optional(),
   data: interviewTopicSchema.optional(),
   stack: interviewTopicSchema.optional(),
@@ -116,7 +136,7 @@ export const interviewTopicsSchema = z.object({
   payments: interviewTopicSchema.optional(),
   design: interviewTopicSchema.optional(),
   acceptance: interviewTopicSchema.optional(),
-}).strict().default({});
+}).strict());
 export type InterviewTopics = Partial<Record<InterviewTopic, z.infer<typeof interviewTopicSchema>>>;
 export const interviewIdeaReadResultSchema = z.object({
   summary: z.string().trim().min(1).max(1_200),

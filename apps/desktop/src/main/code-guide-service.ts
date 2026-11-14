@@ -12,6 +12,7 @@ import {
   type ProjectFileEntry,
   type StudioBoard,
 } from '@kai/contracts';
+import { lenient } from '@kai/contracts';
 import { parseJsonResponse } from './learning-tutor';
 import type { StructuredRequester } from './prompt-guide';
 import type { SpecStore } from './spec-store';
@@ -212,7 +213,7 @@ function weakestConcept(learn: LearningProgress | null): string | null {
 
 /** Reads the model's reply. Anything else is an error rather than a guess, the way the Studio guide reads its own. */
 export function parseCodeGuideNarrative(content: string): CodeGuideNarrative {
-  const parsed = codeGuideNarrativeSchema.safeParse(parseJsonResponse(content, 'the Code guide'));
+  const parsed = lenient(codeGuideNarrativeSchema).safeParse(parseJsonResponse(content, 'the Code guide'));
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     throw new Error(`The Code guide reply did not match the expected shape (${issue ? `${issue.path.join('.') || 'reply'}: ${issue.message}` : 'unknown error'}).`);

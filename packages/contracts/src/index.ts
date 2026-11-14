@@ -24,6 +24,7 @@ export * from './files';
 export * from './git';
 export * from './host';
 export * from './interview';
+export * from './lenient';
 export * from './ipc';
 export * from './learning';
 export * from './migrations';
