@@ -153,6 +153,77 @@ describe('idea read before the interview', () => {
   });
 });
 
+describe('resuming an interrupted interview', () => {
+  const REPLY = JSON.stringify({ goal: 'Build a booking app.', assumptions: [], questions: [{ question: 'Who books?', options: [] }] });
+
+  /** A requester whose interview calls fail while `broken.on` is set, so a recovery can be tested. */
+  function flaky(): { requester: InterviewPorts['requester']; broken: { on: boolean } } {
+    const broken = { on: true };
+    const working = requesterOf([REPLY, REPLY]);
+    return {
+      broken,
+      requester: {
+        structuredRequest: (...args) => (broken.on ? Promise.reject(new Error('The model timed out.')) : working.structuredRequest(...args)),
+      },
+    };
+  }
+
+  it('keeps the idea when the first questions fail, and resumes from it', async () => {
+    const { requester, broken } = flaky();
+    const store = memoryStore();
+    const interview = new DesktopInterview(ports({ requester, store }));
+    const started = await interview.start({ projectId: 'p1', idea: 'A booking site for a barber shop.' });
+    expect(started.pending).toBe('start');
+    expect(started.pendingError).toContain('timed out');
+    expect(store.current?.idea).toBe('A booking site for a barber shop.');
+
+    broken.on = false;
+    const resumed = await interview.resume({ projectId: 'p1' });
+    expect(resumed.pending).toBeNull();
+    expect(resumed.pendingError).toBeNull();
+    expect(resumed.rounds[0]?.questions).toEqual(['Who books?']);
+  });
+
+  it('keeps the answers when the next questions fail, and resumes without asking for them again', async () => {
+    const { requester, broken } = flaky();
+    broken.on = false;
+    const store = memoryStore();
+    const interview = new DesktopInterview(ports({ requester, store }));
+    await interview.start({ projectId: 'p1', idea: 'A booking site for a barber shop.' });
+
+    broken.on = true;
+    const answered = await interview.answer({ projectId: 'p1', answers: [{ question: 'Who books?', answer: 'Customers.' }] });
+    expect(answered.pending).toBe('next');
+    expect(store.current?.rounds[0]?.answers[0]?.answer).toBe('Customers.');
+
+    broken.on = false;
+    const resumed = await interview.resume({ projectId: 'p1' });
+    expect(resumed.pending).toBeNull();
+    expect(resumed.rounds[0]?.answers[0]?.answer).toBe('Customers.');
+  });
+
+  it('seeds the topic map from the idea read', async () => {
+    const read = JSON.stringify({ summary: 'A booking site.', stated: ['users'], gaps: ['stack'] });
+    const interview = new DesktopInterview(ports({}, [REPLY], read));
+    const started = await interview.start({ projectId: 'p1', idea: 'A booking site for a barber shop.' });
+    expect(started.topics.users?.status).toBe('decided');
+  });
+
+  it('keeps answers typed for the open round', async () => {
+    const store = memoryStore(state({ rounds: [{ questions: ['Who books?', 'How do they pay?'], options: [], answers: [] }] }));
+    const interview = new DesktopInterview(ports({ store }));
+    const saved = await interview.saveDraft({ projectId: 'p1', answers: ['Customers.', ''] });
+    expect(saved.draftAnswers).toEqual(['Customers.', '']);
+    expect(store.current?.draftAnswers[0]).toBe('Customers.');
+  });
+
+  it('loads an interview saved before pending steps existed', () => {
+    const old = state();
+    expect(old.pending).toBeNull();
+    expect(old.draftAnswers).toEqual([]);
+  });
+});
+
 describe('long interview answers', () => {
   it('keeps the full answer, records its summary and topics, and sends only the summary in later prompts', async () => {
     const longAnswer = 'A detailed pasted plan covering users, workflows, design, storage and a chosen stack. '.repeat(12).trim();

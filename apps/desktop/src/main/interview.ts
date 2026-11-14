@@ -33,6 +33,7 @@ import {
   type InterviewStartInput,
   type InterviewState,
   type InterviewTopicAskInput,
+  type InterviewDraftInput,
   type InterviewIdeaReadResult,
   type InterviewLongAnswerResult,
   type StudioProjectArchiveInput,
@@ -155,22 +156,20 @@ export class DesktopInterview {
   /** Starts an interview, or replaces a finished one. A half-answered interview has to be reset first. */
   async start(input: InterviewStartInput): Promise<InterviewState> {
     const existing = await this.ports.store.read(input.projectId);
-    if (existing && existing.status === 'asking') {
+    // An interview that never got its first questions has nothing worth keeping, so a new idea replaces it.
+    if (existing && existing.status === 'asking' && existing.pending !== 'start') {
       throw new Error('An interview is already in progress for this project. Finish it or start over.');
     }
     const readiness = await this.readiness();
     if (!readiness.ready) throw new Error(readiness.reason ?? 'The Project Studio is not ready.');
-    const read = await this.readIdea(input.idea);
-    const topics: InterviewState['topics'] = {};
-    for (const topic of read.stated) topics[topic] = { status: 'decided', source: 'idea' };
-    for (const topic of read.gaps) if (!topics[topic]) topics[topic] = { status: 'open', source: 'not stated in idea' };
-    const state = await this.ask({
+    // Saved before the model is asked, so a failed or interrupted call leaves the idea behind instead of losing it.
+    const saved = await this.persist({
       projectId: input.projectId,
       linkedProjectId: input.linkedProjectId ?? null,
       idea: input.idea,
-      ideaSummary: read.summary,
-      ideaStated: read.stated,
-      ideaGaps: read.gaps,
+      ideaSummary: '',
+      ideaStated: [],
+      ideaGaps: [],
       goal: '',
       assumptions: [],
       assumptionDecisions: [],
@@ -178,11 +177,56 @@ export class DesktopInterview {
       rounds: [],
       extraQuestions: 0,
       status: 'asking',
+      pending: 'start',
+      pendingError: null,
+      draftAnswers: [],
       briefPath: null,
       archivedAt: null,
       updatedAt: this.ports.now(),
     });
-    return this.persist(state);
+    return this.begin(saved);
+  }
+
+  /**
+   * Retries the step a failed or interrupted call left pending. What the person already typed is in the saved
+   * state, so only the model call runs again.
+   */
+  async resume(input: InterviewProjectInput): Promise<InterviewState> {
+    const state = await this.requireAsking(input.projectId);
+    if (!state.pending) return state;
+    return state.pending === 'start' ? this.begin(state) : this.advance(state);
+  }
+
+  /** Keeps answers typed for the open round, so leaving the screen or closing the app does not lose them. */
+  async saveDraft(input: InterviewDraftInput): Promise<InterviewState> {
+    const state = await this.ports.store.read(input.projectId);
+    if (!state) throw new Error('No interview is in progress for this project.');
+    if (state.status !== 'asking') return state;
+    return this.persist({ ...state, draftAnswers: input.answers });
+  }
+
+  /** Reads the idea, then asks the first questions. A failure keeps the saved idea and records why. */
+  private async begin(state: InterviewState): Promise<InterviewState> {
+    try {
+      const read = await this.readIdea(state.idea);
+      const topics: InterviewState['topics'] = {};
+      for (const topic of read.stated) topics[topic] = { status: 'decided', source: 'idea' };
+      for (const topic of read.gaps) if (!topics[topic]) topics[topic] = { status: 'open', source: 'not stated in idea' };
+      const asked = await this.ask({ ...state, ideaSummary: read.summary, ideaStated: read.stated, ideaGaps: read.gaps, topics });
+      return this.persist({ ...asked, pending: null, pendingError: null, draftAnswers: [], updatedAt: this.ports.now() });
+    } catch (caught) {
+      return this.persist({ ...state, pendingError: failureText(caught), updatedAt: this.ports.now() });
+    }
+  }
+
+  /** Asks the model for the next round on a state that is already saved. A failure keeps every answer and says why. */
+  private async advance(state: InterviewState): Promise<InterviewState> {
+    try {
+      const asked = await this.ask(state);
+      return this.persist({ ...asked, pending: null, pendingError: null, draftAnswers: [], updatedAt: this.ports.now() });
+    } catch (caught) {
+      return this.persist({ ...state, pendingError: failureText(caught), updatedAt: this.ports.now() });
+    }
   }
 
   /**
@@ -214,9 +258,11 @@ export class DesktopInterview {
     }
     // The round budget is spent: ask the user to review before writing the brief.
     if (rounds.flatMap((round) => round.questions).length >= interviewQuestionBudget(state)) {
-      return this.persist({ ...state, rounds, topics, status: 'reviewing', updatedAt: this.ports.now() });
+      return this.persist({ ...state, rounds, topics, status: 'reviewing', pending: null, pendingError: null, draftAnswers: [], updatedAt: this.ports.now() });
     }
-    return this.persist(await this.ask({ ...state, rounds, topics }));
+    // The answers are written down before the model is asked for the next round, so a failed call loses nothing.
+    const saved = await this.persist({ ...state, rounds, topics, pending: 'next', pendingError: null, draftAnswers: [], updatedAt: this.ports.now() });
+    return this.advance(saved);
   }
 
   /**
@@ -243,7 +289,8 @@ export class DesktopInterview {
     // the round's other answers are carried over rather than blanked by the one being corrected.
     const corrected = round.answers.map((item) => (normalise(item.question) === wanted ? { ...item, answer: input.answer.trim() } : item));
     const rounds = [...state.rounds.slice(0, at), { ...round, answers: mergeAnswers(round, corrected) }];
-    return this.persist(await this.ask({ ...state, rounds }));
+    const saved = await this.persist({ ...state, rounds, pending: 'next', pendingError: null, draftAnswers: [], updatedAt: this.ports.now() });
+    return this.advance(saved);
   }
 
   /** Five more questions, for someone who wants to be walked through. Twenty is the ceiling, so it never drags on. */
@@ -258,7 +305,7 @@ export class DesktopInterview {
   /** Writes the brief on demand, for a user who would rather stop answering now. */
   async finish(input: InterviewProjectInput): Promise<InterviewState> {
     const state = await this.requireAsking(input.projectId);
-    return this.persist({ ...state, status: 'reviewing', updatedAt: this.ports.now() });
+    return this.persist({ ...state, status: 'reviewing', pending: null, pendingError: null, draftAnswers: [], updatedAt: this.ports.now() });
   }
 
   /** Writes the brief only after the user confirms the review screen. */
@@ -363,7 +410,7 @@ export class DesktopInterview {
       const chunk = rest.slice(index, index + STUDIO_QUESTIONS_PER_ROUND);
       rounds.push({ questions: chunk.map((item) => item.question), options: chunk.map((item) => item.options), answers: [] });
     }
-    return this.persist({ ...state, status: 'asking', rounds: [...previous, ...rounds], updatedAt: this.ports.now() });
+    return this.persist({ ...state, status: 'asking', rounds: [...previous, ...rounds], pending: null, pendingError: null, updatedAt: this.ports.now() });
   }
 
   async setArchived(input: StudioProjectArchiveInput): Promise<StudioProjectSummary> {
@@ -563,6 +610,12 @@ function topicQuestion(topic: keyof typeof INTERVIEW_TOPICS): { question: string
     acceptance: 'How will you know the first version is working well?',
   };
   return { question: questions[topic], options: ['I will decide', 'Not sure, you decide'] };
+}
+
+/** The reason a model call failed, short enough to show in a notice. */
+function failureText(caught: unknown): string {
+  const text = caught instanceof Error ? caught.message : String(caught);
+  return text.trim().slice(0, 600) || 'The model did not reply.';
 }
 
 function summaryOf(state: InterviewState): StudioProjectSummary {

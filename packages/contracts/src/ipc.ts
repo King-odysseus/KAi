@@ -9,6 +9,8 @@ import {
   interviewAssumptionInputSchema,
   interviewTopicAskInputSchema,
   interviewProjectInputSchema,
+  interviewDraftInputSchema,
+  type InterviewDraftInput,
   interviewStartInputSchema,
   studioProjectArchiveInputSchema,
   studioProjectFolderInputSchema,
@@ -602,6 +604,8 @@ export const ipcChannels = [
   'studio:interview-reopen',
   'studio:interview-reset',
   'studio:interview-extend',
+  'studio:interview-resume',
+  'studio:interview-draft',
   'studio:artifacts-read',
   'studio:artifacts-files',
   'studio:artifacts-text',
@@ -1024,6 +1028,8 @@ export const ipcInputSchemas = {
   'studio:interview-reopen': interviewProjectInputSchema,
   'studio:interview-reset': interviewProjectInputSchema,
   'studio:interview-extend': interviewProjectInputSchema,
+  'studio:interview-resume': interviewProjectInputSchema,
+  'studio:interview-draft': interviewDraftInputSchema,
   'studio:artifacts-read': studioProjectInputSchema,
   'studio:artifacts-files': studioProjectInputSchema,
   'studio:artifacts-text': studioArtifactInputSchema,
@@ -1610,6 +1616,10 @@ export interface KaiDesktopBridge {
   resetStudioInterview(projectId: string): Promise<IpcResponse<null>>;
   /** Lets the interview ask five more questions, up to twenty in all, for someone who wants to be walked through. */
   extendStudioInterview(projectId: string): Promise<IpcResponse<InterviewState>>;
+  /** Retries the step a failed or interrupted model call left pending, without re-asking anything already saved. */
+  resumeStudioInterview(projectId: string): Promise<IpcResponse<InterviewState>>;
+  /** Keeps answers typed for the open round so they survive leaving the screen. */
+  saveStudioInterviewDraft(request: InterviewDraftInput): Promise<IpcResponse<InterviewState>>;
   /** The artifact catalog: what exists under `.kai/spec`, who wrote it, and what went stale. */
   studioArtifacts(projectId: string): Promise<IpcResponse<StudioArtifacts>>;
   /** Every file the studio has written under `.kai/spec`, for a UI that lists real files rather than guesses. */

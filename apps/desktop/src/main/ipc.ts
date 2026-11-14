@@ -676,6 +676,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'studio:interview-reopen', async ({ projectId }) => context.interview.reopen({ projectId }));
   handle(context, 'studio:interview-reset', async ({ projectId }) => context.interview.reset({ projectId }));
   handle(context, 'studio:interview-extend', async ({ projectId }) => context.interview.extend({ projectId }));
+  handle(context, 'studio:interview-resume', async ({ projectId }) => context.interview.resume({ projectId }));
+  handle(context, 'studio:interview-draft', async (input) => context.interview.saveDraft(input));
   handle(context, 'studio:artifacts-read', async ({ projectId }) => context.studio.artifacts(projectId));
   handle(context, 'studio:artifacts-files', async ({ projectId }) => context.studio.files(projectId));
   handle(context, 'studio:artifacts-text', async ({ projectId, kind }) => context.studio.artifactText(projectId, kind));

@@ -118,6 +118,15 @@ const TRANSIENT_WAITS_MS = [8_000, 20_000, 45_000];
  */
 type DesignBuildAction = { kind: 'redraw'; target: 'all' | string } | { kind: 'clean'; target: string };
 
+/** The answers typed for the open round before the screen was left, and the question to pick up at. */
+function restoredDraft(interview: InterviewState | null): { answers: string[]; step: number } {
+  const open = interview ? interviewOpenQuestions(interview) : [];
+  const answers = open.map((_question, index) => interview?.draftAnswers[index] ?? '');
+  let step = 0;
+  while (step < answers.length - 1 && answers[step]) step += 1;
+  return { answers, step };
+}
+
 /**
  * The Project Studio. The first part of it is the interview: one paragraph in, a short set of skippable questions,
  * and `.kai/spec/brief.md` out. The artifacts, the board and the design layer all read that brief, so this screen
@@ -379,8 +388,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       setBoard(nextBoard);
       setDesign(nextDesign);
       if (interview) setIdea(interview.idea);
-      setAnswers(interview ? interviewOpenQuestions(interview).map(() => '') : []);
-      setStep(0);
+      const restored = restoredDraft(interview);
+      setAnswers(restored.answers);
+      setStep(restored.step);
       setDraft('');
       setTab(interview?.status === 'done' ? 'artifacts' : 'interview');
     }).catch((caught) => {
@@ -696,8 +706,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
 
   function adopt(next: InterviewState): void {
     setState(next);
-    setAnswers(interviewOpenQuestions(next).map(() => ''));
-    setStep(0);
+    const restored = restoredDraft(next);
+    setAnswers(restored.answers);
+    setStep(restored.step);
     setDraft('');
     // Adopting state settles whatever correction was in flight: it has either just been sent or been overtaken.
     setCorrecting(null);
@@ -1246,6 +1257,8 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     setDraft('');
     if (step + 1 < next.length) {
       setStep(step + 1);
+      // Kept on disk as each question is answered, so leaving the screen mid-round loses nothing.
+      if (projectId) void window.kaiDesktop.saveStudioInterviewDraft({ projectId, answers: next }).catch(() => undefined);
       return;
     }
     const sent = await sendAnswers(next);
@@ -1363,6 +1376,21 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     setError(null);
     try {
       adopt(unwrap(await window.kaiDesktop.reopenStudioInterview(projectId)));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Retries the step a failed or interrupted model call left pending; everything typed is already saved. */
+  async function resumeInterview(): Promise<void> {
+    if (!projectId || busy !== null) return;
+    setBusy('answer');
+    setError(null);
+    try {
+      adopt(unwrap(await window.kaiDesktop.resumeStudioInterview(projectId)));
+      setProjectsVersion((current) => current + 1);
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -3011,7 +3039,17 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 })()}
                 {attachNote && <div className="studio-bubble ai">{attachNote}</div>}
                 {open[step] !== undefined && <div className="studio-bubble ai">{open[step]}</div>}
-                {open.length === 0 && <p className="studio-note">No questions this round.</p>}
+                {state.pending && busy !== 'answer' && (
+                  <div className="studio-bubble ai" role="status">
+                    <p>{state.pendingError
+                      ? `Your ${state.pending === 'start' ? 'idea is' : 'answers are'} saved, but the next questions did not arrive: ${state.pendingError}`
+                      : `Your ${state.pending === 'start' ? 'idea is' : 'answers are'} saved. This step was interrupted before the next questions arrived.`}</p>
+                    <UiButton type="button" className="primary-button" onClick={() => void resumeInterview()} disabled={busy !== null}>
+                      <RefreshCw size={14} /> Resume interview
+                    </UiButton>
+                  </div>
+                )}
+                {open.length === 0 && !state.pending && <p className="studio-note">No questions this round.</p>}
                 {busy === 'answer' && <div className="studio-bubble ai"><Loader2 className="spin" size={13} /> Thinking about what to ask next…</div>}
                 <div ref={threadEnd} />
               </div>

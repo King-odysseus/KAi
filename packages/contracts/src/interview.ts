@@ -181,6 +181,13 @@ export const interviewStateSchema = z
     // Questions the user asked for beyond the first ten, because they wanted to be walked through more.
     extraQuestions: z.number().int().min(0).max(STUDIO_EXTRA_QUESTIONS * STUDIO_MAX_EXTENSIONS).default(0),
     status: interviewStatusSchema.default('asking'),
+    // A step saved before the model was asked: 'start' means the first questions are still to come, 'next' means the
+    // newest round is answered and the next one is still to come. Set so a failed or interrupted call can be resumed.
+    pending: z.enum(['start', 'next']).nullable().default(null),
+    // Why the last attempt at the pending step failed, in words the person can act on.
+    pendingError: z.string().max(600).nullable().default(null),
+    // Answers typed for the open round but not yet sent, aligned with its open questions.
+    draftAnswers: z.array(z.string().max(4_000)).max(STUDIO_QUESTIONS_PER_ROUND).default([]),
     // Relative path of the written brief once the interview is done, so the UI can point at a real file.
     briefPath: z.string().max(300).nullable().default(null),
     // Archived discussions stay on disk but are moved out of the active Studio list until restored.
@@ -253,6 +260,15 @@ export const interviewTopicAskInputSchema = z.object({
   topic: z.enum(Object.keys(INTERVIEW_TOPICS) as [InterviewTopic, ...InterviewTopic[]]),
 }).strict();
 export type InterviewTopicAskInput = z.infer<typeof interviewTopicAskInputSchema>;
+
+/** Answers typed for the open round, kept so leaving the screen or closing the app does not lose them. */
+export const interviewDraftInputSchema = z
+  .object({
+    projectId: z.string().min(1),
+    answers: z.array(z.string().max(4_000)).max(STUDIO_QUESTIONS_PER_ROUND),
+  })
+  .strict();
+export type InterviewDraftInput = z.infer<typeof interviewDraftInputSchema>;
 
 export const interviewProjectInputSchema = z.object({ projectId: z.string().min(1) }).strict();
 export type InterviewProjectInput = z.infer<typeof interviewProjectInputSchema>;
