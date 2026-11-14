@@ -2,7 +2,7 @@ import { ARTIFACT_KINDS, CARD_KINDS, type StudioPlanAction } from '@kai/contract
 import type { ReactNode } from 'react';
 import { Checkbox, Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
-import { UiNativeSelect } from './UiNativeSelect';
+import { Select } from './ui/Select';
 
 /**
  * One proposed Studio change, made editable before it is applied.
@@ -35,9 +35,9 @@ export function PlanActionEditor({ action, onChange, disabled }: {
           </label>
           <label>
             Card kind
-            <UiNativeSelect value={action.cardKind} onChange={(event) => update({ cardKind: event.target.value })} disabled={disabled}>
+            <Select value={action.cardKind} onChange={(event) => update({ cardKind: event.target.value })} disabled={disabled}>
               {CARD_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
-            </UiNativeSelect>
+            </Select>
           </label>
           <label>
             Route

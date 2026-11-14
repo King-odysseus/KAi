@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import type { ExecutionMode } from '@kai/contracts';
 import { readAutoSettings, writeAutoSettings, type AutoSettings } from './auto-settings';
 import { UiTextInput } from './UiTextInput';
-import { UiNativeSelect } from './UiNativeSelect';
+import { Select } from './ui/Select';
 
 interface Props {
   projectId: string | null;
@@ -51,10 +51,10 @@ export function AutoSettings({ projectId, execution, running }: Props): ReactNod
           {execution === 'cli' && (
             <label>
               <span>When the CLI window is spent</span>
-              <UiNativeSelect value={settings.apiFallback ? 'api' : 'wait'} onChange={(event) => update({ apiFallback: event.target.value === 'api' })}>
+              <Select value={settings.apiFallback ? 'api' : 'wait'} onChange={(event) => update({ apiFallback: event.target.value === 'api' })}>
                 <option value="api">Carry on with the API provider, then return to the CLI</option>
                 <option value="wait">Wait for the CLI window to reopen</option>
-              </UiNativeSelect>
+              </Select>
             </label>
           )}
           <label>

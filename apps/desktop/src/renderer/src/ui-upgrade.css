@@ -293,7 +293,7 @@ html[data-theme]:root .composer textarea {
 .studio-tabs button { flex: 0 0 auto; padding: 8px 14px; border-radius: 6px 6px 0 0; margin-bottom: 0; }
 .studio-relink-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .studio-relink-row .studio-project-label { flex: 0 0 auto; }
-.studio-relink-row select { max-width: 320px; }
+.studio-relink-row select, .studio-relink-row .kai-select { max-width: 320px; }
 .studio-rail { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .studio-rail-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .studio-rail-list { display: flex; flex-direction: column; margin: 4px 0; padding: 0; list-style: none; }

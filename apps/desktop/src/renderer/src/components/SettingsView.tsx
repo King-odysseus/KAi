@@ -21,7 +21,7 @@ import { unwrap } from '../types';
 
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
-import { Textarea } from 'flowbite-react';
+import { Checkbox, Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
 import { PageHeader } from './ui/PageHeader';
 type McpServer = AppSettings['mcpServers'][number];
@@ -766,7 +766,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
               <summary>Select skills to include ({selectedBundleSkills.length})</summary>
               {bundleSkills.length === 0 ? <p className="settings-note">No skills are available in this project's skill paths.</p> : bundleSkills.map((skill) => (
                 <label className="toggle-row" key={skill.name}>
-                  <input type="checkbox" checked={selectedBundleSkills.includes(skill.name)} onChange={(event) => setSelectedBundleSkills((current) => event.target.checked ? [...new Set([...current, skill.name])] : current.filter((name) => name !== skill.name))} />
+                  <Checkbox checked={selectedBundleSkills.includes(skill.name)} onChange={(event) => setSelectedBundleSkills((current) => event.target.checked ? [...new Set([...current, skill.name])] : current.filter((name) => name !== skill.name))} />
                   <span><strong>{skill.name}</strong> — {skill.description}</span>
                 </label>
               ))}

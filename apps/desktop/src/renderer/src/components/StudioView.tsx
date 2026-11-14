@@ -68,7 +68,7 @@ import { Composer, ComposerInput, ComposerSend, ComposerToolbar } from './ui/Com
 import { IconButton } from './ui/IconButton';
 import { ActionsMenu, type ActionsMenuItem } from './ui/ActionsMenu';
 import { UiTextInput } from './UiTextInput';
-import { UiNativeSelect } from './UiNativeSelect';
+import { Select } from './ui/Select';
 import { PageHeader } from './ui/PageHeader';
 import { FIRST_RUN_PROJECT_TYPES, firstRunIdea } from '../first-run-onboarding';
 
@@ -2792,7 +2792,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       {screen === 'project' && state && (
         <div className="studio-relink-row">
           <span className="studio-project-label">Folder this plan writes to</span>
-          <UiNativeSelect
+          <Select
             aria-label="The folder this plan uses"
             value={state.linkedProjectId ?? ''}
             disabled={busy !== null}
@@ -2800,7 +2800,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
           >
             <option value="">Independent (KAI's own folder)</option>
             {desktopProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-          </UiNativeSelect>
+          </Select>
         </div>
       )}
 
@@ -2976,10 +2976,10 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <AgentOrb state={busy === 'answer' || busy === 'finish' ? 'thinking' : 'idle'} />
                 <p className="studio-note">Question {Math.min(state.rounds.flatMap((round) => round.questions).length, interviewQuestionBudget(state))} of {interviewQuestionBudget(state)}. Skip anything you would rather leave to the agents, or pick "Not sure, you decide".</p>
-                <UiNativeSelect aria-label="Ask me about a topic" value="" disabled={busy !== null || state.rounds.flatMap((round) => round.questions).length >= interviewQuestionBudget(state)} onChange={(event) => { const topic = event.target.value as InterviewTopic; if (topic) void askTopic(topic); }}>
+                <Select aria-label="Ask me about a topic" value="" disabled={busy !== null || state.rounds.flatMap((round) => round.questions).length >= interviewQuestionBudget(state)} onChange={(event) => { const topic = event.target.value as InterviewTopic; if (topic) void askTopic(topic); }}>
                   <option value="">Ask me about…</option>
                   {(Object.keys(INTERVIEW_TOPICS) as InterviewTopic[]).filter((topic) => state.topics[topic]?.status !== 'decided').map((topic) => <option key={topic} value={topic}>{INTERVIEW_TOPICS[topic]}{state.topics[topic]?.status === 'assumed' ? ' · assumed' : ' · open'}</option>)}
-                </UiNativeSelect>
+                </Select>
                 {state.extraQuestions < STUDIO_EXTRA_QUESTIONS * STUDIO_MAX_EXTENSIONS && (
                   <div className="flex min-w-0 flex-col gap-1">
                     <UiButton type="button" className="composer-text-button" onClick={() => void extendInterview()} disabled={busy !== null} title={`The interview can ask up to ${STUDIO_QUESTION_CEILING} questions.`}>
@@ -3359,7 +3359,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               <p className="studio-note">Explain a correction or attach a screenshot. The assistant checks the project page list, board, and Open Pencil design before replying.</p>
               <label className="studio-relink">
                 <span className="studio-note">Scope</span>
-                <UiNativeSelect
+                <Select
                   aria-label="Scope this chat to one page"
                   value={designChatPageName}
                   disabled={busy !== null}
@@ -3367,7 +3367,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 >
                   <option value="">Whole project</option>
                   {designRows.map((row) => <option key={row.name} value={row.name}>{row.name}</option>)}
-                </UiNativeSelect>
+                </Select>
               </label>
               <div className="studio-design-chat-thread" aria-live="polite">
                 {designChatMessages.length === 0 && <p className="studio-note">For example: “Academic sessions and terms already exists at /admin/setup/terms. Please find the existing page and sync the board.”</p>}
@@ -4182,7 +4182,7 @@ function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute, onRememberAp
       <UiButton type="button" className="secondary-button" onClick={() => onLearn(card)} title={`Ask the tutor about "${card.title}"`}>
         <Code2 size={13} /> Learn this card
       </UiButton>
-      <UiNativeSelect
+      <Select
         className="studio-move"
         value={card.status}
         onChange={(event) => void onMove(card.id, event.target.value as BoardStatus)}
@@ -4190,7 +4190,7 @@ function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute, onRememberAp
         aria-label={`Move ${card.title}`}
       >
         {BOARD_STATUSES.map((status) => <option key={status} value={status}>{BOARD_STATUS_LABEL[status]}</option>)}
-      </UiNativeSelect>
+      </Select>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import type * as Monaco from 'monaco-editor';
 import type { TodoScanResult } from '@kai/contracts';
 import { FileTypeIcon } from './FileTypeIcon';
 import { UiButton } from './UiButton';
+import { UiTextInput } from './UiTextInput';
 
 const baseName = (path: string): string => path.split('/').at(-1) ?? path;
 const folderOf = (path: string): string => path.split('/').slice(0, -1).join('/');
@@ -59,7 +60,7 @@ export function TodoPanel({ projectId, onOpen }: { projectId: string; onOpen: (p
   return (
     <div className="side-list">
       <div className="side-tools">
-        <input className="side-filter" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter to-dos" aria-label="Filter to-dos" />
+        <UiTextInput className="side-filter" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter to-dos" aria-label="Filter to-dos" />
         <UiButton type="button" className="icon-button compact" title="Scan again" aria-label="Scan again" disabled={loading} onClick={scan}><RefreshCw size={13} className={loading ? 'spin' : ''} /></UiButton>
       </div>
       {error && <div className="empty-list">{error}</div>}

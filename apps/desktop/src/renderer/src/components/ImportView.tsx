@@ -1,3 +1,4 @@
+import { Checkbox } from 'flowbite-react';
 import { CheckCircle2, ListPlus, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { ImportFinding, ImportReport, ProjectRecord } from '@kai/contracts';
@@ -107,7 +108,7 @@ export function ImportView({ activeProject, onOpenStudio }: { activeProject: Pro
                 return (
                   <li key={finding.id} className="import-finding">
                     <label className="flex cursor-pointer items-start gap-3">
-                      <input type="checkbox" className="mt-1" checked={picked.has(finding.id)} disabled={onBoard} onChange={() => toggle(finding.id)} />
+                      <Checkbox className="mt-1" checked={picked.has(finding.id)} disabled={onBoard} onChange={() => toggle(finding.id)} />
                       <span className="flex min-w-0 flex-1 flex-col gap-1">
                         <span className="flex flex-wrap items-center gap-2">
                           <strong>{finding.title}</strong>

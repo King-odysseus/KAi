@@ -7,7 +7,7 @@ import { agentLinks, connectedCardIds, layoutAgentLinks, layoutCards, reducedDep
 import { unwrap } from '../types';
 import { UiButton } from './UiButton';
 import { PageHeader } from './ui/PageHeader';
-import { UiNativeSelect } from './UiNativeSelect';
+import { Select } from './ui/Select';
 
 /**
  * The board as a graph, on its own page. Two views of the same cards: what blocks what, and which agent is holding
@@ -102,10 +102,10 @@ export function GraphView(): ReactNode {
         title="Project graph"
         detail="What blocks what, and which agent holds which card. Read-only: move cards from the Studio board."
         actions={<>
-          <UiNativeSelect className="studio-move" value={projectId ?? ''} onChange={(event) => setProjectId(event.target.value || null)} aria-label="Studio project" disabled={projects.length === 0}>
+          <Select className="studio-move" value={projectId ?? ''} onChange={(event) => setProjectId(event.target.value || null)} aria-label="Studio project" disabled={projects.length === 0}>
             {projects.length === 0 && <option value="">No Studio projects</option>}
             {projects.map((project) => <option key={project.id} value={project.id}>{`Studio project: ${project.title.slice(0, 50)}`}</option>)}
-          </UiNativeSelect>
+          </Select>
           <div className="mode-toggle" role="group" aria-label="Graph view">
             <UiButton type="button" className={mode === 'dependencies' ? 'active' : ''} aria-pressed={mode === 'dependencies'} onClick={() => setMode('dependencies')}><span>Dependencies</span></UiButton>
             <UiButton type="button" className={mode === 'agents' ? 'active' : ''} aria-pressed={mode === 'agents'} onClick={() => setMode('agents')}><span>Agents</span></UiButton>

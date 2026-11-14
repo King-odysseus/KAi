@@ -8,7 +8,6 @@ import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
 import { Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
-import { UiNativeSelect } from './UiNativeSelect';
 
 type Agent = ScheduleInput['agent'];
 
@@ -220,8 +219,8 @@ function RunAutomationCard({ project, automation, onSave, busy }: {
         <div className="automation-stack">
           {rules.map((rule, index) => (
             <div className="field-grid" key={rule.id}>
-              <label className="field"><span>Effect</span><UiNativeSelect value={rule.effect} onChange={(event) => { const effect = event.target.value as PermissionRule['effect']; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, effect } : item)); setSaved(null); }}><option value="deny">Deny</option><option value="ask">Ask</option><option value="allow">Allow</option></UiNativeSelect></label>
-              <label className="field"><span>Matches</span><UiNativeSelect value={rule.kind} onChange={(event) => { const kind = event.target.value as RuleKind; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, kind } : item)); setSaved(null); }}><option value="tool">Tool name</option><option value="command">Command starts with</option><option value="path">Project path</option></UiNativeSelect></label>
+              <label className="field"><span>Effect</span><Select value={rule.effect} onChange={(event) => { const effect = event.target.value as PermissionRule['effect']; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, effect } : item)); setSaved(null); }}><option value="deny">Deny</option><option value="ask">Ask</option><option value="allow">Allow</option></Select></label>
+              <label className="field"><span>Matches</span><Select value={rule.kind} onChange={(event) => { const kind = event.target.value as RuleKind; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, kind } : item)); setSaved(null); }}><option value="tool">Tool name</option><option value="command">Command starts with</option><option value="path">Project path</option></Select></label>
               <label className="field"><span>Pattern</span><UiTextInput value={rule.pattern} placeholder={rule.kind === 'tool' ? 'mcp_*' : rule.kind === 'command' ? 'git push' : 'src/**'} onChange={(event) => { const pattern = event.target.value; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, pattern } : item)); setSaved(null); }} /></label>
               <label className="field"><span>Reason shown when it applies</span><UiTextInput value={rule.note} placeholder="Ask before publishing" onChange={(event) => { const note = event.target.value; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, note } : item)); setSaved(null); }} /></label>
               <div className="button-row align-start">
