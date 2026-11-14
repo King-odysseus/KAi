@@ -374,7 +374,7 @@ import {
 } from './terminal';
 import { planSchema, type Plan } from './plan';
 import { conventionsGetInputSchema, conventionsMuteInputSchema, conventionsReferenceInputSchema, conventionsRuleAddInputSchema, conventionsRuleRemoveInputSchema, type ConventionsState } from './conventions';
-import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewStartInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
+import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewFollowUpInputSchema, crewStartInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
 import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitBlameInputSchema, type GitBlameResult, type GitChangesResult, todoScanInputSchema, type TodoScanResult, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, gitTeamBranchInputSchema, gitTeamCloneInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
 import { importAddCardsInputSchema, importScanInputSchema, type ImportReport } from './import';
 import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
@@ -562,6 +562,7 @@ export const ipcChannels = [
   'crew:start',
   'crew:approve',
   'crew:answer',
+  'crew:follow-up',
   'crew:pause',
   'crew:resume',
   'crew:stop',
@@ -986,6 +987,7 @@ export const ipcInputSchemas = {
   'crew:start': crewStartInputSchema,
   'crew:approve': crewControlInputSchema,
   'crew:answer': crewAnswerInputSchema,
+  'crew:follow-up': crewFollowUpInputSchema,
   'crew:pause': crewControlInputSchema,
   'crew:resume': crewControlInputSchema,
   'crew:stop': crewControlInputSchema,
@@ -1802,6 +1804,8 @@ export interface KaiDesktopBridge {
   startCrew(request: CrewStartInput): Promise<IpcResponse<CrewRun>>;
   approveCrew(runId: string): Promise<IpcResponse<CrewRun>>;
   answerCrew(runId: string, answer: CrewAnswerInput['answer'], guidance?: string): Promise<IpcResponse<CrewRun>>;
+  /** Gives a finished crew more work: the Lead plans it onto the same board with the same roles. */
+  followUpCrew(runId: string, prompt: string): Promise<IpcResponse<CrewRun>>;
   pauseCrew(runId: string): Promise<IpcResponse<CrewRun>>;
   resumeCrew(runId: string): Promise<IpcResponse<CrewRun>>;
   stopCrew(runId: string): Promise<IpcResponse<CrewRun>>;

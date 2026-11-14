@@ -305,6 +305,36 @@ describe('crew runner', () => {
     expect((await runToIdle(unreadable.runner, two.id)).ask?.reason).toBe('sameFailure');
   });
 
+  it('plans a follow-up onto the same board after the crew has finished', async () => {
+    const followPlan = JSON.stringify({ tasks: [{ id: 'schema', title: 'Install the app', role: 'builder', description: 'Build and install', acceptance: ['The app is installed'], dependsOn: [] }] });
+    const f = fixture({ plan: [PLAN, followPlan] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const first = await runToIdle(f.runner, started.id);
+    expect(first.status).toBe('completed');
+    expect(first.tasks).toHaveLength(2);
+
+    const next = await f.runner.followUp(started.id, 'Now build and install it.', 1);
+    expect(next.followUp).toBe('Now build and install it.');
+    const done = await runToIdle(f.runner, started.id);
+    expect(done.status).toBe('completed');
+    expect(done.followUp).toBeNull();
+    expect(done.tasks.map((task) => task.id)).toEqual(['schema', 'ingest', 'schema-2']);
+    expect(done.tasks.every((task) => task.status === 'accepted')).toBe(true);
+    expect(f.requests.some((request) => request.prompt.includes('Plan only this') && request.prompt.includes('Now build and install it.'))).toBe(true);
+  });
+
+  it('puts a finished crew back as it was when the Lead cannot plan the follow-up', async () => {
+    const f = fixture({ plan: [PLAN, 'not a plan'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    await runToIdle(f.runner, started.id);
+    await f.runner.followUp(started.id, 'Do more.', 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('completed');
+    expect(run.followUp).toBeNull();
+    expect(run.tasks).toHaveLength(2);
+    expect(run.feed.some((entry) => entry.text.includes('could not plan that follow-up'))).toBe(true);
+  });
+
   it('never accepts work when the Lead\'s reply cannot be read', async () => {
     const f = fixture({ lead: ['I think it is fine.'] });
     const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);

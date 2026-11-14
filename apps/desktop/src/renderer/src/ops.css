@@ -3163,3 +3163,11 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .message.user .message-tools .message-action { margin-left: 0; margin-right: 6px; opacity: 0.55; transition: opacity 120ms ease, color 120ms ease; }
 .message.user:hover .message-tools .message-action,
 .message.user .message-tools .message-action:focus-visible { opacity: 1; }
+
+/* What a finished crew leaves behind: the summary, the next actions, the follow-up box and the commit panel. */
+.crew-done { display: flex; flex-direction: column; gap: 8px; }
+.crew-done h2 { margin: 0; font-size: 15px; }
+.crew-done-files summary, .crew-commit summary { cursor: pointer; color: var(--text-muted); font-size: 12px; }
+.crew-done-files code, .crew-commit code { font-size: 11px; color: var(--text-muted); }
+.crew-done-actions { flex-wrap: wrap; }
+.crew-commit { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--bg-shell); }

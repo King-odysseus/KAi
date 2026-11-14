@@ -20,6 +20,7 @@ import { UiTextInput } from './UiTextInput';
 import { PageHeader } from './ui/PageHeader';
 import { crewLimitPolicy } from '../cost-visibility';
 import { collapseFeed } from '../crew-feed';
+import { CrewDone } from './CrewDone';
 
 type Tab = 'board' | 'crew' | 'design' | 'cost' | 'report';
 const TABS: ReadonlyArray<{ id: Tab; label: string; icon: typeof Kanban }> = [
@@ -76,7 +77,11 @@ function money(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
-export function CrewView({ activeProject, agentCapabilities, settings, goalRequest = null }: {
+export function CrewView({ activeProject, agentCapabilities, settings, goalRequest = null, onOpenGit, onOpenPreview }: {
+  /** Opens the Git page, where a finished crew's changes are read and committed. */
+  onOpenGit?: () => void;
+  /** Opens the live preview pane. */
+  onOpenPreview?: () => void;
   /** A goal handed over from elsewhere (the Project Studio); it fills the box and the user still presses Start. */
   goalRequest?: { goal: string; nonce: number } | null;
   activeProject: ProjectRecord | null;
@@ -129,6 +134,13 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
 
   function reconcile(run: CrewRun): void {
     setRuns((current) => [run, ...current.filter((item) => item.id !== run.id)].sort((a, b) => b.startedAt.localeCompare(a.startedAt)));
+  }
+
+  /** Hands a finished crew more work. The Lead plans it onto the same board, which then runs again. */
+  async function followUp(prompt: string): Promise<void> {
+    if (!activeRun) return;
+    reconcile(unwrap(await window.kaiDesktop.followUpCrew(activeRun.id, prompt)));
+    setTab('board');
   }
 
   useEffect(() => {
@@ -279,7 +291,14 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
           </div>
 
           {tab === 'board' && (activeRun
-            ? <Board run={activeRun} />
+            ? (
+              <>
+                {(activeRun.status === 'completed' || activeRun.status === 'stopped') && (
+                  <CrewDone run={activeRun} project={activeProject} onFollowUp={followUp} onOpenGit={onOpenGit} onPreview={onOpenPreview} onReport={() => setTab('report')} />
+                )}
+                <Board run={activeRun} />
+              </>
+            )
             : (
               <>
               <section className="ops-panel crew-start">

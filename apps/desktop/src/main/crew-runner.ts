@@ -3,7 +3,7 @@ import { classifyWork, crewRunSchema } from '@kai/contracts';
 import type { AgentRunRequest, AgentRunResult, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
 import {
   addCheckFix, addSpend, addTasks, answerAsk, enforceLimits, failBuild, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
-  reassignReadOnlyTasks, resolveStuck, roleAccess, settle, stuckTask, startTask, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun,
+  reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun,
 } from './crew-engine';
 import { parsePlan, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
 import type { ParallelSession } from './parallel-session';
@@ -131,6 +131,16 @@ export class DesktopCrewRunner {
     return this.resumeWith(run, ownerWindowId, answerAsk(run, answer, guidance, this.now().toISOString()));
   }
 
+  /**
+   * More work for a crew that has finished. The run goes back to planning with the request attached, and the Lead adds
+   * tasks to the same board, so the roles, the accepted work and the spend carry on.
+   */
+  async followUp(runId: string, prompt: string, ownerWindowId: number): Promise<CrewRun> {
+    const run = await this.require(runId);
+    if (this.active.has(runId)) throw new Error('This crew is still working. Use Tell the Lead to steer it.');
+    return this.resumeWith(run, ownerWindowId, startFollowUp(run, prompt, this.now().toISOString()));
+  }
+
   /** Picks a paused or interrupted run back up. Work that was mid-build starts again; nothing accepted is redone. */
   async resume(runId: string, ownerWindowId: number): Promise<CrewRun> {
     const run = await this.require(runId);
@@ -140,7 +150,7 @@ export class DesktopCrewRunner {
     const at = this.now().toISOString();
     return this.resumeWith(run, ownerWindowId, {
       // A run with no tasks yet was interrupted while planning, so it plans again instead of starting an empty build.
-      ...run, status: run.status === 'awaitingApproval' ? 'awaitingApproval' : run.tasks.length === 0 ? 'planning' : 'running', updatedAt: at,
+      ...run, status: run.status === 'awaitingApproval' ? 'awaitingApproval' : run.tasks.length === 0 || run.followUp ? 'planning' : 'running', updatedAt: at,
       // A task that was being built when the run stopped has no result to review, so it waits to be built again.
       tasks: run.tasks.map((task) => (task.status === 'building' ? { ...task, status: 'backlog' as const } : task)),
     });
@@ -226,7 +236,8 @@ export class DesktopCrewRunner {
 
   private async drive(active: ActiveRun): Promise<void> {
     try {
-      if (active.run.tasks.length === 0 && active.run.status === 'planning') {
+      // A fresh run plans first; so does a finished run that was given a follow-up, whose board already has tasks.
+      if (active.run.status === 'planning') {
         await this.plan(active);
         // Planning replaces the run, so its status is read afresh: it may now be waiting for approval or for you.
         if ((active.run as CrewRun).status !== 'running') return;
@@ -256,21 +267,33 @@ export class DesktopCrewRunner {
     if (active.cancelled) return;
     const at = this.now().toISOString();
     let run = active.run;
+    if (answer.value === null && current.followUp) {
+      // The finished work is still finished: a follow-up the Lead could not plan puts the run back as it was.
+      const message = 'The Lead could not plan that follow-up. The finished work is unchanged; try asking again in other words.';
+      await this.commit(active, { ...run, status: 'completed', followUp: null, completedAt: at, spentUsd: run.spentUsd + answer.costUsd, updatedAt: at, feed: [...run.feed, { id: `feed_${randomUUID()}`, at, who: planner.id, kind: 'info' as const, text: message }] });
+      return;
+    }
     if (answer.value === null) {
       const message = 'The Lead could not produce a usable plan.';
       await this.commit(active, { ...run, status: 'needsYou', ask: { reason: 'noProgress', message }, spentUsd: run.spentUsd + answer.costUsd, updatedAt: at, feed: [...run.feed, { id: `feed_${randomUUID()}`, at, who: planner.id, kind: 'needsYou', text: message }] });
       return;
     }
-    const added = addTasks({ ...run, spentUsd: run.spentUsd + answer.costUsd }, answer.value, at);
+    const before = run.tasks.length;
+    const added = addTasks({ ...run, spentUsd: run.spentUsd + answer.costUsd }, uniqueTaskIds(run.tasks, answer.value), at);
     run = added.run;
     for (const reason of added.refused) run = { ...run, feed: [...run.feed, { id: `feed_${randomUUID()}`, at, who: 'crew', kind: 'info' as const, text: `Left out a task: ${reason}` }] };
+    if (run.tasks.length === before && current.followUp) {
+      const message = `The Lead had nothing new to add for that. ${added.refused[0] ?? ''}`.trim();
+      await this.commit(active, { ...run, status: 'completed', followUp: null, completedAt: at, updatedAt: at, feed: [...run.feed, { id: `feed_${randomUUID()}`, at, who: planner.id, kind: 'info' as const, text: message }] });
+      return;
+    }
     if (run.tasks.length === 0) {
       const message = `The plan had no usable tasks. ${added.refused[0] ?? ''}`.trim();
       await this.commit(active, { ...run, status: 'needsYou', ask: { reason: 'noProgress', message } });
       return;
     }
-    run = { ...run, feed: [...run.feed, { id: `feed_${randomUUID()}`, at, who: planner.id, kind: 'info' as const, text: `Wrote ${run.tasks.length} tasks.` }] };
-    await this.commit(active, { ...run, status: run.config.approvePlan ? 'awaitingApproval' : 'running', updatedAt: at });
+    run = { ...run, feed: [...run.feed, { id: `feed_${randomUUID()}`, at, who: planner.id, kind: 'info' as const, text: `Wrote ${run.tasks.length - before} ${run.tasks.length - before === 1 ? 'task' : 'tasks'}.` }] };
+    await this.commit(active, { ...run, followUp: null, status: run.config.approvePlan ? 'awaitingApproval' : 'running', updatedAt: at });
   }
 
   /** On a fresh run, runs the project check once before any task, so a repository that already fails is not blamed on the first builder. */

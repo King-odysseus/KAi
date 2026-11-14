@@ -104,6 +104,37 @@ export function addTasks(run: CrewRun, drafts: readonly CrewTaskDraft[], at: str
   return { run: next, refused };
 }
 
+/**
+ * Gives a finished crew more work. The run goes back to planning with the request attached; the Lead then adds tasks
+ * to the same board, so the roles, the accepted work and the spend carry on instead of starting from nothing.
+ */
+export function startFollowUp(run: CrewRun, prompt: string, at: string): CrewRun {
+  if (run.status !== 'completed' && run.status !== 'stopped') throw new Error('Only a finished crew can take a follow-up. Use Tell the Lead while it is working.');
+  const request = prompt.trim().slice(0, 2_000);
+  if (!request) throw new Error('Say what the crew should do next.');
+  return feed({ ...run, status: 'planning', followUp: request, ask: null, completedAt: null }, { who: 'you', kind: 'info', text: `Asked for more: ${shorten(request)}` }, at);
+}
+
+/**
+ * Keeps a follow-up plan from colliding with the board it is added to. The Lead names tasks without seeing every id
+ * already used, so one that repeats an existing id gets a number, and the new tasks that depend on it follow.
+ */
+export function uniqueTaskIds<T extends { id: string; dependsOn?: readonly string[] }>(existing: readonly { id: string }[], drafts: readonly T[]): T[] {
+  const taken = new Set(existing.map((task) => task.id));
+  const renamed = new Map<string, string>();
+  for (const draft of drafts) {
+    let id = draft.id;
+    for (let n = 2; taken.has(id); n += 1) id = `${draft.id}-${n}`;
+    taken.add(id);
+    if (id !== draft.id) renamed.set(draft.id, id);
+  }
+  return drafts.map((draft) => ({
+    ...draft,
+    id: renamed.get(draft.id) ?? draft.id,
+    ...(draft.dependsOn ? { dependsOn: draft.dependsOn.map((dependency) => renamed.get(dependency) ?? dependency) } : {}),
+  }));
+}
+
 /** The role that takes work a read-only role was given: the builder, else any role that may edit files. */
 export function editorRole(config: CrewConfig): CrewConfig['roles'][number] | undefined {
   return config.roles.find((role) => role.kind === 'builder') ?? config.roles.find((role) => roleAccess(role) === 'edit');

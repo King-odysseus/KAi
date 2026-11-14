@@ -44,7 +44,8 @@ function designReviewLines(run: CrewRun, task: CrewTask): string[] {
   ];
 }
 
-export function planPrompt(goal: string, config: CrewConfig, conventions: string, existing: Pick<CrewRun, 'tasks'>, design: CrewDesign | null = null): string {
+export function planPrompt(goal: string, config: CrewConfig, conventions: string, existing: Pick<CrewRun, 'tasks'> & { followUp?: string | null }, design: CrewDesign | null = null): string {
+  const done = existing.tasks.filter((task) => task.status === 'accepted' && !task.proposed).map((task) => task.title);
   const roles = config.roles.filter((role) => roleAccess(role) === 'edit' || role.kind === 'security' || role.kind === 'reviewer');
   return [
     'You are the Lead of a small crew that will build a project. Read the project, then split the goal into tasks.',
@@ -57,6 +58,7 @@ export function planPrompt(goal: string, config: CrewConfig, conventions: string
     ...(conventions.trim() ? ['', 'How this developer usually builds things (follow these unless the goal says otherwise):', conventions.trim()] : []),
     ...designPlanLines(config, design),
     ...(existing.tasks.length > 0 ? ['', 'The board already has these tasks; add only what is missing:', boardSummary(existing)] : []),
+    ...(existing.followUp ? ['', 'The earlier work is finished and accepted:', ...done.slice(0, 30).map((title) => `- ${title}`), '', `The user has now asked for more. Plan only this, building on what is done: ${existing.followUp}`, 'Do not repeat tasks that are already accepted. Prefer 1 to 6 tasks. Anything that runs, builds, installs or commits the project is a task for a role that writes code.'] : []),
     '',
     'Rules for the tasks:',
     '- Small enough for one agent to finish in one sitting. Prefer 5 to 14 tasks.',

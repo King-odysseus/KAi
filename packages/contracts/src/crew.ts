@@ -218,6 +218,9 @@ export const crewRunSchema = z
     tasks: z.array(crewTaskSchema).max(300),
     feed: z.array(crewFeedEntrySchema).max(400),
     ask: crewAskSchema.nullable().default(null),
+    // A request made after the run finished, kept until the Lead has turned it into tasks, so an interrupted
+    // follow-up plans again on resume instead of quietly doing nothing.
+    followUp: z.string().max(2_000).nullable().default(null),
     // The design as it was when the Lead planned, so the plan and the pages it names stay comparable.
     design: crewDesignSchema.nullable().default(null),
     // The conversations the crew's agents are running in right now, so the screen can show what they are doing.
@@ -268,6 +271,10 @@ export const crewStartInputSchema = z
 export type CrewStartInput = z.infer<typeof crewStartInputSchema>;
 
 export const crewControlInputSchema = z.object({ runId: z.string().min(1) }).strict();
+
+/** More work for a crew that has finished: the Lead plans it onto the same board, with the same roles and context. */
+export const crewFollowUpInputSchema = z.object({ runId: z.string().min(1), prompt: z.string().trim().min(1).max(2_000) }).strict();
+export type CrewFollowUpInput = z.infer<typeof crewFollowUpInputSchema>;
 
 export const crewAnswerInputSchema = z
   .object({

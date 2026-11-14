@@ -621,6 +621,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'crew:answer', async ({ runId, answer, guidance }, request) => context.crew.answer(runId, answer, guidance, request.ownerWindowId));
   handle(context, 'crew:pause', async ({ runId }) => context.crew.pause(runId));
   handle(context, 'crew:resume', async ({ runId }, request) => context.crew.resume(runId, request.ownerWindowId));
+  handle(context, 'crew:follow-up', async ({ runId, prompt }, request) => context.crew.followUp(runId, prompt, request.ownerWindowId));
   handle(context, 'crew:stop', async ({ runId }) => context.crew.stop(runId));
   handle(context, 'crew:defaults', async ({ projectId }) => context.crewSupport.defaults(projectId));
   handle(context, 'crew:save-defaults', async ({ projectId, config }) => context.crewSupport.saveDefaults(projectId, config));

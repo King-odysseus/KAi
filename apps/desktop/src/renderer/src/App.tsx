@@ -2412,7 +2412,7 @@ export function App(): ReactNode {
           />
         );
       case 'crew':
-        return <CrewView goalRequest={crewGoalRequest} activeProject={activeProject} agentCapabilities={agentCapabilities} settings={bootstrap.settings} />;
+        return <CrewView goalRequest={crewGoalRequest} activeProject={activeProject} agentCapabilities={agentCapabilities} settings={bootstrap.settings} onOpenGit={() => setView('git')} onOpenPreview={() => setPreviewOpen(true)} />;
       case 'history':
         return (
           <HistoryView

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultCrewConfig, crewConfigSchema, crewRunSchema } from '@kai/contracts';
 import type { CrewRun } from '@kai/contracts';
 import {
-  acceptProposal, addTasks, answerAsk, reassignReadOnlyTasks, resolveStuck, stuckTask, failBuild, buildReport, enforceLimits, isFinished, parseReview, pickTasks, proposeTask, readyTasks,
+  acceptProposal, addTasks, answerAsk, reassignReadOnlyTasks, resolveStuck, startFollowUp, uniqueTaskIds, stuckTask, failBuild, buildReport, enforceLimits, isFinished, parseReview, pickTasks, proposeTask, readyTasks,
   reviewTask, roleAccess, sameFeedback, settle, startTask, subAgentsFor, submitTask, taskBrief, unfinishedReason,
 } from '../apps/desktop/src/main/crew-engine';
 import { parseStuckDecision } from '../apps/desktop/src/main/crew-prompts';
@@ -204,6 +204,31 @@ describe('tasks given to a role that cannot edit', () => {
   it('leaves tasks for roles that can edit alone', () => {
     const run = withTasks(newRun());
     expect(reassignReadOnlyTasks(run, T1)).toBe(run);
+  });
+});
+
+describe('follow-ups for a finished crew', () => {
+  const finished = (): CrewRun => ({ ...withTasks(newRun()), status: 'completed', completedAt: T1 });
+
+  it('sends a finished run back to planning with the request attached', () => {
+    const next = startFollowUp(finished(), '  Build and install it.  ', T1);
+    expect(next).toMatchObject({ status: 'planning', followUp: 'Build and install it.', completedAt: null, ask: null });
+    expect(next.feed.at(-1)?.text).toContain('Build and install it.');
+  });
+
+  it('refuses a follow-up on a run that is still working', () => {
+    expect(() => startFollowUp(newRun(), 'More', T1)).toThrow(/finished crew/);
+    expect(() => startFollowUp(finished(), '   ', T1)).toThrow(/what the crew should do/);
+  });
+
+  it('renames new task ids that repeat existing ones, and the tasks that depend on them', () => {
+    const drafts = uniqueTaskIds(finished().tasks, [
+      { id: 'schema', dependsOn: [] as string[] },
+      { id: 'install', dependsOn: ['schema'] },
+      { id: 'schema-2', dependsOn: [] as string[] },
+    ]);
+    expect(drafts.map((draft) => draft.id)).toEqual(['schema-2', 'install', 'schema-2-2']);
+    expect(drafts[1]?.dependsOn).toEqual(['schema-2']);
   });
 });
 
