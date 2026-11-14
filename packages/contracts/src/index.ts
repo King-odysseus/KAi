@@ -6,6 +6,7 @@ export * from './autopilot';
 export * from './brain';
 export * from './blocked';
 export * from './brain-mirror';
+export * from './capability-bundle';
 export * from './catalog';
 export * from './context';
 export * from './conventions';

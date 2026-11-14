@@ -141,7 +141,7 @@ export const TOUR_LESSONS: TourLesson[] = [
     steps: [
       RAIL,
       { title: 'Choose a folder', body: 'Open a folder to work in it. The project picker at the top left switches between the folders you have opened. Studio plans can be linked to a folder once the brief is ready.' },
-      { title: 'Manage the project list', body: 'Use Projects to revisit a folder and the picker to switch quickly. The active folder controls which files, Git state and agent context the other screens show.' },
+      { title: 'Manage the project list', body: 'Use Projects to revisit a folder and the picker to switch quickly. Open a project overview to see its Studio plan, board, Crew runs, conversations and persistent goals in one place.' },
     ],
   },
   {

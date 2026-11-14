@@ -7,7 +7,8 @@ describe('project overview activity', () => {
     const studio = (id: string, linkedProjectId: string | null, updatedAt: string) => ({ id, linkedProjectId, updatedAt }) as StudioProjectSummary;
     const crew = (id: string, projectId: string, updatedAt: string) => ({ id, projectId, updatedAt }) as CrewRun;
     const workflow = (conversationId: string, projectId: string, createdAt: string) => ({ conversationId, projectId, workflow: { createdAt } }) as WorkflowRun;
-    const conversation = (id: string, projectId: string | null, updatedAt: string, sideOf?: string) => ({ id, projectId, updatedAt, ...(sideOf ? { sideOf } : {}) }) as ConversationRecord;
+    const goal = { id: 'goal-a', outcome: 'Ship dashboard', constraints: '', verification: 'Smoke test', status: 'running', createdAt: '2026-11-01T00:00:00.000Z', updatedAt: '2026-11-02T00:00:00.000Z', startedAt: '2026-11-01T00:00:00.000Z' } as const;
+    const conversation = (id: string, projectId: string | null, updatedAt: string, sideOf?: string, attachedGoal?: ConversationRecord['goal']) => ({ id, projectId, updatedAt, title: id, ...(attachedGoal ? { goal: attachedGoal } : {}), ...(sideOf ? { sideOf } : {}) }) as ConversationRecord;
 
     const result = projectOverviewActivity('folder-a', [
       studio('plan-a-old', 'folder-a', '2026-10-01T00:00:00.000Z'),
@@ -20,8 +21,8 @@ describe('project overview activity', () => {
       workflow('workflow-a', 'folder-a', '2026-11-01T00:00:00.000Z'),
       workflow('workflow-b', 'folder-b', '2026-11-02T00:00:00.000Z'),
     ], [
-      conversation('conversation-a', 'folder-a', '2026-11-01T00:00:00.000Z'),
-      conversation('side-a', 'folder-a', '2026-11-02T00:00:00.000Z', 'conversation-a'),
+      conversation('conversation-a', 'folder-a', '2026-11-01T00:00:00.000Z', undefined, goal),
+      conversation('side-a', 'folder-a', '2026-11-02T00:00:00.000Z', 'conversation-a', { ...goal, id: 'goal-side' }),
       conversation('conversation-b', 'folder-b', '2026-11-03T00:00:00.000Z'),
     ]);
 
@@ -29,5 +30,6 @@ describe('project overview activity', () => {
     expect(result.crew.map((run) => run.id)).toEqual(['crew-a']);
     expect(result.workflows.map((run) => run.conversationId)).toEqual(['workflow-a']);
     expect(result.conversations.map((item) => item.id)).toEqual(['conversation-a']);
+    expect(result.goals.map((item) => [item.goal.id, item.conversationId])).toEqual([['goal-a', 'conversation-a']]);
   });
 });

@@ -103,11 +103,37 @@ describe('AI review of several files', () => {
       { path: 'src/App.css', diff: 'diff --git a/src/App.css b/src/App.css\ndeleted file mode 100644\n-/* x */' },
       { path: 'logo.png', diff: 'Binary files a/logo.png and b/logo.png differ' },
     ], 'intermediate');
-    expect(calls).toHaveLength(1);
+    // One request reads every file; a second, sceptical one checks the findings. Here the check's reply is the wrong
+    // shape, so it fails — and a failed check must leave the findings standing, untagged.
+    expect(calls).toHaveLength(2);
     expect(calls[0]).toContain('Tidy the styles');
+    expect(calls[1]).toContain('Findings to check');
     expect(result.reviewedFiles).toEqual(['src/index.css', 'src/App.css']);
     expect(result.skippedFiles).toEqual([{ file: 'logo.png', reason: 'Binary file' }]);
     expect(result.findings).toHaveLength(2);
+    expect(result.dismissed).toBeUndefined();
+  });
+
+  it('drops a finding the second check rejects and says how many it dismissed', async () => {
+    let call = 0;
+    const ports: ChangeReviewPorts = {
+      pickConnection: async () => ({ connection: {} as never }),
+      requester: {
+        structuredRequest: async (_connection, _names, _prompt, _schemaName, _schema, parse) => {
+          call += 1;
+          return parse(call === 1
+            ? REPLY
+            : JSON.stringify({ verdicts: [{ index: 0, verdict: 'rejected', reason: 'the diff shows the rename' }, { index: 1, verdict: 'confirmed', reason: 'still imported' }] })) as never;
+        },
+      },
+    };
+    const result = await new DesktopChangeReviewer(ports).reviewFiles('Tidy the styles', [
+      { path: 'src/index.css', diff: 'diff --git a/src/index.css b/src/index.css\n+.hero {}' },
+      { path: 'src/App.css', diff: 'diff --git a/src/App.css b/src/App.css\ndeleted file mode 100644\n-/* x */' },
+    ], 'intermediate');
+    expect(result.dismissed).toBe(1);
+    expect(result.findings).toEqual([{ file: 'src/App.css', severity: 'medium', note: 'Deleted while main.tsx still imports it.', verdict: 'confirmed' }]);
+    expect(result.ok).toBe(false);
   });
 
   it('does not call the model when every file is empty or binary', async () => {

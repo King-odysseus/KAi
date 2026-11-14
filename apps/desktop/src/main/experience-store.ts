@@ -17,6 +17,8 @@ export interface AgentExperience {
   verification: Array<{ command?: string; passed: boolean | null; detail?: string }>;
   changes: Array<{ path: string; additions: number; removals: number; patch?: string }>;
   reviewedForTraining: boolean;
+  /** This run has already been promoted to Brain memory or dismissed as a suggestion. */
+  memorySuggestionReviewed?: boolean;
 }
 
 const CAP = 500;
@@ -44,6 +46,16 @@ export class AgentExperienceStore {
   }
 
   async clear(): Promise<void> { await fs.rm(this.file, { force: true }); }
+
+  async markMemorySuggestionsReviewed(ids: readonly string[]): Promise<void> {
+    const wanted = new Set(ids);
+    if (!wanted.size) return;
+    const next = (await this.list()).map((item) => wanted.has(item.id) ? { ...item, memorySuggestionReviewed: true } : item);
+    await fs.mkdir(path.dirname(this.file), { recursive: true });
+    const temporary = `${this.file}.tmp`;
+    await fs.writeFile(temporary, JSON.stringify(next), 'utf8');
+    await fs.rename(temporary, this.file);
+  }
 
   async exportReviewed(): Promise<string> {
     return (await this.list()).map((item) => JSON.stringify(item)).join('\n');

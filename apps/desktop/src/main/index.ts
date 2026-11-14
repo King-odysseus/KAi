@@ -31,6 +31,7 @@ import { listStylesheets } from './stylesheet-guard';
 import { DesktopMcpRuntime } from './mcp-runtime';
 import { ensureOpenPencilRunning, readOpenPencilDiscovery } from './open-pencil-launcher';
 import { DesktopChangeReviewer } from './change-review';
+import { loadFileAgents, withFileAgents } from './file-agents';
 import { configureCopyCheckpoints } from './copy-checkpoints';
 import { readPlan, writePlan } from './plan-store';
 import { DesktopPlanReviewer, mergePlanItems } from './plan-review';
@@ -1077,6 +1078,10 @@ async function startApplication(): Promise<void> {
     teamRecords: () => teamRecord.list(),
     settings: () => settings.load(),
     projectTeam: async (projectId) => (await preferences.get(projectId))?.agentTeam ?? null,
+    fileAgents: async (projectId) => {
+      const project = (await projects.list()).find((candidate) => candidate.id === projectId);
+      return project ? loadFileAgents(project.path) : [];
+    },
     agentCapabilities: () => agents.capabilities(),
     directApi: async () => {
       const capability = await directApi.capability();
@@ -1107,7 +1112,11 @@ async function startApplication(): Promise<void> {
   ipcContext.teamPlanner = teamPlanner;
   promptGuide = new DesktopPromptGuide({
     settings: () => settings.load(),
-    team: async (projectId) => completeTeam((await preferences.get(projectId))?.agentTeam ?? (await settings.load()).agentTeam),
+    team: async (projectId) => {
+      const project = (await projects.list()).find((candidate) => candidate.id === projectId);
+      const fileRoles = project ? await loadFileAgents(project.path) : [];
+      return withFileAgents(completeTeam((await preferences.get(projectId))?.agentTeam ?? (await settings.load()).agentTeam), fileRoles);
+    },
     projectRoot: async (projectId) => {
       const project = (await projects.list()).find((candidate) => candidate.id === projectId);
       if (!project) throw new Error('Project not found.');

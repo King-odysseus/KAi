@@ -51,7 +51,7 @@
       },
       {
         "command": "kai.createAutomation",
-        "title": "KAI: Create Scheduled Automation"
+        "title": "KAI: Create Automation"
       },
       {
         "command": "kai.manageAutomations",

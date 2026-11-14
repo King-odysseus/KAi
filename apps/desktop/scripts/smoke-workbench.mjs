@@ -10,7 +10,9 @@ import { assertControlsDoNotWrap, assertTogglesCompact } from './layout-checks.m
 import { chooseOption, selectedValue, waitForPage } from './smoke-helpers.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const outputDirectory = path.join(appRoot, 'test-results', 'smoke-workbench');
+const outputDirectory = process.env.KAI_SMOKE_OUTPUT_DIR
+  ? path.resolve(process.env.KAI_SMOKE_OUTPUT_DIR)
+  : path.join(appRoot, 'test-results', 'smoke-workbench');
 const userData = await mkdtemp(path.join(tmpdir(), 'kai-workbench-smoke-'));
 const projectPath = path.join(userData, 'sample-project');
 const secondProjectPath = path.join(userData, 'second-project');
@@ -262,6 +264,29 @@ async function verifyLivePreview(application, page) {
   const prompt = await page.getByLabel('Task prompt').inputValue();
   if (!prompt.includes('Change the selected element') || !prompt.includes('Make the heading shorter and clearer.')) {
     throw new Error(`The preview context was not sent to the composer: ${prompt}`);
+  }
+
+  await page.getByRole('button', { name: 'Mark area' }).click();
+  await preview.evaluate(async (element) => {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      if (await element.executeJavaScript("Boolean(window.__kaiPreviewInspector?.enabled && window.__kaiPreviewInspector?.mode === 'area')").catch(() => false)) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error('The live preview did not enter area annotation mode.');
+  });
+  await preview.evaluate((element) => element.executeJavaScript(`
+    document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 12, clientY: 14 }));
+    document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 180, clientY: 100 }));
+    document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 180, clientY: 100 }));
+    true;
+  `));
+  await page.locator('.preview-selection-card strong').getByText('area', { exact: true }).waitFor({ timeout: 10_000 });
+  await page.getByPlaceholder('Describe what should change...').fill('Align this area with the page grid.');
+  await page.getByRole('button', { name: 'Send to workspace' }).click();
+  await page.getByText('preview-annotation.png', { exact: true }).waitFor({ timeout: 10_000 });
+  const annotatedPrompt = await page.getByLabel('Task prompt').inputValue();
+  if (!annotatedPrompt.includes('Annotated viewport area: x=12, y=14') || !annotatedPrompt.includes('Align this area with the page grid.')) {
+    throw new Error(`The visual annotation was not carried into the composer: ${annotatedPrompt}`);
   }
 
   await page.locator('.preview-status.running').waitFor({ timeout: 20_000 });

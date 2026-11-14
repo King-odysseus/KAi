@@ -109,7 +109,7 @@ import { ensureClaudeSettingsFile, resetClaudeCodeConfig } from './claude-mainte
 import { brainPathInsideRepository, mergeSettingsUpdate, type DesktopServiceController } from './service-controller';
 import type { ProjectPreferenceStore } from './project-preference-store';
 import type { ProjectStore } from './project-store';
-import { buildSkillPrompt, discoverDesktopSkills, skillSummaries } from './skills';
+import { buildSkillPrompt, discoverDesktopSkills, readCapabilityBundleSkills, skillSummaries } from './skills';
 import type { DesktopShell } from './desktop-shell';
 import { mcpText, parseActiveClaims, parseConflictText, parseRecallText, parseUrgentNotes } from './coordination';
 import type { TerminalManager } from './terminal';
@@ -154,6 +154,7 @@ import type { DesktopChangeReviewer } from './change-review';
 import type { DesktopEvals } from './evals';
 import { escalatedLevel, summarizeScores, type RunScoreStore } from './run-scores';
 import { makeAgentExperience, type AgentExperienceStore } from './experience-store';
+import { suggestMemoryImprovements } from './experience-suggestions';
 import type { DesktopScheduler, ScheduledRunOutcome } from './scheduler';
 import type { DesktopWorkflowRunner } from './workflow-runner';
 import type { DesktopCrewRunner } from './crew-runner';
@@ -177,6 +178,10 @@ import type { StudioStyleReferenceStore } from './style-references';
 import type { EqualizerService } from './equalizer';
 import { resolveInside } from './project-files';
 import { suggestPermissionRules } from './permission-setup';
+import { deferredToolSummary } from './deferred-tools';
+import { recheckReportItems } from './security-recheck';
+import { parseNextCheck, selfPacedInstruction } from './self-paced';
+import { suggestPermissionRules as suggestHistoryRules, type ApprovalLike } from './permission-suggestions';
 import { ComposerQueueStore } from './composer-queue-store';
 import type { PromptPresetStore } from './prompt-preset-store';
 import type { PlaywrightViewportStatus } from '@kai/contracts';
@@ -578,11 +583,28 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     };
   });
   handle(context, 'skills:list', async ({ projectId }) => listSkills(context, projectId));
+  handle(context, 'skills:bundle-content', async ({ projectId, names }) => {
+    const project = await resolveProject(context, projectId, true);
+    return readCapabilityBundleSkills(project.path, names);
+  });
   handle(context, 'files:choose', async ({ projectId }) => chooseProjectFiles(context, projectId));
   handle(context, 'files:search', async ({ projectId, query }) => searchProjectFiles(context, projectId, query));
   handle(context, 'permission-rules:suggest', async ({ projectId }) => {
     const project = await resolveProject(context, projectId, true);
-    return suggestPermissionRules(await fs.realpath(project.path));
+    const fromScripts = await suggestPermissionRules(await fs.realpath(project.path));
+    // Also learn from what the user has already been asked: a command approved over and over becomes a rule to accept.
+    const existing = (await context.preferences.get(project.id))?.automation?.permissionRules ?? [];
+    const recent = (await context.conversations.listSummaries())
+      .filter((summary) => summary.projectId === project.id)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, 30);
+    const events = (await Promise.all(recent.map((summary) => context.conversations.get(summary.id).catch(() => null))))
+      .flatMap((conversation) => conversation?.events ?? []);
+    const seen = new Set(fromScripts.map((rule) => rule.id));
+    const fromHistory = suggestHistoryRules(events as ApprovalLike[], [...existing, ...fromScripts])
+      .map((suggestion) => suggestion.rule)
+      .filter((rule) => !seen.has(rule.id));
+    return [...fromScripts, ...fromHistory];
   });
   handle(context, 'context:git-diff', async ({ projectId }) => gitDiffForProject(context, projectId));
   handle(context, 'attachments:save', async ({ name, dataUrl }) => saveAttachment(context, name, dataUrl));
@@ -1347,6 +1369,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     return context.changeReviewer.reviewFiles(reviewRequest ?? '', files, mode);
   });
   handle(context, 'experiences:count', async () => (await context.experiences.list()).length);
+  handle(context, 'experiences:suggestions', async () => suggestMemoryImprovements(await context.experiences.list()));
+  handle(context, 'experiences:suggestions:review', async ({ recordIds }) => { await context.experiences.markMemorySuggestionsReviewed(recordIds); return true; });
   handle(context, 'experiences:export', async (_input, request) => {
     const records = await context.experiences.exportReviewed();
     if (!records) return null;
@@ -1661,7 +1685,7 @@ export async function runScheduledGoal(context: IpcContext, schedule: Schedule):
     context,
     {
       conversationId: conversation.id,
-      prompt: schedule.prompt,
+      prompt: schedule.frequency.kind === 'selfPaced' ? `${schedule.prompt}${selfPacedInstruction(schedule.frequency.maxMinutes)}` : schedule.prompt,
       agent: schedule.agent,
       execution: schedule.execution,
       route: schedule.route,
@@ -1671,7 +1695,8 @@ export async function runScheduledGoal(context: IpcContext, schedule: Schedule):
     null,
   );
   const summary = result.status === 'completed' ? result.output.replace(/\s+/g, ' ').trim().slice(0, 300) || 'Completed.' : result.error ?? 'The run failed.';
-  return { status: result.status === 'completed' ? 'completed' : 'failed', summary, conversationId: conversation.id };
+  const nextCheck = schedule.frequency.kind === 'selfPaced' ? parseNextCheck(result.output) : undefined;
+  return { status: result.status === 'completed' ? 'completed' : 'failed', summary, conversationId: conversation.id, ...(nextCheck ? { nextCheck } : {}) };
 }
 
 /**
@@ -1742,6 +1767,7 @@ async function runSecurityScan(
   // A verify pass addresses the record it was asked about; a normal pass lets the fingerprint decide, so the same
   // issue found twice updates one row.
   await fileSecurityReport(context, result.output, {
+    projectPath: project.path,
     ...(input.profile === 'verify' && existing ? { findingId: existing.id, verifiedAt: now } : {}),
   });
 
@@ -1762,10 +1788,14 @@ async function runSecurityScan(
 async function fileSecurityReport(
   context: IpcContext,
   output: string | undefined,
-  options: { findingId?: string; verifiedAt?: string } = {},
+  options: { findingId?: string; verifiedAt?: string; projectPath?: string } = {},
 ): Promise<void> {
   if (!output?.trim()) return;
-  for (const item of parseSecurityFindingsReport(output)) {
+  const reported = parseSecurityFindingsReport(output);
+  // A fresh scan gets a sceptical second look before it is filed; a verify pass already re-tests one record by hand.
+  // Doubts are written into the evidence, never used to drop a finding.
+  const items = options.findingId || !options.projectPath ? reported : await recheckReportItems(reported, options.projectPath, context.changeReviewer);
+  for (const item of items) {
     await context.securityFindings.add({
       severity: item.severity,
       vulnClass: item.vulnClass,
@@ -2378,7 +2408,7 @@ export async function runConversationAgent(
     projectContextText: snapshotProjectContext.text.slice(0, 2_000_000),
     projectContextTextTruncated: snapshotProjectContext.text.length > 2_000_000,
     sections: snapshotProjectContext.preview.sections,
-    supplementalSources: snapshotSupplementalSources,
+    supplementalSources: [...snapshotSupplementalSources, ...[deferredToolSummary(execution.events as Array<{ type: string } & Record<string, unknown>>)].filter((line): line is string => Boolean(line))].slice(0, 50),
   });
   recordDeliveredInterjections();
   if (executionMode === 'api' && execution.status === 'failed') {
@@ -2578,7 +2608,7 @@ export async function runConversationAgent(
   const securityAudit = request.skills?.includes('security-auditor')
     || conversation.turns.some((turn) => turn.role === 'user' && /\$security-auditor\b|security-auditor skill/i.test(turn.text));
   if (securityAudit && !cancelled && execution.status === 'completed') {
-    await fileSecurityReport(context, execution.output).catch((error) => {
+    await fileSecurityReport(context, execution.output, { projectPath: workRoot }).catch((error) => {
       context.logger.warn('internal', 'Could not file the security audit report', error instanceof Error ? error.message : String(error));
     });
   }

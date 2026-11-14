@@ -66,6 +66,7 @@ import {
   Wand2,
   X,
 } from 'lucide-react';
+import { PlanApprovalBar, PLAN_APPROVED_PROMPT } from './PlanApprovalBar';
 import { Fragment, memo, useCallback, useEffect, useRef, useState, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
 import type {
@@ -165,6 +166,7 @@ export interface WorkspaceCommandRequest {
   kind: WorkspaceCommandKind;
   nonce: number;
   prompt?: string;
+  previewImage?: { name: string; dataUrl: string };
 }
 
 interface WorkspaceViewProps {
@@ -467,6 +469,7 @@ export function WorkspaceView({
   const [fileQuery, setFileQuery] = useState('');
   const [fileResults, setFileResults] = useState<string[]>([]);
   const [contextBusy, setContextBusy] = useState(false);
+  const [previewAttachmentSaving, setPreviewAttachmentSaving] = useState(false);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [skillQuery, setSkillQuery] = useState('');
@@ -724,7 +727,17 @@ export function WorkspaceView({
       window.setTimeout(() => promptRef.current?.focus(), 0);
     } else if (commandRequest.kind === 'preview-change') {
       setPrompt(commandRequest.prompt ?? '');
-      setWorkbenchNotice('Preview context added. Add any extra detail, then send the change request.');
+      const previewImage = commandRequest.previewImage;
+      if (previewImage?.dataUrl) {
+        setPreviewAttachmentSaving(true);
+        setWorkbenchNotice('Saving the annotated preview image…');
+        void window.kaiDesktop.saveAttachment(previewImage.name, previewImage.dataUrl).then(unwrap).then((chip) => {
+          if (chip.type !== 'image') throw new Error('KAI could not save the preview annotation as an image.');
+          setContextChips((current) => [...current.filter((item) => item.type !== 'image' || item.name !== chip.name), chip]);
+          setWorkbenchNotice('Annotated preview image attached. Add any extra detail, then send the change request.');
+        }).catch((caught) => setWorkbenchNotice(messageOf(caught))).finally(() => setPreviewAttachmentSaving(false));
+      }
+      else setWorkbenchNotice('Preview context added. Add any extra detail, then send the change request.');
       window.setTimeout(() => promptRef.current?.focus(), 0);
     } else if (commandRequest.kind === 'prompt') {
       setPrompt(commandRequest.prompt ?? '');
@@ -863,6 +876,20 @@ export function WorkspaceView({
   // Declared after the handler it wraps: a `const` arrow is not hoisted, so reading it above its own definition
   // would throw on the first render.
   const queueOrSendStable = useLatestHandler(queueOrSend);
+
+  // Approving a plan changes the access level and then sends. The level lives in the parent, so the send waits for
+  // the render that carries it; sending in the same tick would still run under Plan and be refused.
+  const [approvedPlanPrompt, setApprovedPlanPrompt] = useState<string | null>(null);
+  const [dismissedPlanAt, setDismissedPlanAt] = useState<string | null>(null);
+  useEffect(() => {
+    if (approvedPlanPrompt === null || selectedAutonomy === 'plan') return;
+    const text = approvedPlanPrompt;
+    setApprovedPlanPrompt(null);
+    queueOrSendStable(text);
+  }, [approvedPlanPrompt, selectedAutonomy, queueOrSendStable]);
+  const lastTurn = activeConversation?.turns[activeConversation.turns.length - 1];
+  const planAwaitsApproval = selectedAutonomy === 'plan' && !running && !isAutoLikeIntent(taskIntent)
+    && lastTurn?.role === 'assistant' && lastTurn.text.trim().length > 0 && dismissedPlanAt !== activeConversation?.updatedAt;
 
   const optionsForPrompt = (text: string): WorkspaceSendOptions | undefined => {
     const namedSkills = skills
@@ -2307,6 +2334,15 @@ export function WorkspaceView({
           }}
         />
         {activeProject && <PlanStrip projectId={activeProject.id} conversationId={activeConversation?.id ?? null} refreshKey={activeConversation?.updatedAt} />}
+        {activeProject && planAwaitsApproval && (
+          <PlanApprovalBar
+            projectId={activeProject.id}
+            conversationId={activeConversation?.id ?? null}
+            refreshKey={activeConversation?.updatedAt}
+            onApprove={(level) => { onSelectAutonomy(level); setApprovedPlanPrompt(PLAN_APPROVED_PROMPT); }}
+            onDismiss={() => setDismissedPlanAt(activeConversation?.updatedAt ?? null)}
+          />
+        )}
         {/* `busy` here is the boolean prop. It used to be compared to null, which is always true, so the Stop
             button on this line was disabled on every run: the one control that ends a run was unreachable. */}
         {taskIntent === 'equalizer' && activeProject && (
@@ -2405,8 +2441,8 @@ export function WorkspaceView({
               <IconButton aria-label="Refine prompt" title={refineTitle} disabled={!prompt.trim() || refineBlocked || !refineTarget} onClick={() => void refinePromptDraft()} icon={refiningPrompt ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />} />
               {(running || paused || awaitingApproval) ? (
                 <>
-                  {running && <ComposerSend label="Queue message" title="Queue for the next turn" disabled={!canSendPrompt || busy || refiningPrompt} onClick={send} />}
-                  {running && apiRun && <ComposerSend label="Steer active run" title="Steer this run at its next model step" disabled={!canSendPrompt || interjecting} onClick={interjectNow} icon={<ArrowRight size={14} />} />}
+                  {running && <ComposerSend label="Queue message" title="Queue for the next turn" disabled={!canSendPrompt || busy || refiningPrompt || previewAttachmentSaving} onClick={send} />}
+                  {running && apiRun && <ComposerSend label="Steer active run" title="Steer this run at its next model step" disabled={!canSendPrompt || interjecting || previewAttachmentSaving} onClick={interjectNow} icon={<ArrowRight size={14} />} />}
                   {!awaitingApproval && <ComposerPause paused={paused} onPause={onPause} onResume={onResume} />}
                   <ComposerStop onClick={onCancel} />
                 </>
@@ -2414,7 +2450,7 @@ export function WorkspaceView({
                 <ComposerSend
                   label={isAutoLikeIntent(taskIntent) ? 'Start Auto on this task' : activeConversation ? 'Send message' : 'Start conversation'}
                   title={isAutoLikeIntent(taskIntent) ? 'Send and Auto works it until it is done' : activeConversation ? 'Send message' : 'Start conversation'}
-                  disabled={!activeProject || !canSendPrompt || busy || startingAuto || refiningPrompt || !ready}
+                  disabled={!activeProject || !canSendPrompt || busy || startingAuto || refiningPrompt || previewAttachmentSaving || !ready}
                   sending={startingAuto}
                   onClick={send}
                 />
@@ -2759,7 +2795,7 @@ function RunEventCardBase({ event, originalRequest, projectId, reviewMode, defau
     return <div className="run-event notice"><ShieldCheck size={12} /><span>{event.message}</span></div>;
   }
   if (event.type === 'cost.update') {
-    const details = [event.amountUsd != null ? `$${event.amountUsd.toFixed(4)}` : '', event.inputTokens != null ? `${event.inputTokens} in` : '', event.outputTokens != null ? `${event.outputTokens} out` : ''].filter(Boolean).join(' · ');
+    const details = [event.amountUsd != null ? `$${event.amountUsd.toFixed(4)}` : '', event.inputTokens != null ? `${event.inputTokens} in` : '', event.outputTokens != null ? `${event.outputTokens} out` : '', event.cachedInputTokens && event.inputTokens ? `${Math.min(100, Math.round((event.cachedInputTokens / event.inputTokens) * 100))}% cached${event.cacheSavedUsd ? `, saved $${event.cacheSavedUsd.toFixed(4)}` : ''}` : ''].filter(Boolean).join(' · ');
     return details ? <div className="run-event cost"><span>Usage</span><strong>{details}</strong></div> : null;
   }
   if (event.type === 'error') {

@@ -254,8 +254,9 @@ function SchedulesCard({ projectId }: { projectId: string }): ReactNode {
   const [direct, setDirect] = useState(true);
   const [useApi, setUseApi] = useState(false);
   const [autonomy, setAutonomy] = useState<'plan' | 'full'>('plan');
-  const [kind, setKind] = useState<'interval' | 'daily'>('daily');
+  const [kind, setKind] = useState<'interval' | 'daily' | 'selfPaced'>('daily');
   const [minutes, setMinutes] = useState(60);
+  const [maxMinutes, setMaxMinutes] = useState(720);
   const [time, setTime] = useState('07:30');
 
   const reload = useCallback(async () => {
@@ -273,7 +274,11 @@ function SchedulesCard({ projectId }: { projectId: string }): ReactNode {
     try {
       unwrap(await window.kaiDesktop.saveSchedule({
         projectId, name, prompt, agent, execution: useApi ? 'api' : 'cli', route: direct ? 'direct' : 'proxy', autonomy, enabled: true,
-        frequency: kind === 'daily' ? { kind: 'daily', at: time } : { kind: 'interval', everyMinutes: Math.round(minutes) },
+        frequency: kind === 'daily'
+          ? { kind: 'daily', at: time }
+          : kind === 'selfPaced'
+            ? { kind: 'selfPaced', everyMinutes: Math.round(minutes), maxMinutes: Math.max(Math.round(minutes), Math.round(maxMinutes)) }
+            : { kind: 'interval', everyMinutes: Math.round(minutes) },
       }));
       setName('');
       setPrompt('');
@@ -286,7 +291,7 @@ function SchedulesCard({ projectId }: { projectId: string }): ReactNode {
   }
 
   async function toggle(schedule: Schedule): Promise<void> {
-    const { createdAt: _createdAt, lastRunAt: _lastRunAt, lastStatus: _lastStatus, lastSummary: _lastSummary, lastConversationId: _lastConversationId, ...input } = schedule;
+    const { createdAt: _createdAt, lastRunAt: _lastRunAt, lastStatus: _lastStatus, lastSummary: _lastSummary, lastConversationId: _lastConversationId, nextRunAt: _nextRunAt, ...input } = schedule;
     try {
       unwrap(await window.kaiDesktop.saveSchedule({ ...input, enabled: !schedule.enabled }));
       await reload();
@@ -333,7 +338,7 @@ function SchedulesCard({ projectId }: { projectId: string }): ReactNode {
               <div className="automation-row-main">
                 <strong>{schedule.name}</strong>
                 <small>
-                  {schedule.frequency.kind === 'daily' ? `Daily at ${schedule.frequency.at}` : `Every ${schedule.frequency.everyMinutes} min`}
+                  {schedule.frequency.kind === 'daily' ? `Daily at ${schedule.frequency.at}` : schedule.frequency.kind === 'selfPaced' ? `Paced by the agent (first ${schedule.frequency.everyMinutes} min, up to ${schedule.frequency.maxMinutes})${schedule.nextRunAt ? `, next ${formatWhen(schedule.nextRunAt)}` : ''}` : `Every ${schedule.frequency.everyMinutes} min`}
                   {' · '}{schedule.autonomy === 'full' ? 'Full access' : 'Plan (read only)'}
                   {' · '}Last run {formatWhen(schedule.lastRunAt)}{schedule.lastStatus ? `, ${schedule.lastStatus}` : ''}
                 </small>
@@ -351,10 +356,11 @@ function SchedulesCard({ projectId }: { projectId: string }): ReactNode {
       <div className="field-grid">
         <label className="field"><span>Name</span><UiTextInput value={name} placeholder="Nightly test run" onChange={(event) => setName(event.target.value)} /></label>
         <label className="field"><span>Agent</span><Select value={agent} onChange={(event) => setAgent(event.target.value as Agent)}>{AGENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</Select></label>
-        <label className="field"><span>When</span><Select value={kind} onChange={(event) => setKind(event.target.value as 'interval' | 'daily')}><option value="daily">Every day</option><option value="interval">Every N minutes</option></Select></label>
+        <label className="field"><span>When</span><Select value={kind} onChange={(event) => setKind(event.target.value as 'interval' | 'daily' | 'selfPaced')}><option value="daily">Every day</option><option value="interval">Every N minutes</option><option value="selfPaced">Agent picks the gap</option></Select></label>
         {kind === 'daily'
           ? <label className="field"><span>Time</span><UiTextInput type="time" value={time} onChange={(event) => setTime(event.target.value)} /></label>
-          : <label className="field"><span>Minutes (15 or more)</span><UiTextInput type="number" min={15} max={10080} value={minutes} onChange={(event) => setMinutes(Number(event.target.value))} /></label>}
+          : <label className="field"><span>{kind === 'selfPaced' ? 'First gap, minutes (15 or more)' : 'Minutes (15 or more)'}</span><UiTextInput type="number" min={15} max={10080} value={minutes} onChange={(event) => setMinutes(Number(event.target.value))} /></label>}
+        {kind === 'selfPaced' && <label className="field"><span>Longest gap it may pick, minutes</span><UiTextInput type="number" min={15} max={10080} value={maxMinutes} onChange={(event) => setMaxMinutes(Number(event.target.value))} /></label>}
         <label className="field"><span>Access</span><Select value={autonomy} onChange={(event) => setAutonomy(event.target.value as 'plan' | 'full')}><option value="plan">Plan (read only)</option><option value="full">Full access</option></Select></label>
       </div>
       <label className="field"><span>What should the agent do?</span><Textarea rows={3} value={prompt} placeholder="Run the test suite and summarise anything failing" onChange={(event) => setPrompt(event.target.value)} /></label>

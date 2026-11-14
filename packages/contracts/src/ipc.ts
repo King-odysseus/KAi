@@ -174,7 +174,8 @@ import {
   type TeamPlanFromPartsInput,
 } from './prompt-guide';
 import { teamRecordQuerySchema, type TeamRecordQuery, type TeamRecordAdvice } from './team-record';
-import { experienceLevelSchema } from './experience';
+import { experienceLevelSchema, memoryImprovementSuggestionReviewInputSchema, memoryImprovementSuggestionSchema, type MemoryImprovementSuggestion } from './experience';
+import { capabilityBundleSkillSchema, capabilityBundleSkillsInputSchema, type CapabilityBundle } from './capability-bundle';
 import { reviewChangesInputSchema, type ChangeReviewResult, type ReviewChangesInput } from './review';
 import {
   evalCaseDeleteInputSchema,
@@ -504,6 +505,7 @@ export const ipcChannels = [
   'rules:inject-projects',
   'permission-rules:suggest',
   'skills:list',
+  'skills:bundle-content',
   'files:choose',
   'files:search',
   'files:tree',
@@ -779,6 +781,8 @@ export const ipcChannels = [
   'review:change',
   'review:changes',
   'experiences:count',
+  'experiences:suggestions',
+  'experiences:suggestions:review',
   'experiences:export',
   'experiences:clear',
   'git:pull-request',
@@ -918,6 +922,7 @@ export const ipcInputSchemas = {
   'rules:inject-projects': emptyInputSchema,
   'permission-rules:suggest': z.object({ projectId: z.string().min(1) }).strict(),
   'skills:list': z.object({ projectId: z.string().min(1).optional() }).strict(),
+  'skills:bundle-content': capabilityBundleSkillsInputSchema,
   'files:choose': z.object({ projectId: z.string().min(1) }).strict(),
   'files:search': contextSearchInputSchema,
   'files:tree': z.object({ projectId: z.string().min(1) }).strict(),
@@ -1213,6 +1218,8 @@ export const ipcInputSchemas = {
   'review:change': z.object({ request: z.string().max(4_000), diff: z.string().max(100_000), mode: z.enum(['novice', 'intermediate', 'expert']) }).strict(),
   'review:changes': reviewChangesInputSchema,
   'experiences:count': emptyInputSchema,
+  'experiences:suggestions': emptyInputSchema,
+  'experiences:suggestions:review': memoryImprovementSuggestionReviewInputSchema,
   'experiences:export': emptyInputSchema,
   'experiences:clear': emptyInputSchema,
   'git:pull-request': gitPullRequestInputSchema,
@@ -1277,6 +1284,7 @@ export const cognitive1OperationResponseSchema = cognitive1OperationResultSchema
 export const executionRuleDocumentResponseSchema = executionRuleDocumentSchema;
 export const executionRuleInjectionReportResponseSchema = executionRuleInjectionReportSchema;
 export const skillSummaryListResponseSchema = z.array(skillSummarySchema);
+export const capabilityBundleSkillsResponseSchema = z.array(capabilityBundleSkillSchema);
 export const selectedFilesResponseSchema = z.array(z.string().min(1));
 export const gitDiffStatResponseSchema = gitDiffStatResultSchema;
 export const attachmentResultSchema = contextChipSchema;
@@ -1309,6 +1317,7 @@ export const proxyClaudeResetResponseSchema = proxyClaudeResetResultSchema;
 export const proxyClaudeSettingsResponseSchema = proxyClaudeSettingsResultSchema;
 export const proxyLiveEventResponseSchema = proxyLiveEventSchema;
 export const agentCapabilitiesResponseSchema = z.array(agentCapabilitySchema);
+export const memoryImprovementSuggestionsResponseSchema = z.array(memoryImprovementSuggestionSchema);
 export const agentRunResponseSchema = agentRunResultSchema;
 export const agentCancelResponseSchema = z.boolean();
 export const agentSignInResponseSchema = agentSignInResultSchema;
@@ -1502,6 +1511,7 @@ export interface KaiDesktopBridge {
   saveRule(request: ExecutionRuleSaveInput): Promise<IpcResponse<ExecutionRuleDocument>>;
   injectRulesIntoProjects(): Promise<IpcResponse<ExecutionRuleInjectionReport>>;
   listSkills(projectId?: string): Promise<IpcResponse<SkillSummary[]>>;
+  readCapabilityBundleSkills(request: { projectId: string; names: string[] }): Promise<IpcResponse<CapabilityBundle['skills']>>;
   chooseFiles(projectId: string): Promise<IpcResponse<string[]>>;
   searchFiles(request: ContextSearchInput): Promise<IpcResponse<string[]>>;
   suggestPermissionRules(projectId: string): Promise<IpcResponse<PermissionRule[]>>;
@@ -1929,6 +1939,8 @@ export interface KaiDesktopBridge {
   /** Reads the diffs of several changed files and returns findings that each name their file. */
   reviewChanges(request: ReviewChangesInput): Promise<IpcResponse<ChangeReviewResult>>;
   experienceCount(): Promise<IpcResponse<number>>;
+  experienceSuggestions(): Promise<IpcResponse<MemoryImprovementSuggestion[]>>;
+  markExperienceSuggestionsReviewed(recordIds: string[]): Promise<IpcResponse<boolean>>;
   exportExperiences(): Promise<IpcResponse<{ count: number; path: string } | null>>;
   clearExperiences(): Promise<IpcResponse<boolean>>;
   gitPullRequest(projectId: string, title: string, body: string): Promise<IpcResponse<{ url: string }>>;

@@ -24,6 +24,8 @@ export const reviewFindingSchema = z
     line: z.number().int().positive().optional(),
     severity: z.enum(['high', 'medium', 'low']),
     note: z.string().min(1),
+    /** Set by the second, sceptical pass: 'confirmed' held up against the diff, 'plausible' could not be fully checked. */
+    verdict: z.enum(['confirmed', 'plausible']).optional(),
   })
   .strict();
 export type ReviewFinding = z.infer<typeof reviewFindingSchema>;
@@ -37,6 +39,8 @@ export const changeReviewResultSchema = z
     reviewedFiles: z.array(z.string()),
     /** Files that were not read, and why (binary, no text change, or too much for one review). */
     skippedFiles: z.array(z.object({ file: z.string(), reason: z.string() }).strict()),
+    /** How many findings the sceptical pass threw out as unsupported by the diff. */
+    dismissed: z.number().int().nonnegative().optional(),
   })
   .strict();
 export type ChangeReviewResult = z.infer<typeof changeReviewResultSchema>;

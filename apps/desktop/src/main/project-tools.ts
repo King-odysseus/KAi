@@ -10,6 +10,7 @@ import { writePlan } from './plan-store';
 import { isParallelCopy } from './parallel-session';
 import { BACKGROUND_REFUSAL, launchesBackgroundProcess } from './process-cleanup';
 import { findGitBash } from './terminal';
+import { runTypeDiagnostics } from './type-diagnostics';
 import { WEB_TOOLS, WebToolRuntime, webFetchToolInputSchema, webSearchToolInputSchema, webToolDefinitionsFor } from './web-tools';
 
 const MAX_READ_BYTES = 512 * 1024;
@@ -122,6 +123,8 @@ const updatePlanInputSchema = z
     items: z.array(z.object({ text: z.string().trim().min(1).max(300), state: planItemStateSchema }).strict()).max(50),
   })
   .strict();
+
+const diagnosticsInputSchema = z.object({ path: z.string().trim().min(1).max(1_024).optional() }).strict();
 
 const runCommandInputSchema = z
   .object({
@@ -384,6 +387,16 @@ export const projectToolDefinitions = [
   },
   {
     type: 'function',
+    name: 'diagnostics',
+    description: 'Read the project\'s current errors straight from its checker (TypeScript, or ruff/mypy for Python, cargo check for Rust, go vet for Go), as file, line, column, code and message. Cheaper and more exact than running a build and reading its output. Pass path to look at one file or folder. Run it after editing code to confirm you broke nothing.',
+    parameters: {
+      type: 'object',
+      properties: { path: { type: 'string', description: 'Optional project-relative file or folder to report on. Omit for the whole project.' } },
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
     name: 'run_command',
     description: 'Run a shell command in the active project. Commands use your user permissions and may access resources outside the project, so approval is required outside Full mode.',
     parameters: {
@@ -509,7 +522,8 @@ export class DesktopProjectToolRuntime {
   }
 
   policy(name: string, autonomy: AutonomyMode): ProjectToolPolicy {
-    if (name === 'view_image' || name === 'read_file' || name === 'search_files' || name === 'list_files') return { decision: 'allow' };
+    // `diagnostics` runs the project's TypeScript compiler without a shell and with --noEmit, so it only reads.
+    if (name === 'view_image' || name === 'read_file' || name === 'search_files' || name === 'list_files' || name === 'diagnostics') return { decision: 'allow' };
     // The plan is the model's own note about where the task has got to, and KAI reads it to decide whether a task
     // is finished — so it is allowed at every level, plan mode included. It writes `.kai/plan.json` and nothing
     // else: it cannot touch project source. Without this line it fell through to the deny below as an unknown tool,
@@ -593,6 +607,12 @@ export class DesktopProjectToolRuntime {
       if (name === 'move_file') return await this.moveFile(moveFileInputSchema.parse(rawInput));
       if (name === 'delete_file') return await this.deleteFile(deleteFileInputSchema.parse(rawInput));
       if (name === 'run_command') return await this.runCommand(runCommandInputSchema.parse(rawInput), signal);
+      if (name === 'diagnostics') {
+        const input = diagnosticsInputSchema.parse(rawInput ?? {});
+        if (input.path) await this.resolveInsideProject(input.path, false);
+        const result = await runTypeDiagnostics(await this.projectRoot(), { path: input.path, signal });
+        return { ok: result.ok, output: result };
+      }
       if (name === 'web_search') {
         const input = webSearchToolInputSchema.parse(rawInput);
         const web = this.web;

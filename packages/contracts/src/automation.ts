@@ -81,6 +81,9 @@ const timeOfDaySchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use a 24-
 export const scheduleFrequencySchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('interval'), everyMinutes: z.number().int().min(15).max(10_080) }).strict(),
   z.object({ kind: z.literal('daily'), at: timeOfDaySchema }).strict(),
+  // The run picks its own next gap (see main/self-paced.ts). `everyMinutes` is the first gap and the fallback when a
+  // run does not say; `maxMinutes` is the longest wait it may choose.
+  z.object({ kind: z.literal('selfPaced'), everyMinutes: z.number().int().min(15).max(10_080), maxMinutes: z.number().int().min(15).max(10_080) }).strict(),
 ]);
 export type ScheduleFrequency = z.infer<typeof scheduleFrequencySchema>;
 
@@ -111,6 +114,8 @@ export const scheduleSchema = scheduleInputSchema
     lastStatus: z.enum(['completed', 'failed']).optional(),
     lastSummary: z.string().max(500).optional(),
     lastConversationId: z.string().optional(),
+    /** When a self-paced schedule's last run asked to be looked at again. */
+    nextRunAt: z.string().optional(),
   })
   .strict();
 export type Schedule = z.infer<typeof scheduleSchema>;

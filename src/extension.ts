@@ -38,7 +38,7 @@ import { WorkbenchViewProvider } from './panel/workbench-view-provider';
 import { RawEventInspector, registerRawInspectorCommand } from './panel/raw-event-inspector';
 import { ProxyManager } from './proxy/proxy-manager';
 import { KaiProxyServer, type ProxyServerConfig } from './proxy/proxy-server';
-import { AutomationStore } from './core/automations';
+import { AutomationStore, type AutomationTrigger } from './core/automations';
 import { buildSkillPrompt, discoverSkills } from './core/skills';
 
 interface SessionRecoveryState {
@@ -307,8 +307,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     automationRuns.delete(event.taskId);
     void automationStore.finishRun(runId, event.status === 'completed' ? 'needsReview' : 'failed', event.detail);
   });
-  const runDueAutomations = async () => {
-    const due = await automationStore.due();
+  const startAutomations = async (due: Awaited<ReturnType<AutomationStore['due']>>, triggerDescription: string) => {
     for (const automation of due) {
       if (orchestrator.getState().isRunning) {
         const run = await automationStore.beginRun(automation);
@@ -320,7 +319,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const skillDefs = await discoverSkills(projectPath);
         const chosen = automation.skills.map((name) => skillDefs.find((skill) => skill.name === name)).filter((skill) => skill !== undefined);
         const started = orchestrator.startTask({
-          prompt: buildSkillPrompt(chosen, `[SCHEDULED AUTOMATION: ${automation.name}]\n${automation.prompt}`),
+          prompt: buildSkillPrompt(chosen, `[AUTOMATION: ${automation.name}]\nTrigger: ${triggerDescription}\n${automation.prompt}`),
           agent: automation.agent,
           route: orchestrator.getState().route,
           autonomy: 'ask',
@@ -333,8 +332,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }
   };
+  const runDueAutomations = async () => startAutomations(await automationStore.due(), 'scheduled interval');
+  const runFileSaveAutomations = async (filePath: string) => startAutomations(
+    await automationStore.dueForFileSave(filePath),
+    `file saved: ${filePath}`,
+  );
   const automationTimer = setInterval(() => { void runDueAutomations(); }, 30_000);
   context.subscriptions.push({ dispose: () => clearInterval(automationTimer) });
+  if (projectPath) context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((document) => {
+    if (document.uri.scheme !== 'file') return;
+    const relative = path.relative(projectPath, document.uri.fsPath);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return;
+    const filePath = relative.split(path.sep).join('/');
+    void runFileSaveAutomations(filePath);
+  }));
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(WorkbenchViewProvider.viewType, workbenchProvider),
     workbenchProvider.registerCheckpointContentProvider(),
@@ -504,19 +515,36 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!name) return;
       const prompt = await vscode.window.showInputBox({ title: 'Automation instructions', prompt: 'Describe the recurring task KAI should run.', validateInput: (value) => value.trim() ? undefined : 'Enter instructions.' });
       if (!prompt) return;
-      const interval = await vscode.window.showInputBox({ title: 'Run interval', prompt: 'Interval in minutes (minimum 5).', value: '1440', validateInput: (value) => /^\d+$/.test(value) && Number(value) >= 5 ? undefined : 'Enter a whole number of at least 5.' });
+      const triggerChoice = await vscode.window.showQuickPick([
+        { label: 'On a schedule', description: 'Run at a regular interval.', id: 'interval' },
+        { label: 'When a matching file is saved', description: 'Run after you save a file that matches a pattern.', id: 'fileSave' },
+      ], { title: 'When should this automation run?' });
+      if (!triggerChoice) return;
+      let trigger: AutomationTrigger = { kind: 'interval' };
+      if (triggerChoice.id === 'fileSave') {
+        const pattern = await vscode.window.showInputBox({
+          title: 'File save pattern', prompt: 'Project-relative glob, for example src/**/*.ts or **/*.md.', value: 'src/**/*.ts',
+          validateInput: (value) => value.trim() && !value.includes('..') && /^[A-Za-z0-9_./*?-]+$/.test(value) ? undefined : 'Use a relative pattern with letters, folders, *, ? and hyphens; do not use ..',
+        });
+        if (!pattern) return;
+        trigger = { kind: 'fileSave', pattern };
+      }
+      const intervalPrompt = trigger.kind === 'fileSave' ? 'Minimum minutes between matching saves (cooldown, at least 5).' : 'Interval in minutes (minimum 5).';
+      const interval = await vscode.window.showInputBox({ title: trigger.kind === 'fileSave' ? 'Automation cooldown' : 'Run interval', prompt: intervalPrompt, value: trigger.kind === 'fileSave' ? '15' : '1440', validateInput: (value) => /^\d+$/.test(value) && Number(value) >= 5 ? undefined : 'Enter a whole number of at least 5.' });
       if (!interval) return;
       const agent = await vscode.window.showQuickPick(AGENT_IDS, { title: 'Choose the agent for this automation' });
       if (!agent) return;
       const skills = await discoverSkills(projectPath);
       const pickedSkills = skills.length ? await vscode.window.showQuickPick(skills.map((skill) => ({ label: skill.name, description: skill.description, picked: false })), { title: 'Optional skills (press Enter to continue)', canPickMany: true }) : [];
-      await automationStore.add({ name: name.trim(), prompt: prompt.trim(), intervalMinutes: Number(interval), agent: agent as AgentId, status: 'active', skills: (pickedSkills ?? []).map((skill) => skill.label) });
-      void vscode.window.showInformationMessage(`KAI automation “${name.trim()}” created. First run is scheduled in ${interval} minutes.`);
+      await automationStore.add({ name: name.trim(), prompt: prompt.trim(), intervalMinutes: Number(interval), trigger, agent: agent as AgentId, status: 'active', skills: (pickedSkills ?? []).map((skill) => skill.label) });
+      void vscode.window.showInformationMessage(trigger.kind === 'fileSave'
+        ? `KAI automation “${name.trim()}” created. It runs when ${trigger.pattern} is saved, with a ${interval}-minute cooldown.`
+        : `KAI automation “${name.trim()}” created. First run is scheduled in ${interval} minutes.`);
     }),
 
     vscode.commands.registerCommand('kai.manageAutomations', async () => {
       const items: vscode.QuickPickItem[] = [
-        ...automationStore.list().map((item) => ({ label: `${item.status === 'active' ? '$(play)' : '$(debug-pause)'} ${item.name}`, description: `Every ${item.intervalMinutes} min · next ${new Date(item.nextRunAt).toLocaleString()}`, detail: item.id })),
+        ...automationStore.list().map((item) => ({ label: `${item.status === 'active' ? '$(play)' : '$(debug-pause)'} ${item.name}`, description: item.trigger?.kind === 'fileSave' ? `On save ${item.trigger.pattern} · ${item.intervalMinutes} min cooldown` : `Every ${item.intervalMinutes} min · next ${new Date(item.nextRunAt).toLocaleString()}`, detail: item.id })),
         ...automationStore.listRuns().filter((run) => run.status === 'needsReview' || run.status === 'failed' || run.status === 'skipped').map((run) => ({ label: `$(eye) Review: ${run.automationName}`, description: `${run.status} · ${new Date(run.startedAt).toLocaleString()}`, detail: `run:${run.id}` })),
       ];
       if (!items.length) { void vscode.window.showInformationMessage('No KAI automations or runs awaiting review.'); return; }

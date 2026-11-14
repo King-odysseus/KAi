@@ -2,6 +2,7 @@ import { BookOpen, CheckCircle2, ChevronRight, ClipboardCopy, FileCode2, GitComp
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { MAX_REVIEW_FILES, type ChangeReviewResult, type GitChange, type ReviewFinding } from '@kai/contracts';
 import { unwrap } from '../types';
+import { reviewToMarkdown } from '../review-markdown';
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
 import { Checkbox, Textarea } from 'flowbite-react';
@@ -233,16 +234,20 @@ function AiReviewResult({ result, isDeleted, onOpen, onFix, onFixAll }: {
   return <div className="guided-review-ai-card" aria-live="polite">
     <div className="guided-review-verdict"><span className={`review-verdict ${tone}`}>{verdict}</span><small>Read {result.reviewedFiles.length} {result.reviewedFiles.length === 1 ? 'file' : 'files'}</small></div>
     {result.summary && <p className="guided-review-summary">{result.summary}</p>}
+    {result.dismissed ? <p className="guided-review-summary">A second check dismissed {result.dismissed} {result.dismissed === 1 ? 'finding' : 'findings'} the diff did not support.</p> : null}
     {result.findings.length > 0 && <>
       <ul className="review-findings">{result.findings.map((finding, index) => <li key={index} className={`review-finding ${finding.severity}`}>
-        <div className="review-finding-head"><span className={`review-chip ${finding.severity}`}>{SEVERITY_LABEL[finding.severity]}</span><span className="review-finding-file" title={finding.file}>{finding.file}{finding.line ? `:${finding.line}` : ''}</span></div>
+        <div className="review-finding-head"><span className={`review-chip ${finding.severity}`}>{SEVERITY_LABEL[finding.severity]}</span><span className="review-finding-file" title={finding.file}>{finding.file}{finding.line ? `:${finding.line}` : ''}</span>{finding.verdict === 'plausible' && <span className="review-chip low" title="A second check could not confirm this from the diff alone.">Unconfirmed</span>}</div>
         <p>{finding.note}</p>
         <div className="review-finding-actions">
           <UiButton type="button" className="secondary-button" disabled={isDeleted(finding.file)} title={isDeleted(finding.file) ? 'This file was deleted.' : undefined} onClick={() => onOpen(finding)}>{finding.line ? 'Open at line' : 'Open file'}</UiButton>
           <UiButton type="button" className="secondary-button" onClick={() => onFix(finding)}>Fix with KAI</UiButton>
         </div>
       </li>)}</ul>
-      {result.findings.length > 1 && <div className="guided-review-actions"><UiButton type="button" className="secondary-button" onClick={onFixAll}>Send all {result.findings.length} to KAI</UiButton></div>}
+      <div className="guided-review-actions">
+        {result.findings.length > 1 && <UiButton type="button" className="secondary-button" onClick={onFixAll}>Send all {result.findings.length} to KAI</UiButton>}
+        <UiButton type="button" className="secondary-button" title="Copies this review as Markdown for a pull request. KAI does not post it anywhere." onClick={() => { void navigator.clipboard.writeText(reviewToMarkdown(result)).catch(() => undefined); }}><ClipboardCopy size={13} /><span>Copy as Markdown</span></UiButton>
+      </div>
     </>}
     {result.skippedFiles.length > 0 && <details className="guided-review-skipped"><summary>{result.skippedFiles.length} not read</summary><ul>{result.skippedFiles.map((skipped) => <li key={skipped.file}><span>{skipped.file}</span><small>{skipped.reason}</small></li>)}</ul></details>}
   </div>;

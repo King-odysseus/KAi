@@ -8,14 +8,16 @@ import { OpenPencilCard } from './OpenPencilCard';
 import { RemoteAccessPanel } from './RemoteAccessPanel';
 import { AgentTeamCard } from './TeamSettings';
 import { ProjectAutomation } from './AutomationSettings';
+import { SaveToBrainDialog } from './SaveToBrain';
 import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups, type SettingsGroup } from './settings-groups';
 import { ThemeColors } from './ThemeColors';
-import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, cliApiKeyCredentialId, DIRECT_PROVIDER_ORDER, EXPERIENCE_PROFILES, experienceProfile, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, WEB_SEARCH_SOURCES, WEB_SEARCH_SOURCE_LABEL, directProviderPreset, isLocalProvider, localProviderGuide, nativeSearchProvider, pickLocalModel, searchCredentialId } from '@kai/contracts';
-import type { AgentConfigImportPreview, AppSettings, ConnectorCatalogEntry, ProjectAutomation as ProjectAutomationSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate, WebSearchTestResult } from '@kai/contracts';
+import { ACCESS_LEVELS, capabilityBundleSchema, CLI_MODEL_SUGGESTIONS, cliApiKeyCredentialId, DIRECT_PROVIDER_ORDER, EXPERIENCE_PROFILES, experienceProfile, KAI_TERMINAL_MCP_SERVER_ID, KAI_WINDOW_MCP_SERVER_ID, OPENPENCIL_MCP_SERVER_ID, PLAYWRIGHT_MCP_SERVER_ID, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, WEB_SEARCH_SOURCES, WEB_SEARCH_SOURCE_LABEL, directProviderPreset, isLocalProvider, localProviderGuide, nativeSearchProvider, pickLocalModel, searchCredentialId } from '@kai/contracts';
+import type { AgentConfigImportPreview, AppSettings, ConnectorCatalogEntry, MemoryImprovementSuggestion, ProjectAutomation as ProjectAutomationSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate, WebSearchTestResult } from '@kai/contracts';
 import { confirmDialog } from './AppDialog';
 import { ModelField } from './ModelField';
 import { ShortcutEditor } from './ShortcutSheet';
 import { shortcutConflicts } from '../shortcuts';
+import { unwrap } from '../types';
 
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
@@ -88,6 +90,11 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
   const [backupsLoading, setBackupsLoading] = useState(true);
   const [backupError, setBackupError] = useState<string | null>(null);
   const [experienceCount, setExperienceCount] = useState(0);
+  const [bundleSkills, setBundleSkills] = useState<Array<{ name: string; description: string }>>([]);
+  const [selectedBundleSkills, setSelectedBundleSkills] = useState<string[]>([]);
+  const [bundleFeedback, setBundleFeedback] = useState<string | null>(null);
+  const [memorySuggestions, setMemorySuggestions] = useState<MemoryImprovementSuggestion[]>([]);
+  const [memoryDraft, setMemoryDraft] = useState<MemoryImprovementSuggestion | null>(null);
   const [experienceMessage, setExperienceMessage] = useState('');
   const [cardFeedback, setCardFeedback] = useState<Record<string, SettingsFeedback | null>>({});
   const [connectorCatalog, setConnectorCatalog] = useState<ConnectorCatalogEntry[]>([]);
@@ -117,7 +124,16 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
   }, []);
   useEffect(() => {
     void window.kaiDesktop.experienceCount().then((response) => { if (response.ok) setExperienceCount(response.data); });
+    void window.kaiDesktop.experienceSuggestions().then((response) => { if (response.ok) setMemorySuggestions(response.data); });
   }, []);
+  useEffect(() => {
+    setBundleSkills([]);
+    setSelectedBundleSkills([]);
+    if (!activeProject) return;
+    void window.kaiDesktop.listSkills(activeProject.id).then((response) => {
+      if (response.ok) setBundleSkills(response.data.map(({ name, description }) => ({ name, description })));
+    });
+  }, [activeProject?.id]);
   useEffect(() => {
     void window.kaiDesktop.listConnectorCatalog().then((response) => {
       if (!response.ok) return;
@@ -132,8 +148,79 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
   const clearExperiences = async (): Promise<void> => {
     if (!(await confirmDialog({ title: 'Delete captured agent experiences?', detail: 'This permanently removes the local experience dataset from this device.', confirmLabel: 'Delete dataset', destructive: true }))) return;
     const response = await window.kaiDesktop.clearExperiences();
-    if (response.ok) { setExperienceCount(0); setExperienceMessage('Local experience dataset deleted.'); }
+    if (response.ok) { setExperienceCount(0); setMemorySuggestions([]); setExperienceMessage('Local experience dataset deleted.'); }
     else setExperienceMessage(response.error.message);
+  };
+  const dismissMemorySuggestion = async (item: MemoryImprovementSuggestion): Promise<void> => {
+    const response = await window.kaiDesktop.markExperienceSuggestionsReviewed(item.recordIds);
+    if (!response.ok) { setExperienceMessage(response.error.message); return; }
+    const resolved = new Set(item.recordIds);
+    setMemorySuggestions((current) => current.filter((suggestion) => !suggestion.recordIds.some((id) => resolved.has(id))));
+  };
+  const copyCapabilityBundle = async (): Promise<void> => {
+    if (!activeProject) return;
+    setBundleFeedback(null);
+    try {
+      const skills = unwrap(await window.kaiDesktop.readCapabilityBundleSkills({ projectId: activeProject.id, names: selectedBundleSkills }));
+      const mcpServers = draft.mcpServers.filter((server) => !isMachineManagedMcpServer(server.id)).map((server) => sanitizeBundleMcpServer(server));
+      const bundle = capabilityBundleSchema.parse({
+        format: 'kai-capability-bundle', version: 1, exportedAt: new Date().toISOString(), skills,
+        team: redactBundleValue(projectTeam ?? draft.agentTeam),
+        ...(projectAutomation ? { projectAutomation: redactBundleValue(projectAutomation) } : {}),
+        mcpServers,
+      });
+      const serialized = JSON.stringify(bundle, null, 2);
+      if (serialized.length > 4_000_000) throw new Error('This bundle is too large to copy. Select fewer skills.');
+      await navigator.clipboard.writeText(serialized);
+      setBundleFeedback(`Copied ${skills.length} skill${skills.length === 1 ? '' : 's'} with their text resources, team roles, ${projectAutomation ? 'project hooks' : 'no project hooks'}, and ${mcpServers.length} user MCP server${mcpServers.length === 1 ? '' : 's'}. Credential values are not included.`);
+    } catch (error) {
+      setBundleFeedback(messageOf(error));
+    }
+  };
+  const importCapabilityBundle = async (): Promise<void> => {
+    if (!activeProject) return;
+    setBundleFeedback(null);
+    let bundle: ReturnType<typeof capabilityBundleSchema.parse>;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text.length > 4_000_000) throw new Error('The clipboard bundle is too large to import.');
+      bundle = capabilityBundleSchema.parse(JSON.parse(text));
+    } catch (error) {
+      setBundleFeedback(error instanceof Error ? error.message : 'The clipboard does not contain a valid KAI capability bundle.');
+      return;
+    }
+    const importedServers = bundle.mcpServers.filter((server) => !isMachineManagedMcpServer(server.id));
+    const detail = [
+      `${bundle.skills.reduce((total, skill) => total + skill.files.length, 0)} skill file${bundle.skills.reduce((total, skill) => total + skill.files.length, 0) === 1 ? '' : 's'} across ${bundle.skills.length} skill${bundle.skills.length === 1 ? '' : 's'} will be installed in this project's .kai/skills folder. Existing matching files will be replaced.`,
+      `${bundle.projectAutomation ? 'Project automation and shell hooks will be replaced; imported shell hooks may run on matching project events.' : 'No project hooks are included.'}`,
+      `${importedServers.length} user MCP server definition${importedServers.length === 1 ? '' : 's'} will be merged by ID. Credential values are not included; credential references may need configuring on this device.`,
+      `${bundle.team ? 'The project team roles will be replaced.' : 'No team roles are included.'}`,
+    ].join('\n');
+    if (!(await confirmDialog({ title: 'Import capability bundle?', detail, confirmLabel: 'Import bundle' }))) return;
+    try {
+      for (const skill of bundle.skills) {
+        for (const file of skill.files) {
+          const filePath = `.kai/skills/${skill.name}/${file.path}`;
+          const previous = await window.kaiDesktop.readProjectFile(activeProject.id, filePath);
+          unwrap(await window.kaiDesktop.writeProjectFile({
+            projectId: activeProject.id, path: filePath, content: file.content,
+            expectedHash: previous.ok ? previous.data.hash : null, eol: 'lf', bom: false,
+          }));
+        }
+      }
+      if (bundle.team && !(await onSaveProjectTeam(bundle.team))) throw new Error('The skills were installed, but the project team could not be saved.');
+      if (bundle.projectAutomation && !(await onSaveProjectAutomation(bundle.projectAutomation))) throw new Error('The project team and skills were imported, but project automation could not be saved.');
+      const mergedServers = [...draft.mcpServers.filter((server) => !importedServers.some((incoming) => incoming.id === server.id)), ...importedServers];
+      if (importedServers.length && !(await onSave({ mcpServers: mergedServers }))) throw new Error('The project capabilities were imported, but MCP settings could not be saved.');
+      setDraft((current) => ({ ...current, mcpServers: mergedServers }));
+      setBundleFeedback('Bundle imported. Review the project skill files and reconnect any MCP credential references that are not available here.');
+      if (bundle.skills.length) {
+        const addedNames = new Set(bundle.skills.map((skill) => skill.name.toLowerCase()));
+        setBundleSkills((current) => [...current.filter((skill) => !addedNames.has(skill.name.toLowerCase())), ...bundle.skills.map(({ name }) => ({ name, description: 'Imported from a KAI capability bundle' }))]);
+      }
+    } catch (error) {
+      setBundleFeedback(messageOf(error));
+    }
   };
   const directPreset = directProviderPreset(draft.directApi.provider);
   const learningPreset = directProviderPreset(draft.learningTutor.provider);
@@ -668,6 +755,28 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
         <section className="settings-section span-two" aria-label="Project automation">
           <div className="section-title"><Wand2 size={17} /><span>Project automation</span></div>
           <ProjectAutomation project={activeProject} automation={projectAutomation} onSaveAutomation={onSaveProjectAutomation} busy={busy} />
+        </section>
+
+        <section className="settings-section span-two" aria-label="Shareable capability bundles">
+          <div className="section-title"><Archive size={17} /><span>Capability bundles</span></div>
+          <p className="settings-note">Share selected skill instructions, your team roles, project automation hooks, and MCP server definitions as JSON. Credential values are excluded. Import previews the effects before changing project files or settings.</p>
+          {!activeProject && <p className="settings-note">Open a project to create or import a bundle.</p>}
+          {activeProject && <>
+            <details className="settings-subsection">
+              <summary>Select skills to include ({selectedBundleSkills.length})</summary>
+              {bundleSkills.length === 0 ? <p className="settings-note">No skills are available in this project's skill paths.</p> : bundleSkills.map((skill) => (
+                <label className="toggle-row" key={skill.name}>
+                  <input type="checkbox" checked={selectedBundleSkills.includes(skill.name)} onChange={(event) => setSelectedBundleSkills((current) => event.target.checked ? [...new Set([...current, skill.name])] : current.filter((name) => name !== skill.name))} />
+                  <span><strong>{skill.name}</strong> — {skill.description}</span>
+                </label>
+              ))}
+            </details>
+            <div className="button-row align-start">
+              <UiButton type="button" className="secondary-button" disabled={busy} onClick={() => void copyCapabilityBundle()}><Archive size={14} /><span>Copy bundle</span></UiButton>
+              <UiButton type="button" className="secondary-button" disabled={busy} onClick={() => void importCapabilityBundle()}><FolderInput size={14} /><span>Import from clipboard</span></UiButton>
+            </div>
+          </>}
+          {bundleFeedback && <p className="settings-note" role="status">{bundleFeedback}</p>}
         </section>
 
         <section className="settings-section">
@@ -1249,6 +1358,22 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           <label className="field"><span>Retention (days)</span><UiTextInput type="number" min={1} max={3650} value={draft.experienceCapture.retentionDays} onChange={(event) => setDraft({ ...draft, experienceCapture: { ...draft.experienceCapture, retentionDays: Math.max(1, Math.min(3650, Number(event.target.value) || 1)) } })} /></label>
           {cardSave('experienceCapture', 'Save experience capture settings', ['experienceCapture'])}
           <div className="backup-create-row"><span>{experienceCount} local run records</span><UiButton type="button" className="secondary-button" disabled={!experienceCount} onClick={() => void exportExperiences()}><Archive size={14} />Export JSONL</UiButton><UiButton type="button" className="secondary-button danger-button" disabled={!experienceCount} onClick={() => void clearExperiences()}><Trash2 size={14} />Delete all</UiButton></div>
+          <div className="section-title"><Wand2 size={15} /><span>Memory suggestions</span></div>
+          <p className="settings-note">KAI looks for the same explicit correction in separate captured runs. Suggestions stay local and are never added to Brain until you review and save them.</p>
+          {!draft.experienceCapture.enabled || !draft.experienceCapture.includeContent
+            ? <p className="settings-note">Enable content capture to suggest memories from corrections. Existing metadata-only records are not inspected.</p>
+            : !activeProject
+              ? <p className="settings-note">Open the matching project to review its memory suggestions.</p>
+              : memorySuggestions.filter((item) => item.projectId === activeProject.id).map((item, index) => (
+                <article className="automation-row" key={`${item.projectId}-${item.title}-${index}`}>
+                  <div className="automation-row-main"><strong>{item.title}</strong><span>Repeated in {item.occurrences} captured runs · {item.examples[0]}</span></div>
+                  <div className="backup-actions">
+                    <UiButton type="button" className="secondary-button" onClick={() => setMemoryDraft(item)}>Review in Brain</UiButton>
+                    <UiButton type="button" className="secondary-button" onClick={() => void dismissMemorySuggestion(item)}>Dismiss</UiButton>
+                  </div>
+                </article>
+              ))}
+          {draft.experienceCapture.enabled && draft.experienceCapture.includeContent && activeProject && memorySuggestions.every((item) => item.projectId !== activeProject.id) && <p className="settings-note">No repeated corrections found for this project.</p>}
           {experienceMessage && <p className="settings-note" role="status">{experienceMessage}</p>}
         </section>
 
@@ -1288,6 +1413,19 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
         </section>
       </div>
       </SettingsCategory>
+      {memoryDraft && activeProject && <SaveToBrainDialog
+        text={`${memoryDraft.title}\n\n${memoryDraft.note}\n\nExamples from your captured requests:\n${memoryDraft.examples.map((item) => `- ${item}`).join('\n')}`}
+        project={activeProject.name}
+        onClose={() => setMemoryDraft(null)}
+        onSaved={(message) => {
+          setExperienceMessage(message);
+          void window.kaiDesktop.markExperienceSuggestionsReviewed(memoryDraft.recordIds).then((response) => {
+            if (!response.ok) { setExperienceMessage(`${message} The suggestion could not be marked as reviewed.`); return; }
+            const resolved = new Set(memoryDraft.recordIds);
+            setMemorySuggestions((current) => current.filter((item) => !item.recordIds.some((id) => resolved.has(id))));
+          });
+        }}
+      />}
       </div>
     </div>
   );
@@ -1568,6 +1706,20 @@ function updateDraftMcpServer(settings: AppSettings, index: number, patch: McpSe
   };
 }
 
+function sanitizeBundleMcpServer(server: McpServer): McpServer {
+  if (server.transport === 'http') return { ...server, url: redactBundleText(server.url) };
+  return {
+    ...server,
+    command: redactBundleText(server.command),
+    args: server.args.map(redactBundleText),
+    cwd: server.cwd ? redactBundleText(server.cwd) : null,
+  };
+}
+
+function isMachineManagedMcpServer(id: string): boolean {
+  return [KAI_TERMINAL_MCP_SERVER_ID, KAI_WINDOW_MCP_SERVER_ID, OPENPENCIL_MCP_SERVER_ID, PLAYWRIGHT_MCP_SERVER_ID].some((managedId) => managedId === id);
+}
+
 function updateDraftMcpServerTransport(settings: AppSettings, index: number, transport: McpServer['transport']): AppSettings {
   const server = settings.mcpServers[index];
   if (!server) return settings;
@@ -1628,4 +1780,24 @@ function formatBytes(value: number): string {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : 'The settings operation failed.';
+}
+
+function redactBundleValue(value: unknown): unknown {
+  if (typeof value === 'string') return redactBundleText(value);
+  if (Array.isArray(value)) return value.map(redactBundleValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+      key,
+      /key|token|secret|password|authorization/i.test(key) ? '[REDACTED]' : redactBundleValue(item),
+    ]));
+  }
+  return value;
+}
+
+function redactBundleText(value: string): string {
+  return value.replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[REDACTED]')
+    .replace(/((?:api[_-]?key|token|secret|password|authorization)\s*[:=]\s*["']?)[^"',\s}]+/gi, '$1[REDACTED]')
+    .replace(/\b(?:sk|gk|xoxb|hf)_[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]')
+    .replace(/(--(?:api[-_]?key|token|secret|password)\s+)(?:"[^"]+"|'[^']+'|[^\s]+)/gi, '$1[REDACTED]')
+    .replace(/(https?:\/\/[^:/\s]+:)[^@/\s]+@/gi, '$1[REDACTED]@');
 }

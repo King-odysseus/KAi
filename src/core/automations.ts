@@ -4,6 +4,7 @@ import type { AgentId } from './types';
 
 export type AutomationStatus = 'active' | 'paused';
 export type AutomationRunStatus = 'running' | 'needsReview' | 'failed' | 'skipped';
+export type AutomationTrigger = { kind: 'interval' } | { kind: 'fileSave'; pattern: string };
 
 export interface KaiAutomation {
   id: string;
@@ -11,6 +12,8 @@ export interface KaiAutomation {
   prompt: string;
   agent: AgentId;
   intervalMinutes: number;
+  /** Missing on older records means the original interval trigger. */
+  trigger?: AutomationTrigger;
   status: AutomationStatus;
   skills: string[];
   nextRunAt: string;
@@ -77,7 +80,20 @@ export class AutomationStore {
   }
 
   async due(now = new Date()): Promise<KaiAutomation[]> {
-    const result = this.data.automations.filter((item) => item.status === 'active' && Date.parse(item.nextRunAt) <= now.getTime());
+    const result = this.data.automations.filter((item) => (item.trigger?.kind ?? 'interval') === 'interval' && item.status === 'active' && Date.parse(item.nextRunAt) <= now.getTime());
+    for (const item of result) {
+      item.lastRunAt = now.toISOString();
+      item.nextRunAt = new Date(now.getTime() + item.intervalMinutes * 60_000).toISOString();
+    }
+    if (result.length) await this.save();
+    return result.map((item) => ({ ...item, skills: [...item.skills] }));
+  }
+
+  async dueForFileSave(filePath: string, now = new Date()): Promise<KaiAutomation[]> {
+    const result = this.data.automations.filter((item) => item.status === 'active'
+      && item.trigger?.kind === 'fileSave'
+      && matchesFilePattern(item.trigger.pattern, filePath)
+      && (!item.lastRunAt || now.getTime() - Date.parse(item.lastRunAt) >= item.intervalMinutes * 60_000));
     for (const item of result) {
       item.lastRunAt = now.toISOString();
       item.nextRunAt = new Date(now.getTime() + item.intervalMinutes * 60_000).toISOString();
@@ -110,4 +126,22 @@ export class AutomationStore {
     await fs.writeFile(temp, JSON.stringify(this.data, null, 2), 'utf8');
     await fs.rename(temp, this.filePath);
   }
+}
+
+export function matchesFilePattern(pattern: string, filePath: string): boolean {
+  const normalizedPath = filePath.replace(/\\/g, '/').replace(/^\.\//, '');
+  const normalizedPattern = pattern.replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!normalizedPattern || normalizedPattern.includes('..')) return false;
+  let source = '^';
+  for (let index = 0; index < normalizedPattern.length; index += 1) {
+    const character = normalizedPattern[index]!;
+    if (character === '*' && normalizedPattern[index + 1] === '*') {
+      index += 1;
+      if (normalizedPattern[index + 1] === '/') { source += '(?:.*/)?'; index += 1; }
+      else source += '.*';
+    } else if (character === '*') source += '[^/]*';
+    else if (character === '?') source += '[^/]';
+    else source += character.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+  }
+  try { return new RegExp(`${source}$`, 'i').test(normalizedPath); } catch { return false; }
 }

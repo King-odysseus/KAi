@@ -41,9 +41,10 @@ import {
   isPublishingCommand,
   type ProjectToolExecution,
 } from './project-tools';
-import { estimateCostUsd } from './usage-budget';
+import { cacheSavingsUsd, estimateCostUsd } from './usage-budget';
 import { WebToolRuntime } from './web-tools';
 import { applyPermissionRules } from './permission-rules';
+import { deferExternalTools } from './deferred-tools';
 import type { ToolHookRunner } from './automation';
 import { RateLimitError, RequestPacer } from './rate-limit';
 import { DEFAULT_MAX_RUN_COST_USD, maxRunCostFromEnvironment, REPEAT_STOP_MESSAGE, REPEAT_WARNING, type RunGuard } from './run-guard';
@@ -93,6 +94,7 @@ const SUBAGENT_WRITER_TOOLS: ReadonlySet<string> = new Set([
   'read_file',
   'search_files',
   'list_files',
+  'diagnostics',
   'web_search',
   'web_fetch',
   'replace_in_file',
@@ -101,6 +103,13 @@ const SUBAGENT_WRITER_TOOLS: ReadonlySet<string> = new Set([
   'write_file',
   'move_file',
 ]);
+
+/** What the provider's prompt cache did for a run, for the usage line. Nothing when it served nothing from cache. */
+function cacheFields(provider: string, model: string, inputTokens: number | undefined, cachedInputTokens: number | undefined): { cachedInputTokens?: number; cacheSavedUsd?: number } {
+  if (!cachedInputTokens || cachedInputTokens <= 0) return {};
+  const saved = isLocalProvider(provider as ProviderId) || !model ? null : cacheSavingsUsd(model, inputTokens ?? 0, cachedInputTokens);
+  return { cachedInputTokens, ...(saved ? { cacheSavedUsd: saved } : {}) };
+}
 
 function costFields(
   provider: string,
@@ -155,6 +164,7 @@ const SUBAGENT_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'read_file',
   'search_files',
   'list_files',
+  'diagnostics',
   'web_search',
   'web_fetch',
 ]);
@@ -1024,9 +1034,11 @@ export class DesktopDirectProviderRuntime {
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId);
     const cancelledDuringToolRuntime = checkCancelledEarly();
     if (cancelledDuringToolRuntime) return cancelledDuringToolRuntime;
+    // One outside-tool view per run: large tool sets are offered through tool_search instead of all at once.
+    const externalPort = deferExternalTools(this.externalFor(projectRoot));
     let externalToolDefinitions: readonly unknown[] = [];
     try {
-      externalToolDefinitions = await this.externalFor(projectRoot)?.definitions() ?? [];
+      externalToolDefinitions = await externalPort?.definitions() ?? [];
     } catch {
       // A broken optional tool provider must not prevent built-in project tools from running.
     }
@@ -1218,7 +1230,7 @@ export class DesktopDirectProviderRuntime {
           toolCalls,
           controller.signal,
           approvals,
-          this.externalFor(projectRoot),
+          externalPort,
           emit,
           (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal, contextText),
           this.taskRunner(request, projectRoot, contextText),
@@ -1305,9 +1317,11 @@ export class DesktopDirectProviderRuntime {
   ): Promise<AgentExecutionResult> {
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId);
     if (controller.signal.aborted) return cancelledEarly(request);
+    // One outside-tool view per run: large tool sets are offered through tool_search instead of all at once.
+    const externalPort = deferExternalTools(this.externalFor(projectRoot));
     let externalToolDefinitions: readonly unknown[] = [];
     try {
-      externalToolDefinitions = await this.externalFor(projectRoot)?.definitions() ?? [];
+      externalToolDefinitions = await externalPort?.definitions() ?? [];
     } catch {
       // A broken optional tool provider must not prevent built-in project tools from running.
     }
@@ -1498,7 +1512,7 @@ export class DesktopDirectProviderRuntime {
           toolCalls,
           controller.signal,
           approvals,
-          this.externalFor(projectRoot),
+          externalPort,
           emit,
           (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal, contextText),
           this.taskRunner(request, projectRoot, contextText),
@@ -1613,9 +1627,11 @@ export class DesktopDirectProviderRuntime {
   ): Promise<AgentExecutionResult> {
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId);
     if (controller.signal.aborted) return cancelledEarly(request);
+    // One outside-tool view per run: large tool sets are offered through tool_search instead of all at once.
+    const externalPort = deferExternalTools(this.externalFor(projectRoot));
     let externalToolDefinitions: readonly unknown[] = [];
     try {
-      externalToolDefinitions = await this.externalFor(projectRoot)?.definitions() ?? [];
+      externalToolDefinitions = await externalPort?.definitions() ?? [];
     } catch {
       // A broken optional tool provider must not prevent built-in project tools from running.
     }
@@ -1827,7 +1843,7 @@ export class DesktopDirectProviderRuntime {
           toolCalls,
           controller.signal,
           approvals,
-          this.externalFor(projectRoot),
+          externalPort,
           emit,
           (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal, contextText),
           this.taskRunner(request, projectRoot, contextText),
@@ -1877,9 +1893,11 @@ export class DesktopDirectProviderRuntime {
   ): Promise<AgentExecutionResult> {
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId);
     if (controller.signal.aborted) return cancelledEarly(request);
+    // One outside-tool view per run: large tool sets are offered through tool_search instead of all at once.
+    const externalPort = deferExternalTools(this.externalFor(projectRoot));
     let externalToolDefinitions: readonly unknown[] = [];
     try {
-      externalToolDefinitions = await this.externalFor(projectRoot)?.definitions() ?? [];
+      externalToolDefinitions = await externalPort?.definitions() ?? [];
     } catch {
       // A broken optional tool provider must not prevent built-in project tools from running.
     }
@@ -2039,7 +2057,7 @@ export class DesktopDirectProviderRuntime {
           toolCalls,
           controller.signal,
           approvals,
-          this.externalFor(projectRoot),
+          externalPort,
           emit,
           (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal, contextText),
           this.taskRunner(request, projectRoot, contextText),
@@ -2508,6 +2526,7 @@ function finishProviderRun(input: {
       outputTokens,
       estimateProvenance: 'measured',
       ...costFields(capability.provider, capability.model, inputTokens, outputTokens, cachedInputTokens),
+      ...cacheFields(capability.provider, capability.model, inputTokens, cachedInputTokens),
     });
   }
   if (error) {

@@ -1,6 +1,18 @@
-import { z } from 'zod';
 import type { AutonomyMode } from './primitives';
 import type { ReviewMode } from './review';
+import { z } from 'zod';
+
+/** A repeated, opt-in captured correction prepared for the user's review before it becomes brain memory. */
+export const memoryImprovementSuggestionSchema = z.object({
+  projectId: z.string().min(1),
+  title: z.string().min(1).max(80),
+  note: z.string().min(1).max(2_000),
+  occurrences: z.number().int().min(2),
+  examples: z.array(z.string().max(4_000)).max(3),
+  recordIds: z.array(z.string().min(1)).min(2).max(500),
+}).strict();
+export const memoryImprovementSuggestionReviewInputSchema = z.object({ recordIds: z.array(z.string().min(1)).min(1).max(500) }).strict();
+export type MemoryImprovementSuggestion = z.infer<typeof memoryImprovementSuggestionSchema>;
 
 /** How much help the person wants. One choice sets the safe defaults the rest of the app starts from. */
 export const experienceLevelSchema = z.enum(['beginner', 'intermediate', 'expert']);

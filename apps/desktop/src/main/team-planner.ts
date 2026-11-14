@@ -29,6 +29,7 @@ import {
 } from '@kai/contracts';
 import { agentName, assignTeam, completeTeam, partLevel, reach, resolveOrchestrator, teamAdvice, type AssignmentEnvironment } from './team-assign';
 import { boardCardPart, boardCardPrompt } from './board-brief';
+import { withFileAgents, type FileAgentRole } from './file-agents';
 import {
   applyGuardrails,
   buildOrchestratorPrompt,
@@ -48,6 +49,8 @@ export interface TeamPlannerPorts {
   settings(): Promise<AppSettings>;
   /** The team saved for one project, when it has its own; null when it uses the team from Settings. */
   projectTeam?(projectId: string): Promise<AgentTeam | null>;
+  /** Roles the project defines as files in `.kai/agents`, added to whichever team applies. */
+  fileAgents?(projectId: string): Promise<FileAgentRole[]>;
   teamRecords?(): Promise<TeamRecordEntry[]>;
   agentCapabilities(): Promise<AgentCapability[]>;
   directApi(): Promise<{ available: boolean; displayName: string; unavailableReason?: string; local?: boolean; provider?: string }>;
@@ -301,7 +304,10 @@ export class DesktopTeamPlanner {
 
   private async teamFor(projectId: string, settings: AppSettings): Promise<{ team: ReturnType<typeof completeTeam>; scope: 'project' | 'settings' }> {
     const own = await this.ports.projectTeam?.(projectId);
-    return own ? { team: completeTeam(own), scope: 'project' } : { team: completeTeam(settings.agentTeam), scope: 'settings' };
+    const fileRoles = await this.ports.fileAgents?.(projectId).catch(() => []) ?? [];
+    return own
+      ? { team: withFileAgents(completeTeam(own), fileRoles), scope: 'project' }
+      : { team: withFileAgents(completeTeam(settings.agentTeam), fileRoles), scope: 'settings' };
   }
 
   private plannerReply(result: AgentRunResult, team: ReturnType<typeof completeTeam>): Promise<ParsedTeamPlan> {

@@ -29,6 +29,14 @@ export function estimateCostUsd(model: string, inputTokens = 0, outputTokens = 0
   return ((inputTokens - cached) * price.input + cached * price.input * CACHE_READ_PRICE_SHARE + outputTokens * price.output) / 1_000_000;
 }
 
+/** What `cachedInputTokens` saved against paying full price for them, in USD, or null when the model has no known price. */
+export function cacheSavingsUsd(model: string, inputTokens = 0, cachedInputTokens = 0): number | null {
+  const price = priceForModel(model);
+  if (!price) return null;
+  const cached = Math.min(Math.max(cachedInputTokens, 0), inputTokens);
+  return (cached * price.input * (1 - CACHE_READ_PRICE_SHARE)) / 1_000_000;
+}
+
 export const WARNING_RATIO = 0.8;
 
 export function limitLevel(ratio: number): UsageLimitStatus['level'] {

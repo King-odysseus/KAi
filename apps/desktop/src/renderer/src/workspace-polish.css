@@ -224,6 +224,9 @@ html[data-theme]:root .agent-setup-banner {
 .agent-setup-actions .secondary-button { min-height: 23px; padding: 2px 7px; border-radius: 4px; font-size: 10px; }
 .agent-setup-actions .secondary-button { border-color: transparent; background: transparent; }
 .plan-strip { margin: 2px clamp(10px, 1.2vw, 18px) 4px; border-color: var(--border); border-radius: 4px; background: var(--bg-subtle); font-size: 10px; }
+.plan-approval { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px clamp(10px, 1.2vw, 18px) 4px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-subtle); font-size: 11px; }
+.plan-approval-text { flex: 1 1 200px; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.plan-approval-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .plan-strip-head { gap: 5px; padding: 4px 7px; font-size: 10px; }
 .plan-strip-items { gap: 2px; padding: 0 7px 5px 22px; font-size: 10px; }
 .plan-item { line-height: 1.35; }

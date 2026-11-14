@@ -83,7 +83,7 @@ export function ProjectsView({
   onRemove: (id: string) => void;
 }): ReactNode {
   const [overviewId, setOverviewId] = useState<string | null>(null);
-  const [overview, setOverview] = useState<{ studio: StudioProjectSummary | null; board: StudioBoard | null; crew: CrewRun[]; workflows: WorkflowRun[]; conversations: ConversationRecord[] } | null>(null);
+  const [overview, setOverview] = useState<{ studio: StudioProjectSummary | null; board: StudioBoard | null; crew: CrewRun[]; workflows: WorkflowRun[]; conversations: ConversationRecord[]; goals: import('../project-goals').ProjectGoalRecord[] } | null>(null);
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [overviewBusy, setOverviewBusy] = useState(false);
   const selected = projects.find((project) => project.id === overviewId) ?? null;
@@ -132,6 +132,15 @@ export function ProjectsView({
             <small>Plan file: {overview.studio.briefPath ?? 'Brief not written yet'}</small>
             {!overview.board || overview.board.cards.length === 0 ? <p>No board cards yet.</p> : <ul className="studio-list">{overview.board.cards.map((card) => <li key={card.id}><strong>{card.title}</strong> · {card.status}{card.reviewDecision ? ` · ${card.reviewDecision}` : ''}</li>)}</ul>}
           </> : <p>No Studio plan is linked to this folder yet.</p>}
+        </section>
+        <section className="ops-panel" aria-label="Project goals">
+          <h2>Project goals ({overview.goals.length})</h2>
+          {overview.goals.length ? <ul className="studio-list">{overview.goals.map(({ conversationId, conversationTitle, goal }) => <li key={goal.id}>
+            <strong>{goal.outcome}</strong> · <Pill tone={goal.status === 'completed' ? 'success' : goal.status === 'paused' ? 'warning' : 'info'}>{goal.status}</Pill>
+            {goal.verification && <p>Proof: {goal.verification}</p>}
+            {goal.constraints && <small>Constraints: {goal.constraints}</small>}
+            <div><small>Conversation: {conversationTitle} · Updated {relativeTime(goal.updatedAt)}</small> <UiButton type="button" className="secondary-button" onClick={() => onOpenConversation(conversationId)}>Open goal</UiButton></div>
+          </li>)}</ul> : <p>No persistent goals are attached to this project yet.</p>}
         </section>
         <section className="ops-panel" aria-label="Crew runs">
           <h2>Crew runs ({overview.crew.length})</h2>

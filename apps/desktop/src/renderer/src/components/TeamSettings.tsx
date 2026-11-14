@@ -1,4 +1,4 @@
-import { CLI_MODEL_SUGGESTIONS, DEFAULT_AUTO_ADD, MAX_CUSTOM_ROLES, TEAM_ROLE_INFO, TEAM_ROLE_IDS, roleAutoAdd, type AgentTeam, type CustomRole, type TeamAssignee, type TeamAutoAdd, type TeamPreset, type TeamRoleId, type TeamRouteChoice } from '@kai/contracts';
+import { agentTeamSchema, CLI_MODEL_SUGGESTIONS, DEFAULT_AUTO_ADD, MAX_CUSTOM_ROLES, TEAM_ROLE_INFO, TEAM_ROLE_IDS, roleAutoAdd, type AgentTeam, type CustomRole, type TeamAssignee, type TeamAutoAdd, type TeamPreset, type TeamRoleId, type TeamRouteChoice } from '@kai/contracts';
 import { Plus, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { TeamRecordAdvice, TeamResolvedAssignee } from '@kai/contracts';
@@ -47,6 +47,7 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
   const [recordError, setRecordError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [clearing, setClearing] = useState(false);
+  const [bundleFeedback, setBundleFeedback] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     const timer = window.setTimeout(() => {
@@ -69,6 +70,32 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
     } catch (error) {
       setRecordError(error instanceof Error ? error.message : 'Could not clear the track record.');
     } finally { setClearing(false); }
+  }
+
+  async function copyTeamBundle(): Promise<void> {
+    const bundle = { format: 'kai-team-bundle', version: 1, team };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(bundle, null, 2));
+      setBundleFeedback('Team bundle copied. It contains role settings and instructions, but no credentials.');
+    } catch {
+      setBundleFeedback('Clipboard access is unavailable. Allow clipboard access and try again.');
+    }
+  }
+
+  async function importTeamBundle(): Promise<void> {
+    try {
+      const parsed: unknown = JSON.parse(await navigator.clipboard.readText());
+      if (!parsed || typeof parsed !== 'object' || !('format' in parsed) || parsed.format !== 'kai-team-bundle'
+        || !('version' in parsed) || parsed.version !== 1 || !('team' in parsed)) {
+        throw new Error('This clipboard does not contain a supported KAI team bundle.');
+      }
+      const validated = agentTeamSchema.safeParse(parsed.team);
+      if (!validated.success) throw new Error('The team bundle is invalid or uses a different KAI format.');
+      onChange(validated.data);
+      setBundleFeedback('Team bundle imported into the current settings draft. Save settings to keep it.');
+    } catch (error) {
+      setBundleFeedback(error instanceof Error ? error.message : 'Could not read the team bundle from the clipboard.');
+    }
   }
 
   function update(role: TeamRoleId, patch: Partial<AgentTeam['roles'][TeamRoleId] & object>): void {
@@ -112,6 +139,11 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
       <div className="button-row align-start">
         <UiButton type="button" className="secondary-button" disabled={clearing} onClick={() => void clearRecord()}>Clear track record</UiButton>
       </div>
+      <div className="button-row align-start">
+        <UiButton type="button" className="secondary-button" onClick={() => void copyTeamBundle()}>Copy team bundle</UiButton>
+        <UiButton type="button" className="secondary-button" onClick={() => void importTeamBundle()}>Import team bundle</UiButton>
+      </div>
+      {bundleFeedback && <p className="settings-note" role="status">{bundleFeedback}</p>}
       {recordError && <p className="settings-feedback error" role="alert">{recordError}</p>}
       <div className="team-roles">
         {TEAM_ROLE_IDS.map((role) => {

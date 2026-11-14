@@ -20,14 +20,7 @@ import { relativeTime, unwrap } from '../types';
 import { UiButton } from './UiButton';
 import { Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
-
-interface PreviewElementSelection {
-  selector: string;
-  tagName: string;
-  text: string;
-  html: string;
-  url: string;
-}
+import { normalizePreviewAnnotationRect, previewAnnotationPrompt, type PreviewAnnotationRect, type PreviewAnnotationSelection } from '../preview-annotations';
 
 interface BrowserIssue {
   id: string;
@@ -42,6 +35,11 @@ interface WebviewElement extends HTMLElement {
   src: string;
   reload(): void;
   executeJavaScript(code: string, userGesture?: boolean): Promise<unknown>;
+  capturePage(rect?: PreviewAnnotationRect): Promise<{
+    toDataURL(): string;
+    getSize(): { width: number; height: number };
+    resize(options: { width: number }): { toDataURL(): string };
+  }>;
   addEventListener(type: string, listener: (event: Event) => void): void;
   removeEventListener(type: string, listener: (event: Event) => void): void;
 }
@@ -50,7 +48,7 @@ type PreviewInspectorTab = 'selection' | 'issues' | 'logs';
 
 export function PreviewView({ activeProject, onRequestChange, onClose }: {
   activeProject: ProjectRecord | null;
-  onRequestChange: (prompt: string) => void;
+  onRequestChange: (prompt: string, image?: { name: string; dataUrl: string }) => void;
   onClose: () => void;
 }): ReactNode {
   const [info, setInfo] = useState<PreviewInfo | null>(null);
@@ -59,7 +57,8 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [inspect, setInspect] = useState(false);
-  const [selection, setSelection] = useState<PreviewElementSelection | null>(null);
+  const [annotateArea, setAnnotateArea] = useState(false);
+  const [selection, setSelection] = useState<PreviewAnnotationSelection | null>(null);
   const [request, setRequest] = useState('');
   const [issues, setIssues] = useState<BrowserIssue[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
@@ -87,6 +86,7 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
     setIssues([]);
     setSelection(null);
     setInspect(false);
+    setAnnotateArea(false);
     setGuestReady(false);
     setInspectorTab('selection');
     if (!projectId) return;
@@ -157,7 +157,7 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
     const selected = (event: Event): void => {
       const detail = event as Event & { channel?: string; args?: unknown[] };
       if (detail.channel !== 'preview:element-selected') return;
-      const value = detail.args?.[0] as Partial<PreviewElementSelection> | undefined;
+      const value = detail.args?.[0] as Partial<PreviewAnnotationSelection> | undefined;
       if (!value || typeof value.selector !== 'string') return;
       setSelection({
         selector: value.selector,
@@ -165,10 +165,12 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
         text: typeof value.text === 'string' ? value.text.slice(0, 4_000) : '',
         html: typeof value.html === 'string' ? value.html.slice(0, 8_000) : '',
         url: typeof value.url === 'string' ? value.url : url,
+        ...(normalizePreviewAnnotationRect(value.annotation) ? { annotation: normalizePreviewAnnotationRect(value.annotation)! } : {}),
       });
       setInspect(false);
+      setAnnotateArea(false);
       setInspectorTab('selection');
-      setNotice('Element captured. Describe the change, then send it to the active agent.');
+      setNotice(value.annotation ? 'Area captured. Describe the change, then send it with the screenshot.' : 'Element captured. Describe the change, then send it to the active agent.');
     };
     guest.addEventListener('console-message', consoleMessage);
     guest.addEventListener('did-fail-load', failedLoad);
@@ -189,12 +191,12 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
     if (!guest || !info || !guestReady) return;
     void (async () => {
       try {
-        await guest.executeJavaScript(elementInspectorScript(inspect));
+        await guest.executeJavaScript(elementInspectorScript(inspect, annotateArea));
       } catch {
         // The webview can be recreated or navigate while inspection is being applied.
       }
     })();
-  }, [guestReady, inspect, info]);
+  }, [guestReady, inspect, annotateArea, info]);
 
   async function start(): Promise<void> {
     if (!projectId) return;
@@ -236,7 +238,24 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
 
   function submitRequest(): void {
     if (!selection || !request.trim()) return;
-    onRequestChange(previewChangePrompt(selection, request.trim(), issues.slice(0, 8)));
+    const rect = selection.annotation;
+    if (rect && webviewRef.current) {
+      const guest = webviewRef.current;
+      const prompt = previewAnnotationPrompt(selection, request.trim(), issues.slice(0, 8));
+      setNotice('Capturing the annotated area…');
+      void guest.capturePage(rect).then((captured) => {
+        const size = captured.getSize();
+        const dataUrl = size.width > 900 ? captured.resize({ width: 900 }).toDataURL() : captured.toDataURL();
+        onRequestChange(prompt, { name: 'preview-annotation.png', dataUrl });
+        setNotice('Area captured and added to the workspace composer.');
+      }).catch(() => {
+        onRequestChange(prompt);
+        setNotice('The area coordinates were sent; KAI could not capture the screenshot.');
+      });
+      return;
+    } else {
+      onRequestChange(previewAnnotationPrompt(selection, request.trim(), issues.slice(0, 8)));
+    }
     setNotice('Change request sent to the workspace composer.');
   }
 
@@ -284,9 +303,12 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
         <div className="preview-url-actions">
           <UiButton type="button" className="icon-button compact" title="Open URL in the preview" aria-label="Open URL in the preview" disabled={!url.trim()} onClick={openUrl}><ExternalLink size={14} /></UiButton>
           <UiButton type="button" className="icon-button compact" title="Reload preview" aria-label="Reload preview" disabled={!url.trim()} onClick={() => webviewRef.current?.reload()}><RefreshCw size={14} /></UiButton>
-          <UiButton type="button" className={`secondary-button preview-inspect-button ${inspect ? 'active' : ''}`} aria-pressed={inspect} disabled={!url.trim()} onClick={() => setInspect((current) => !current)}>
+          <UiButton type="button" className={`secondary-button preview-inspect-button ${inspect && !annotateArea ? 'active' : ''}`} aria-pressed={inspect && !annotateArea} disabled={!url.trim()} onClick={() => { setAnnotateArea(false); setInspect((current) => !current); }}>
             <MousePointerClick size={13} />
-            <span>{inspect ? 'Selecting...' : 'Select element'}</span>
+            <span>{annotateArea ? 'Select element' : inspect ? 'Selecting...' : 'Select element'}</span>
+          </UiButton>
+          <UiButton type="button" className={`secondary-button preview-inspect-button ${annotateArea ? 'active' : ''}`} aria-pressed={annotateArea} disabled={!url.trim()} onClick={() => { setAnnotateArea((current) => !current); setInspect(true); }}>
+            <MousePointerClick size={13} /><span>{annotateArea ? 'Drag an area…' : 'Mark area'}</span>
           </UiButton>
         </div>
       </div>
@@ -437,12 +459,12 @@ function PreviewPaneHeader({ projectName, status, startedAt, onClose }: {
   );
 }
 
-function elementInspectorScript(enabled: boolean): string {
+function elementInspectorScript(enabled: boolean, annotateArea = false): string {
   return `(() => {
     const KEY = '__kaiPreviewInspector';
     const existing = window[KEY];
     if (!existing) {
-      const state = { enabled: false, active: null };
+      const state = { enabled: false, active: null, mode: 'element' };
       const selectorFor = (element) => {
         if (!element || element.nodeType !== 1) return '';
         if (element.id) return '#' + CSS.escape(element.id);
@@ -488,6 +510,7 @@ function elementInspectorScript(enabled: boolean): string {
       }, true);
       document.addEventListener('click', (event) => {
         if (!state.enabled) return;
+        if (state.mode === 'area') { event.preventDefault(); event.stopPropagation(); return; }
         event.preventDefault();
         event.stopPropagation();
         const element = event.target;
@@ -502,7 +525,35 @@ function elementInspectorScript(enabled: boolean): string {
         state.active = null;
         state.enabled = false;
       }, true);
+      document.addEventListener('pointerdown', (event) => {
+        if (!state.enabled || state.mode !== 'area') return;
+        event.preventDefault(); event.stopPropagation();
+        state.start = { x: event.clientX, y: event.clientY };
+        state.overlay = document.createElement('div');
+        Object.assign(state.overlay.style, { position: 'fixed', zIndex: '2147483647', pointerEvents: 'none', border: '2px solid #66e3bd', background: 'rgba(102, 227, 189, 0.12)', boxSizing: 'border-box' });
+        document.documentElement.appendChild(state.overlay);
+      }, true);
+      document.addEventListener('pointermove', (event) => {
+        if (!state.enabled || state.mode !== 'area' || !state.start || !state.overlay) return;
+        const left = Math.min(state.start.x, event.clientX); const top = Math.min(state.start.y, event.clientY);
+        Object.assign(state.overlay.style, { left: left + 'px', top: top + 'px', width: Math.abs(event.clientX-state.start.x) + 'px', height: Math.abs(event.clientY-state.start.y) + 'px' });
+      }, true);
+      document.addEventListener('pointerup', (event) => {
+        if (!state.enabled || state.mode !== 'area' || !state.start) return;
+        event.preventDefault(); event.stopPropagation();
+        const left = Math.max(0, Math.min(state.start.x, event.clientX));
+        const top = Math.max(0, Math.min(state.start.y, event.clientY));
+        const right = Math.min(innerWidth, Math.max(state.start.x, event.clientX));
+        const bottom = Math.min(innerHeight, Math.max(state.start.y, event.clientY));
+        state.start = null;
+        state.overlay?.remove(); state.overlay = null;
+        if (right - left < 4 || bottom - top < 4) return;
+        window.kaiPreview?.select({ selector: '', tagName: 'area', text: '', html: '', url: location.href,
+          annotation: { x: Math.round(left), y: Math.round(top), width: Math.round(right-left), height: Math.round(bottom-top), viewportWidth: innerWidth, viewportHeight: innerHeight } });
+        state.enabled = false;
+      }, true);
     }
+    window[KEY].mode = '${annotateArea ? 'area' : 'element'}';
     window[KEY].enabled = ${enabled ? 'true' : 'false'};
     if (!window[KEY].enabled && window[KEY].active) {
       window[KEY].active.style.outline = window[KEY].active.dataset.kaiOutline || '';
@@ -510,18 +561,6 @@ function elementInspectorScript(enabled: boolean): string {
     }
     return window[KEY].enabled;
   })()`;
-}
-
-function previewChangePrompt(selection: PreviewElementSelection, request: string, issues: BrowserIssue[]): string {
-  return [
-    'Change the selected element in the live application preview.',
-    `Element: ${selection.tagName || 'unknown'}${selection.selector ? ` (${selection.selector})` : ''}`,
-    selection.text ? `Visible text: ${selection.text}` : '',
-    selection.url ? `Page: ${selection.url}` : '',
-    selection.html ? `Element HTML:\n${selection.html}` : '',
-    issues.length ? `Recent browser errors:\n${issues.map((issue) => `- ${issue.level}: ${issue.message}${issue.source ? ` (${issue.source}${issue.line ? `:${issue.line}` : ''})` : ''}`).join('\n')}` : '',
-    `Requested change: ${request}`,
-  ].filter(Boolean).join('\n\n');
 }
 
 function messageOf(error: unknown): string {

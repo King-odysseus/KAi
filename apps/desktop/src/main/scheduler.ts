@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { nextGapMinutes, parseNextCheck, type NextCheck } from './self-paced';
 import { scheduleSchema, type Schedule, type ScheduleFrequency, type ScheduleInput } from '@kai/contracts';
 
 const TICK_MS = 30_000;
@@ -50,7 +51,7 @@ export class ScheduleStore {
 
 /** The most recent moment this schedule was supposed to fire, or null when it has not come round yet. */
 export function lastDueTime(frequency: ScheduleFrequency, anchor: Date, now: Date): Date | null {
-  if (frequency.kind === 'interval') {
+  if (frequency.kind === 'interval' || frequency.kind === 'selfPaced') {
     const due = new Date(anchor.getTime() + frequency.everyMinutes * 60_000);
     return due <= now ? due : null;
   }
@@ -64,6 +65,8 @@ export function lastDueTime(frequency: ScheduleFrequency, anchor: Date, now: Dat
 /** Whether the schedule should run now: it is on, and its next moment has arrived since it last ran. */
 export function isDue(schedule: Schedule, now: Date): boolean {
   if (!schedule.enabled) return false;
+  // A self-paced run named its own next moment; that, not a fixed gap, is when it is due.
+  if (schedule.frequency.kind === 'selfPaced' && schedule.nextRunAt) return new Date(schedule.nextRunAt) <= now;
   const anchor = new Date(schedule.lastRunAt ?? schedule.createdAt);
   return lastDueTime(schedule.frequency, anchor, now) !== null;
 }
@@ -71,8 +74,9 @@ export function isDue(schedule: Schedule, now: Date): boolean {
 /** When the schedule will next fire, for display. */
 export function nextRunTime(schedule: Schedule, now: Date): Date | null {
   if (!schedule.enabled) return null;
+  if (schedule.frequency.kind === 'selfPaced' && schedule.nextRunAt) return new Date(schedule.nextRunAt);
   const anchor = new Date(schedule.lastRunAt ?? schedule.createdAt);
-  if (schedule.frequency.kind === 'interval') return new Date(anchor.getTime() + schedule.frequency.everyMinutes * 60_000);
+  if (schedule.frequency.kind === 'interval' || schedule.frequency.kind === 'selfPaced') return new Date(anchor.getTime() + schedule.frequency.everyMinutes * 60_000);
   const [hours, minutes] = schedule.frequency.at.split(':').map(Number) as [number, number];
   const next = new Date(now);
   next.setHours(hours, minutes, 0, 0);
@@ -84,6 +88,8 @@ export interface ScheduledRunOutcome {
   status: 'completed' | 'failed';
   summary: string;
   conversationId?: string;
+  /** What a self-paced run asked for as its next gap, read from the end of its output. */
+  nextCheck?: NextCheck;
 }
 
 export interface SchedulerPorts {
@@ -155,6 +161,19 @@ export class DesktopScheduler {
     if (due) await this.execute(due);
   }
 
+  /**
+   * When a self-paced schedule runs next. The run's own `NEXT_CHECK` line wins inside the person's bounds; a run that
+   * said nothing falls back to the schedule's default gap, and `stop` switches the schedule off so it needs a person
+   * to turn it back on.
+   */
+  private pace(schedule: Schedule, check: NextCheck | undefined): Partial<Schedule> {
+    if (schedule.frequency.kind !== 'selfPaced') return {};
+    if (check?.kind === 'stop') return { enabled: false, nextRunAt: undefined };
+    const minutes = nextGapMinutes(check, schedule.frequency.everyMinutes, schedule.frequency.maxMinutes);
+    const now = this.ports.now?.() ?? new Date();
+    return { nextRunAt: new Date(now.getTime() + minutes * 60_000).toISOString() };
+  }
+
   private async execute(schedule: Schedule): Promise<Schedule> {
     this.running = true;
     const startedAt = (this.ports.now?.() ?? new Date()).toISOString();
@@ -162,8 +181,10 @@ export class DesktopScheduler {
     let current = await this.store.put({ ...schedule, lastRunAt: startedAt });
     try {
       const outcome = await this.ports.run(current);
+      const pacing = current.frequency.kind === 'selfPaced' ? this.pace(current, outcome.nextCheck) : {};
       current = await this.store.put({
         ...current,
+        ...pacing,
         lastStatus: outcome.status,
         lastSummary: outcome.summary.slice(0, 500),
         ...(outcome.conversationId ? { lastConversationId: outcome.conversationId } : {}),

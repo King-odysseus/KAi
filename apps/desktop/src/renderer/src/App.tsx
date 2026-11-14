@@ -2337,9 +2337,9 @@ export function App(): ReactNode {
     else setPreviewWidth(clamp(next, minimum, maximum));
   }
 
-  function requestPreviewChange(prompt: string): void {
+  function requestPreviewChange(prompt: string, image?: { name: string; dataUrl: string }): void {
     commandNonce.current += 1;
-    setWorkspaceCommand({ kind: 'preview-change', nonce: commandNonce.current, prompt });
+    setWorkspaceCommand({ kind: 'preview-change', nonce: commandNonce.current, prompt, ...(image ? { previewImage: image } : {}) });
     setView('workspace');
   }
 

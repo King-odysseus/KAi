@@ -110,6 +110,10 @@ export const costUpdateEventSchema = eventBaseSchema.extend({
   amountUsd: z.number().nonnegative().optional(),
   inputTokens: z.number().int().nonnegative().optional(),
   outputTokens: z.number().int().nonnegative().optional(),
+  /** The part of `inputTokens` the provider served from its prompt cache, when it reported one. */
+  cachedInputTokens: z.number().int().nonnegative().optional(),
+  /** What those cached tokens saved against full price, in USD. Only set for a priced model. */
+  cacheSavedUsd: z.number().nonnegative().optional(),
   sessionId: z.string().optional(),
   estimateProvenance: z.enum(['measured', 'estimated', 'unknown']).optional(),
   // Set for runs that cost money: a paid API run, or a CLI run through the Universal Proxy, which reaches a provider
