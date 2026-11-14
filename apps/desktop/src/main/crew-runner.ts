@@ -96,7 +96,8 @@ export class DesktopCrewRunner {
   async list(projectId?: string): Promise<CrewRun[]> {
     const runs = await this.ports.list(projectId);
     // A run saved as running with nothing driving it was interrupted (the app closed): it is paused, not running.
-    return runs.map((run) => (run.status === 'running' && !this.active.has(run.id) ? { ...run, status: 'paused' as const } : run));
+    // Planning counts too: a crew closed while the Lead was still writing tasks has nothing driving it either.
+    return runs.map((run) => ((run.status === 'running' || run.status === 'planning') && !this.active.has(run.id) ? { ...run, status: 'paused' as const } : run));
   }
 
   async get(runId: string): Promise<CrewRun | null> {
@@ -136,7 +137,8 @@ export class DesktopCrewRunner {
     if (run.ask || run.status === 'needsYou') throw new Error('This crew is waiting for your answer first.');
     const at = this.now().toISOString();
     return this.resumeWith(run, ownerWindowId, {
-      ...run, status: run.status === 'awaitingApproval' ? 'awaitingApproval' : 'running', updatedAt: at,
+      // A run with no tasks yet was interrupted while planning, so it plans again instead of starting an empty build.
+      ...run, status: run.status === 'awaitingApproval' ? 'awaitingApproval' : run.tasks.length === 0 ? 'planning' : 'running', updatedAt: at,
       // A task that was being built when the run stopped has no result to review, so it waits to be built again.
       tasks: run.tasks.map((task) => (task.status === 'building' ? { ...task, status: 'backlog' as const } : task)),
     });
@@ -198,7 +200,7 @@ export class DesktopCrewRunner {
     const conversation = await this.ports.createConversation(next.projectId, `Crew: ${next.goal.slice(0, 50)}`);
     const active = this.attach(next, ownerWindowId, conversation.id);
     await this.commit(active, next);
-    if (next.status === 'running') active.done = this.drive(active);
+    if (next.status === 'running' || next.status === 'planning') active.done = this.drive(active);
     else this.active.delete(next.id);
     return next;
   }
