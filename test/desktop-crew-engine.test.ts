@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultCrewConfig, crewConfigSchema, crewRunSchema } from '@kai/contracts';
 import type { CrewRun } from '@kai/contracts';
 import {
-  acceptProposal, addTasks, answerAsk, reassignReadOnlyTasks, resolveStuck, startFollowUp, uniqueTaskIds, stuckTask, failBuild, buildReport, enforceLimits, isFinished, parseReview, pickTasks, proposeTask, readyTasks,
+  acceptProposal, addTasks, answerAsk, cleanError, ruleBlock, failBuildSmart, reassignReadOnlyTasks, resolveStuck, startFollowUp, uniqueTaskIds, stuckTask, failBuild, buildReport, enforceLimits, isFinished, parseReview, pickTasks, proposeTask, readyTasks,
   reviewTask, roleAccess, sameFeedback, settle, startTask, subAgentsFor, submitTask, taskBrief, unfinishedReason,
 } from '../apps/desktop/src/main/crew-engine';
 import { parseStuckDecision } from '../apps/desktop/src/main/crew-prompts';
@@ -229,6 +229,61 @@ describe('follow-ups for a finished crew', () => {
     ]);
     expect(drafts.map((draft) => draft.id)).toEqual(['schema-2', 'install', 'schema-2-2']);
     expect(drafts[1]?.dependsOn).toEqual(['schema-2']);
+  });
+});
+
+describe('getting past a rule of the setup instead of retrying into it', () => {
+  const HOOK = 'git commit failed: \u001b[0;31m[BLOCKED]\u001b[0m Self-tagging detected: \'copilot\' Commit messages describe what changed, not which agent did it. Commit blocked.';
+
+  const crew = (): CrewRun => {
+    const base = withTasks(newRun());
+    const started = startTask(base, 'schema', 'builder', T0);
+    return {
+      ...started,
+      tasks: started.tasks.map((task) => (task.id === 'ingest'
+        ? { ...task, note: 'Build failed (3): git commit failed: [BLOCKED] Self-tagging detected: \'copilot\'' }
+        : task)),
+    };
+  };
+
+  it('strips terminal colour codes and the bracket text they leave behind', () => {
+    expect(cleanError('a \u001b[0;31m[BLOCKED]\u001b[0m b')).toBe('a [BLOCKED] b');
+    expect(cleanError('a [0;31m[BLOCKED][0m b')).toBe('a [BLOCKED] b');
+    expect(cleanError('x �[0;31mred')).toBe('x red');
+  });
+
+  it('recognises a hook rejecting a word, a hook blocking a commit, and leaves ordinary failures alone', () => {
+    expect(ruleBlock(HOOK)).toMatchObject({ key: 'selftag:copilot', word: 'copilot' });
+    expect(ruleBlock(HOOK)?.note).toContain('"copilot"');
+    expect(ruleBlock('pre-commit hook failed: lint errors')?.key).toMatch(/^hook:/);
+    expect(ruleBlock('The agent crashed.')).toBeNull();
+    expect(ruleBlock('verify-web-unchanged.mjs:429 threw a TypeError')).toBeNull();
+  });
+
+  it('on the first hit tells every agent the way past it, restarts the task without a retry spent, and resets tasks that failed the same way', () => {
+    const next = failBuildSmart(crew(), 'schema', HOOK, T1);
+    expect(next.goal).toContain('What the crew has learned');
+    expect(next.goal).toContain('Write commit messages that describe what changed without that word');
+    expect(next.knownBlockers).toEqual(['selftag:copilot']);
+    expect(next.tasks.find((task) => task.id === 'schema')).toMatchObject({ status: 'backlog', note: '' });
+    expect(next.tasks.find((task) => task.id === 'ingest')?.note).toBe('');
+    expect(next.status).toBe('running');
+    expect(next.feed.at(-1)?.text).toContain('starts again');
+    expect(taskBrief(next, 'schema')).toContain('Write commit messages that describe what changed without that word');
+  });
+
+  it('counts the same blocker as a failure when it comes back after the instruction was given', () => {
+    const once = failBuildSmart(crew(), 'schema', HOOK, T1);
+    const again = failBuildSmart(startTask(once, 'schema', 'builder', T1), 'schema', HOOK, T1);
+    expect(again.tasks.find((task) => task.id === 'schema')?.note).toMatch(/^Build failed \(1\):/);
+    expect(again.tasks.find((task) => task.id === 'schema')?.note).not.toContain('\u001b');
+    expect(again.goal.match(/What the crew has learned/g)).toHaveLength(1);
+  });
+
+  it('does not repeat the same instruction in the goal', () => {
+    const once = failBuildSmart(crew(), 'schema', HOOK, T1);
+    const twice = failBuildSmart({ ...startTask(once, 'schema', 'builder', T1), knownBlockers: [] }, 'schema', HOOK, T1);
+    expect(twice.goal.split('Write commit messages that describe what changed').length - 1).toBe(1);
   });
 });
 

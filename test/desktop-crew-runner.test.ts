@@ -470,6 +470,32 @@ describe('crew runner', () => {
     expect(run.chat[0]).toMatchObject({ from: 'you', kind: 'steer', text: 'Add a dark mode.' });
   });
 
+  it('gets past a commit hook that rejects a word by telling every agent, without spending retries or asking the person', async () => {
+    const hook = 'git commit failed: \u001b[0;31m[BLOCKED]\u001b[0m Self-tagging detected: \'copilot\' Commit blocked.';
+    const f = fixture({ buildFails: 1, buildError: hook });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('completed');
+    expect(run.knownBlockers).toEqual(['selftag:copilot']);
+    expect(run.goal).toContain('Write commit messages that describe what changed without that word');
+    expect(run.feed.some((entry) => entry.text.includes('rejects the word "copilot"') && entry.text.includes('starts again'))).toBe(true);
+    // The retry's brief carries the instruction, so the second attempt knew what to avoid.
+    const builds = f.requests.filter((request) => request.prompt.includes('Your task: Log schema'));
+    expect(builds.length).toBeGreaterThanOrEqual(2);
+    expect(builds.at(-1)?.prompt).toContain('Write commit messages that describe what changed without that word');
+    expect(run.tasks.find((task) => task.id === 'schema')?.round).toBe(2);
+  });
+
+  it('still stops and asks when the same hook keeps blocking after the instruction was given', async () => {
+    const hook = 'git commit failed: [BLOCKED] Self-tagging detected: \'copilot\' Commit blocked.';
+    const f = fixture({ buildFails: 99, buildError: hook });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('needsYou');
+    expect(run.ask?.message).not.toContain('\u001b');
+    expect(run.goal.match(/Write commit messages that describe what changed/g)).toHaveLength(1);
+  });
+
   it('asks once when an agent has run out of usage, instead of retrying and wasting the retries', async () => {
     const f = fixture({ buildFails: 99, buildError: 'You have reached your usage limit. Try again later.' });
     const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);

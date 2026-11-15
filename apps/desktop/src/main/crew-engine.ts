@@ -517,6 +517,87 @@ export function isUsageLimit(error: string): boolean {
   return /usage limit|rate limit|quota|out of (credits|usage)|credit balance|limit (has been |was )?reached|too many requests|(?:http|status|error|code)[ :]*429|plan limit|insufficient (credit|balance|quota)|subscription (limit|expired)|reached your .{0,24}limit/i.test(error);
 }
 
+/**
+ * An error as a person can read it: terminal colour codes, and the bracket text they leave behind when the escape
+ * character is lost, are removed. A hook's red "[BLOCKED]" used to reach the feed as squares and "[0;31m".
+ */
+export function cleanError(error: string): string {
+  return error.replace(/\u001b?\[(?:\d{1,3}(?:;\d{1,3})*)m/g, '').replace(/�/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/** A failure that comes from a rule of the setup, not from the work, and the instruction that gets past it. */
+export interface RuleBlock {
+  /** The same blocker reads the same, so it is recognised when it comes back. */
+  key: string;
+  /** A sentence for the feed. */
+  summary: string;
+  /** What every agent is told, written as an instruction. */
+  note: string;
+  /** The word a hook rejected, when it named one. */
+  word?: string;
+}
+
+/**
+ * Whether an error is a rule of the environment (a git hook refusing a commit) rather than a fault in the code. Retrying
+ * the same work cannot get past one, so the crew works out the instruction that does and gives it to every agent.
+ */
+export function ruleBlock(error: string): RuleBlock | null {
+  const text = cleanError(error);
+  const tagged = /self-tagging detected:\s*'([^']{1,40})'/i.exec(text);
+  if (tagged) {
+    const word = tagged[1]!.trim();
+    return {
+      key: `selftag:${word.toLowerCase()}`,
+      word,
+      summary: `A commit hook rejects the word "${word}" in commit messages, even though it is part of this project's name. Every agent has been told to leave it out.`,
+      note: `A commit hook rejects any commit message that contains the word "${word}", in any letter case, even when it is part of this project's name or a task title. Write commit messages that describe what changed without that word (for example "assistant panel" instead). Never bypass or disable the hook.`,
+    };
+  }
+  if (/\[BLOCKED\]|commit blocked|(?:pre-commit|commit-msg|pre-push) hook|hook (?:declined|rejected|blocked|failed)/i.test(text)) {
+    return {
+      key: `hook:${text.toLowerCase().replace(/[^a-z]+/g, ' ').trim().slice(0, 60)}`,
+      summary: 'A git hook blocked a commit. Every agent has been told to change the commit so the hook accepts it.',
+      note: `A git hook blocked a commit with this reason: "${text.slice(0, 240)}". Change the commit message, or the change, so the hook accepts it. Never bypass or disable the hook.`,
+    };
+  }
+  return null;
+}
+
+/** Adds what the crew has learned to the goal every agent reads, keeping the start of the goal and at most 4,000 characters. */
+function withGuidance(run: CrewRun, note: string): CrewRun {
+  if (run.goal.includes(note)) return run;
+  const heading = '\n\nWhat the crew has learned:\n';
+  const base = run.goal.includes(heading) ? run.goal : `${run.goal}${heading}`.slice(0, 4_000);
+  const line = `${base.endsWith(heading) ? '' : '\n'}- ${note}`;
+  const room = 4_000 - line.length;
+  return { ...run, goal: `${base.slice(0, Math.max(0, room))}${line}` };
+}
+
+/**
+ * A build that failed, with one difference from `failBuild`: when the failure is a rule of the setup the crew has not
+ * met before, retrying the same way would only fail again, so the instruction that gets past it goes to every agent
+ * first, this task starts again without spending a retry, and any other task that failed the same way starts fresh.
+ * The same blocker coming back after that is counted as a failure like any other.
+ */
+export function failBuildSmart(run: CrewRun, taskId: string, error: string, at: string): CrewRun {
+  const block = ruleBlock(error);
+  if (!block || run.knownBlockers.includes(block.key)) return failBuild(run, taskId, cleanError(error), at);
+  const task = taskOf(run, taskId);
+  const word = block.word?.toLowerCase();
+  const fingerprint = cleanError(error).toLowerCase().slice(0, 40);
+  let next = withGuidance({ ...run, knownBlockers: [...run.knownBlockers, block.key].slice(-20) }, block.note);
+  next = {
+    ...next,
+    updatedAt: at,
+    tasks: next.tasks.map((item) => {
+      if (item.id === taskId) return { ...item, status: 'backlog' as const, note: '', updatedAt: at };
+      const sameCause = item.note.startsWith('Build failed') && (word ? item.note.toLowerCase().includes(word) : item.note.toLowerCase().includes(fingerprint));
+      return sameCause ? { ...item, note: '', updatedAt: at } : item;
+    }),
+  };
+  return feed(next, { who: 'crew', kind: 'info', text: `${block.summary} "${task.title}" starts again.`, taskId }, at);
+}
+
 /** The project's own check failed after every task was accepted: one more task, for a builder, to make it pass. */
 export function addCheckFix(run: CrewRun, output: string, at: string): CrewRun {
   const builder = run.config.roles.find((role) => role.kind === 'builder') ?? run.config.roles.find((role) => roleAccess(role) === 'edit');

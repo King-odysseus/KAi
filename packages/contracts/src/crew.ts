@@ -253,6 +253,9 @@ export const crewRunSchema = z
     followUp: z.string().max(2_000).nullable().default(null),
     // The person's standing instruction to carry on through every phase of the plan without waiting to be told.
     keepGoing: z.boolean().default(false),
+    // Blockers the crew has already worked out a way past (a commit hook rejecting a word, say), so the same one is
+    // not met again as if it were new and its workaround is not repeated.
+    knownBlockers: z.array(z.string().max(120)).max(20).default([]),
     // Whether the Lead writes for someone who is not very technical: no jargon, terms explained the first time.
     explainSimply: z.boolean().default(true),
     // Things waiting for, or already given, the person's yes or no.

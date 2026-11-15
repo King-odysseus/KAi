@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { classifyWork, crewConfigSchema, crewRunSchema } from '@kai/contracts';
 import type { AgentRunRequest, AgentRunResult, ConversationOrigin, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
 import {
-  addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, mergeChat, requestApprovals, answerAsk, enforceLimits, failBuild, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
+  addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, mergeChat, requestApprovals, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
   reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun,
 } from './crew-engine';
 import { askPrompt, coveragePrompt, parseCoverage, parsePlanFull, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
@@ -624,7 +624,7 @@ export class DesktopCrewRunner {
           continue;
         }
         if (outcome.status === 'failed') {
-          await this.commit(active, failBuild(addSpend(active.run, task.id, outcome.costUsd, at()), task.id, outcome.error ?? 'The agent stopped without finishing.', at()));
+          await this.commit(active, failBuildSmart(addSpend(active.run, task.id, outcome.costUsd, at()), task.id, outcome.error ?? 'The agent stopped without finishing.', at()));
           continue;
         }
         if (outcome.status === 'checkFailed') {
@@ -705,7 +705,7 @@ export class DesktopCrewRunner {
     if (active.cancelled) return;
     let run = addSpend(active.run, taskId, result.costUsd ?? 0, at());
     if (result.status === 'failed') {
-      await this.commit(active, failBuild(run, taskId, result.error ?? 'The agent stopped without finishing.', at()));
+      await this.commit(active, failBuildSmart(run, taskId, result.error ?? 'The agent stopped without finishing.', at()));
       return;
     }
     const after = await this.changed(active.run.projectId);
