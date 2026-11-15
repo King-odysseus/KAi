@@ -130,6 +130,9 @@ export const agentRunRequestSchema = z
     // about a run (the lesson for the brain, the note in the project's memory) names this instead of the step's own
     // prompt, which is machinery and not something worth remembering.
     taskText: z.string().trim().min(1).max(20_000).optional(),
+    // A short line shown as this run's message in the conversation, when the prompt is a long brief KAI wrote (a crew's
+    // task or question to the Lead). The run still receives the full prompt; only what the log shows is shortened.
+    displayText: z.string().trim().min(1).max(500).optional(),
     // Which side of the split this run is. The Architect only plans and reviews, changes nothing, and files no lesson.
     splitRole: z.enum(['architect', 'implementer']).optional(),
   })

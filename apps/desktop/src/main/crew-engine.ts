@@ -158,6 +158,40 @@ export function continueToNextPhase(run: CrewRun, remaining: readonly string[], 
   return feed({ ...run, status: 'planning', followUp: request.slice(0, 2_000), remaining: [...remaining], completedAt: null }, { who: 'crew', kind: 'info', text: `Moving on to: ${shorten(next)}` }, at);
 }
 
+/**
+ * Puts what the plan says needs the person's OK on the run as cards, and holds the run until each one is answered. The
+ * crew never decides these for them. Something already answered (approved or declined) in an earlier phase is not asked again.
+ */
+export function requestApprovals(run: CrewRun, items: ReadonlyArray<{ what: string; why: string }>, at: string): CrewRun {
+  const fresh = items.filter((item) => !run.approvals.some((existing) => existing.what.toLowerCase() === item.what.toLowerCase()));
+  if (fresh.length === 0) return run;
+  const added = fresh.map((item, index) => ({ id: `approval-${run.approvals.length + index + 1}`, what: item.what, why: item.why, status: 'pending' as const }));
+  const approvals = [...run.approvals, ...added].slice(-30);
+  const count = added.length;
+  const message = `Before it builds, the crew needs your OK on ${count} ${count === 1 ? 'thing' : 'things'}: ${added.map((item) => item.what).join(', ')}.`;
+  return feed({ ...run, approvals, status: 'needsYou', ask: { reason: 'approval', message } }, { who: 'crew', kind: 'needsYou', text: message }, at);
+}
+
+/**
+ * Records the person's yes or no on one approval card. The answer goes to every agent as plain guidance, and the run
+ * carries on once no card is waiting. A button records it; a sentence in the chat never does.
+ */
+export function decideApproval(run: CrewRun, approvalId: string, approve: boolean, at: string): CrewRun {
+  const approval = run.approvals.find((item) => item.id === approvalId);
+  if (!approval) throw new Error('That approval is no longer on this crew.');
+  if (approval.status !== 'pending') return run;
+  const approvals = run.approvals.map((item) => (item.id === approvalId ? { ...item, status: approve ? ('approved' as const) : ('declined' as const) } : item));
+  const note = approve
+    ? `The person approved: ${approval.what}.`
+    : `The person did not approve: ${approval.what}. Do not add it; find another way.`;
+  let next = addChat(guideCrewRun({ ...run, approvals }, note, at), { from: 'you', kind: 'note', text: approve ? `Approved: ${approval.what}` : `Did not approve: ${approval.what}` }, at);
+  const waiting = approvals.some((item) => item.status === 'pending');
+  if (!waiting && next.ask?.reason === 'approval') {
+    next = feed({ ...next, ask: null, status: 'running' }, { who: 'crew', kind: 'info', text: 'Every approval is answered, so the crew carries on.' }, at);
+  }
+  return next;
+}
+
 /** The role that takes work a read-only role was given: the builder, else any role that may edit files. */
 export function editorRole(config: CrewConfig): CrewConfig['roles'][number] | undefined {
   return config.roles.find((role) => role.kind === 'builder') ?? config.roles.find((role) => roleAccess(role) === 'edit');

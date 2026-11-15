@@ -65,9 +65,10 @@ export function planPrompt(goal: string, config: CrewConfig, conventions: string
     '- Each task has 1 to 5 acceptance criteria that can be checked by reading the code or running a command.',
     '- "dependsOn" lists task ids that must be accepted first. Use it only where order truly matters.',
     '- Give code tasks to a role that writes code. Never give a task to a read-only role.',
+    '- If the plan or the project rules say something needs the person\'s approval before it is built (a new package or dependency, a paid service, deleting data), do NOT assume they approved it. List it under "approvals" with a plain one-line explanation of what it is and why it is wanted, written for someone who is not very technical. Leave "approvals" empty when nothing needs approval.',
     '',
     'Reply shape:',
-    '{"tasks":[{"id":"short-kebab-id","title":"...","role":"builder","description":"...","acceptance":["..."],"dependsOn":[],"designRef":null}]}',
+    '{"tasks":[{"id":"short-kebab-id","title":"...","role":"builder","description":"...","acceptance":["..."],"dependsOn":[],"designRef":null}],"approvals":[{"what":"zod","why":"A small library that checks the messages inside the app are well-formed."}]}',
   ].join('\n');
 }
 
@@ -273,6 +274,12 @@ export function parseCoverage(text: string): { remaining: string[] } | null {
 }
 
 /** A question to the Lead from the Chat tab. It answers from the board and the project, and changes nothing. */
+export function plainLanguageLines(run: Pick<CrewRun, 'explainSimply'>): string[] {
+  return run.explainSimply
+    ? ['Write for a developer who is not very technical: short sentences, no jargon. The first time you use a technical term, say what it means in a few plain words. Say what each thing is for, not only its name.']
+    : [];
+}
+
 export function askPrompt(run: CrewRun, question: string): string {
   const board = run.tasks.filter((task) => !task.proposed);
   const recent = run.feed.slice(-14).map((entry) => `- ${entry.who}: ${entry.text}`);
@@ -280,7 +287,9 @@ export function askPrompt(run: CrewRun, question: string): string {
   return [
     'You are the Lead of a crew. The person who owns this project is asking you a question. Answer it plainly and briefly, in sentences, as you would to a colleague.',
     'Use the board, the recent activity and, where it helps, the project files. Do not change any files and do not start any work.',
-    'If the question is really a request to build or change something, say so and tell them to use "Add work" or "Steer".',
+    'If the question is really a request to build or change something, say so briefly and tell them to press "Run this as work". Do not lecture and do not ask them to retype it.',
+    'You cannot record decisions, approvals or changes from here. Never say that you noted, recorded, approved or changed anything; if they ask you to approve something, say that the Approve button on the crew screen is what records it.',
+    ...plainLanguageLines(run),
     '',
     `Goal: ${run.goal}`,
     `Crew status: ${run.status}${run.ask ? `; waiting on the person: ${run.ask.message}` : ''}`,
@@ -351,4 +360,31 @@ export function parsePlan(text: string): PlannedTask[] | null {
   // Dependencies are written with the ids the model chose; point them at the ids actually used, dropping unknown ones.
   for (const task of planned) task.dependsOn = [...new Set(task.dependsOn.map((id) => alias.get(id) ?? id).filter((id) => seen.has(id) && id !== task.id))];
   return planned;
+}
+
+/** What the Lead says needs the person's OK before the crew builds. Never invented: only what the plan reply lists. */
+export interface PlanApproval {
+  what: string;
+  why: string;
+}
+
+/** The plan's tasks and the approvals it asks for. A reply with no usable tasks is still no plan at all. */
+export function parsePlanFull(text: string): { tasks: PlannedTask[]; approvals: PlanApproval[] } | null {
+  const tasks = parsePlan(text);
+  if (!tasks) return null;
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  let list: unknown;
+  try { list = (JSON.parse(text.slice(start, end + 1)) as { approvals?: unknown }).approvals; } catch { list = []; }
+  const approvals: PlanApproval[] = [];
+  if (Array.isArray(list)) {
+    for (const raw of list) {
+      if (!raw || typeof raw !== 'object') continue;
+      const item = raw as Record<string, unknown>;
+      const what = typeof item.what === 'string' ? item.what.trim().slice(0, 120) : '';
+      if (!what || approvals.some((existing) => existing.what.toLowerCase() === what.toLowerCase())) continue;
+      approvals.push({ what, why: typeof item.why === 'string' ? item.why.trim().slice(0, 600) : '' });
+    }
+  }
+  return { tasks, approvals: approvals.slice(0, 12) };
 }

@@ -3186,3 +3186,16 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .crew-previous-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .crew-previous-list li button { width: 100%; justify-content: flex-start; gap: 10px; text-align: left; }
 .crew-previous-list small { color: var(--text-dim); margin-left: auto; }
+
+/* Approval cards, the phase buttons and the Crew message box. */
+.crew-approvals { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--amber); border-radius: var(--radius); background: color-mix(in srgb, var(--amber) 10%, transparent); }
+.crew-approvals .crew-subheading { display: flex; align-items: center; gap: 6px; margin: 0; }
+.crew-approval-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.crew-approval { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--bg-panel); }
+.crew-approval-copy { display: flex; flex-direction: column; gap: 2px; min-width: 220px; flex: 1; }
+.crew-approval-copy p { margin: 0; color: var(--text-muted); font-size: 12px; }
+.crew-approval-actions { display: inline-flex; gap: 6px; }
+.crew-phases { display: flex; flex-direction: column; gap: 6px; }
+.crew-phase { display: inline-flex; align-items: center; gap: 2px; }
+.crew-mode-select { min-width: 96px; }
+.crew-chat-hint { text-align: center; }

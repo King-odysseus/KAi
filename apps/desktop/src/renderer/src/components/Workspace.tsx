@@ -270,6 +270,8 @@ interface WorkspaceViewProps {
   onOpenRules: () => void;
   onOpenWorkflows: () => void;
   onOpenStudioCard: (studioProjectId: string, cardId: string) => void;
+  /** Opens the Crew screen, where a crew's work log is talked about and the Lead is messaged. */
+  onOpenCrew: () => void;
   onCompactConversation: () => void;
   onContinueInNewTab: () => void;
   /** The side question asked off this conversation, if one has been started. Null until the first question. */
@@ -452,6 +454,7 @@ export function WorkspaceView({
   onOpenRules,
   onOpenWorkflows,
   onOpenStudioCard,
+  onOpenCrew,
   onCompactConversation,
   onContinueInNewTab,
   sideConversation,
@@ -1672,6 +1675,8 @@ export function WorkspaceView({
   // Autopilot runs a Studio plan, so it is reached through the plan this conversation was opened for — the studio id,
   // not the desktop project the plan happens to be registered as. Auto, by contrast, is about this conversation.
   const autopilotOrigin = activeConversation?.origin?.kind === 'autopilot' ? activeConversation.origin : null;
+  /** A crew's work log is read here and never written to: a message typed in it would start an ordinary run, not reach the Lead. */
+  const crewLog = activeConversation?.origin?.kind === 'crew';
   const composerRun = useComposerRun(autopilotOrigin?.studioProjectId ?? null, activeConversation?.id ?? null);
 
   // A run KAI was closed in the middle of. Its status died with the process, so the board is still holding the card
@@ -1810,6 +1815,12 @@ export function WorkspaceView({
             more={[{ key: 'release', label: 'Put the card back', disabled: stoppingRun, onSelect: () => void releaseAutopilotCard() }]}
           >
             The board still has &ldquo;{interruptedAutopilot.cardTitle}&rdquo; marked In progress from an Autopilot run that is no longer going.
+          </NoticeBanner>
+        )}
+
+        {crewLog && (
+          <NoticeBanner primary={<UiButton type="button" variant="secondary" onClick={onOpenCrew}>Open the Crew</UiButton>}>
+            This is a crew&rsquo;s work log, read-only. To ask the Lead something or give the crew more to do, use the Crew tab.
           </NoticeBanner>
         )}
 
@@ -2349,6 +2360,7 @@ export function WorkspaceView({
           <EqualizerPanel projectId={activeProject.id} message={prompt} onFix={applyEqualizerFix} />
         )}
         <Composer
+          className={crewLog ? '!hidden' : ''}
           tone={composerRun?.line.state ?? 'idle'}
           status={composerRun ? (
             <ComposerRunLine

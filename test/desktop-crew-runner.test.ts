@@ -313,6 +313,73 @@ describe('crew runner', () => {
     expect((await runToIdle(unreadable.runner, two.id)).ask?.reason).toBe('sameFailure');
   });
 
+  it('holds the crew for the person\'s yes or no on what the plan says needs approval, and never assumes it', async () => {
+    const withApproval = JSON.stringify({
+      tasks: [{ id: 'shell', title: 'Build the shell', role: 'builder', description: 'Phase 1', acceptance: ['The shell opens'], dependsOn: [] }],
+      approvals: [{ what: 'zod', why: 'A small library that checks the messages inside the app are well-formed.' }],
+    });
+    const f = fixture({ plan: [withApproval] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const held = await runToIdle(f.runner, started.id);
+    expect(held.status).toBe('needsYou');
+    expect(held.ask?.reason).toBe('approval');
+    expect(held.approvals).toMatchObject([{ what: 'zod', status: 'pending' }]);
+    expect(held.tasks.every((task) => task.status === 'backlog')).toBe(true);
+
+    await f.runner.decide(started.id, held.approvals[0]!.id, true, 1);
+    const done = await runToIdle(f.runner, started.id);
+    expect(done.status).toBe('completed');
+    expect(done.approvals[0]?.status).toBe('approved');
+    expect(done.goal).toContain('The person approved: zod.');
+    expect(done.chat.at(-1)).toMatchObject({ from: 'you', kind: 'note', text: 'Approved: zod' });
+  });
+
+  it('tells every agent when an approval is declined, and does not ask for it twice', async () => {
+    const withApproval = JSON.stringify({
+      tasks: [{ id: 'shell', title: 'Build the shell', role: 'builder', description: 'Phase 1', acceptance: ['The shell opens'], dependsOn: [] }],
+      approvals: [{ what: 'zod', why: 'Checks messages.' }],
+    });
+    const again = JSON.stringify({
+      tasks: [{ id: 'gate', title: 'Add gating', role: 'builder', description: 'Phase 2', acceptance: ['Gating works'], dependsOn: [] }],
+      approvals: [{ what: 'ZOD', why: 'Checks messages.' }],
+    });
+    const f = fixture({ plan: [withApproval, again] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const held = await runToIdle(f.runner, started.id);
+    await f.runner.decide(started.id, held.approvals[0]!.id, false, 1);
+    const done = await runToIdle(f.runner, started.id);
+    expect(done.goal).toContain('The person did not approve: zod. Do not add it; find another way.');
+    // A later phase that lists the same thing is not put to them again; they already said no.
+    await f.runner.message(started.id, 'work', 'Start the next phase.', 1);
+    const next = await runToIdle(f.runner, started.id);
+    expect(next.status).toBe('completed');
+    expect(next.approvals).toHaveLength(1);
+  });
+
+  it('finds what is left in the plan on request, without changing the board', async () => {
+    const f = fixture({ coverage: ['{"complete":true}', '{"complete":false,"remaining":["Phase 1: Shell","Phase 2: Providers"]}'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const before = await runToIdle(f.runner, started.id);
+    expect(before.remaining).toEqual([]);
+    const found = await f.runner.findPhases(started.id, 1);
+    expect(found.remaining).toEqual(['Phase 1: Shell', 'Phase 2: Providers']);
+    expect(found.tasks).toEqual(before.tasks);
+    expect(found.status).toBe('completed');
+    expect(found.chat.at(-1)?.text).toContain('Still to do in the plan: Phase 1: Shell; Phase 2: Providers.');
+  });
+
+  it('writes the Lead\'s answers for someone who is not very technical when asked to, and not otherwise', async () => {
+    const f = fixture({ answer: 'Done.' });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    await runToIdle(f.runner, started.id);
+    await f.runner.message(started.id, 'ask', 'What is done?', 1);
+    expect(f.requests.at(-1)?.prompt).toContain('not very technical');
+    expect(f.requests.at(-1)?.prompt).toContain('Never say that you noted, recorded, approved or changed anything');
+    await f.runner.setExplainSimply(started.id, false);
+    await f.runner.message(started.id, 'ask', 'And now?', 1);
+    expect(f.requests.at(-1)?.prompt).not.toContain('not very technical');
+  });
+
   it('says what is left instead of claiming the project is done, when the plan has more phases', async () => {
     const f = fixture({ coverage: ['{"complete":false,"remaining":["Phase 1: Shell and gating","Phase 2: Provider layer"]}'] });
     const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);

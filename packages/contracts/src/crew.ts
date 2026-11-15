@@ -182,7 +182,7 @@ export type CrewFeedEntry = z.infer<typeof crewFeedEntrySchema>;
 /** Why a run stopped to ask. The user answers Continue or Finish; nothing is killed. */
 export const crewAskSchema = z
   .object({
-    reason: z.enum(['spend', 'time', 'sendBacks', 'sameFailure', 'securityBlock', 'designApproval', 'noProgress']),
+    reason: z.enum(['spend', 'time', 'sendBacks', 'sameFailure', 'securityBlock', 'designApproval', 'noProgress', 'approval']),
     message: z.string().max(500),
     taskId: z.string().max(60).optional(),
   })
@@ -204,6 +204,22 @@ export const crewDesignInputSchema = z
     launch: z.boolean().default(false),
   })
   .strict();
+
+/**
+ * Something the plan or the project's rules say needs the person's OK before building, such as a new package. It is
+ * shown as a Yes/No card with a plain explanation, and the answer is recorded by the button, never by a typed sentence.
+ */
+export const crewApprovalSchema = z
+  .object({
+    id: z.string().min(1).max(60),
+    // What would be added or done, in a few words ("zod").
+    what: z.string().min(1).max(120),
+    // Why it is wanted and what it is, for someone who is not very technical.
+    why: z.string().max(600).default(''),
+    status: z.enum(['pending', 'approved', 'declined']).default('pending'),
+  })
+  .strict();
+export type CrewApproval = z.infer<typeof crewApprovalSchema>;
 
 /** One message in the crew's own conversation with the person: what they said, and what the Lead said back. */
 export const crewChatEntrySchema = z
@@ -237,6 +253,10 @@ export const crewRunSchema = z
     followUp: z.string().max(2_000).nullable().default(null),
     // The person's standing instruction to carry on through every phase of the plan without waiting to be told.
     keepGoing: z.boolean().default(false),
+    // Whether the Lead writes for someone who is not very technical: no jargon, terms explained the first time.
+    explainSimply: z.boolean().default(true),
+    // Things waiting for, or already given, the person's yes or no.
+    approvals: z.array(crewApprovalSchema).max(30).default([]),
     // What the Lead found still undone when the board finished, so "done" says what is and is not.
     remaining: z.array(z.string().max(300)).max(20).default([]),
     // The conversation the crew works in, so the person can open the full transcript of what it did.
@@ -299,6 +319,10 @@ export const crewMessageInputSchema = z
   .object({ runId: z.string().min(1), kind: z.enum(['ask', 'steer', 'work']), text: z.string().trim().min(1).max(2_000) })
   .strict();
 export type CrewMessageInput = z.infer<typeof crewMessageInputSchema>;
+
+export const crewDecideInputSchema = z.object({ runId: z.string().min(1), approvalId: z.string().min(1), approve: z.boolean() }).strict();
+export type CrewDecideInput = z.infer<typeof crewDecideInputSchema>;
+export const crewExplainSimplyInputSchema = z.object({ runId: z.string().min(1), explainSimply: z.boolean() }).strict();
 
 export const crewKeepGoingInputSchema = z.object({ runId: z.string().min(1), keepGoing: z.boolean() }).strict();
 

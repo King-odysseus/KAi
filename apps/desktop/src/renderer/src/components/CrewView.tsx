@@ -21,6 +21,7 @@ import { UiTextInput } from './UiTextInput';
 import { PageHeader } from './ui/PageHeader';
 import { crewLimitPolicy } from '../cost-visibility';
 import { collapseFeed } from '../crew-feed';
+import { CrewApprovals } from './CrewApprovals';
 import { CrewChat } from './CrewChat';
 import { CrewDone } from './CrewDone';
 
@@ -154,6 +155,22 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
   async function keepGoing(on: boolean): Promise<void> {
     if (!activeRun) return;
     reconcile(unwrap(await window.kaiDesktop.setCrewKeepGoing(activeRun.id, on)));
+  }
+
+  async function explainSimply(on: boolean): Promise<void> {
+    if (!activeRun) return;
+    reconcile(unwrap(await window.kaiDesktop.setCrewExplainSimply(activeRun.id, on)));
+  }
+
+  async function findPhases(): Promise<void> {
+    if (!activeRun) return;
+    reconcile(unwrap(await window.kaiDesktop.findCrewPhases(activeRun.id)));
+  }
+
+  /** One yes or no on an approval card. The crew carries on once every card is answered. */
+  function decideApproval(approvalId: string, approve: boolean): void {
+    if (!activeRun) return;
+    void run(async () => unwrap(await window.kaiDesktop.decideCrewApproval(activeRun.id, approvalId, approve)));
   }
 
   /** Hands a finished crew more work. The Lead plans it onto the same board, which then runs again. */
@@ -310,7 +327,8 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
               <UiButton type="button" className="primary-button" disabled={working} onClick={() => void run(async () => { const next = unwrap(await window.kaiDesktop.answerCrew(activeRun.id, 'continue', briefDiff)); setBriefDiff(null); return next; })}>Tell the Lead</UiButton>
             </div>
           )}
-          {activeRun?.ask && (
+          {activeRun?.ask?.reason === 'approval' && <CrewApprovals run={activeRun} working={working} onDecide={decideApproval} />}
+          {activeRun?.ask && activeRun.ask.reason !== 'approval' && (
             <div className="needs-you tone-needs-you" role="status">
               <span className="needs-you-icon" aria-hidden="true"><AlertTriangle size={15} /></span>
               <div className="needs-you-body">
@@ -408,7 +426,7 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
               onSavings={(patch) => updateDraft((current) => ({ ...current, savings: { ...current.savings, ...patch } }))} />
           )}
           {tab === 'chat' && (activeRun
-            ? <CrewChat run={activeRun} activity={<LiveActivity run={activeRun} />} working={working} onSend={sendMessage} onKeepGoing={keepGoing}
+            ? <CrewChat run={activeRun} activity={<LiveActivity run={activeRun} />} working={working} onSend={sendMessage} onKeepGoing={keepGoing} onExplainSimply={explainSimply} onFindPhases={findPhases} onDecide={decideApproval}
                 onPause={() => void run(async () => unwrap(await window.kaiDesktop.pauseCrew(activeRun.id)))}
                 onResume={() => void run(async () => unwrap(await window.kaiDesktop.resumeCrew(activeRun.id)))}
                 onStop={() => void run(async () => unwrap(await window.kaiDesktop.stopCrew(activeRun.id)))}

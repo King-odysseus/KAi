@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, protocol, screen, session, shell } from 'electron';
 import { MOCKUP_CSP, MOCKUP_SCHEME, serveMockup } from './mockup-server';
-import { DIRECT_PROVIDER_ORDER, cliApiKeyCredentialId, KAI_TERMINAL_CREDENTIAL_ID, KAI_WINDOW_CREDENTIAL_ID, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, PLAYWRIGHT_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationRecord, type PersistedEvent, type PlaywrightViewportStatus, type RemoteWindowSummary } from '@kai/contracts';
+import { DIRECT_PROVIDER_ORDER, cliApiKeyCredentialId, KAI_TERMINAL_CREDENTIAL_ID, KAI_WINDOW_CREDENTIAL_ID, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, PLAYWRIGHT_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationOrigin, type ConversationRecord, type PersistedEvent, type PlaywrightViewportStatus, type RemoteWindowSummary } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
 import { cliApiKeyEnvironment, cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
@@ -101,7 +101,7 @@ import { DesktopDevCheck, playwrightDevCheckPorts } from './dev-check';
 import { listProjectFiles, resolveInside } from './project-files';
 import { completeTeam } from './team-assign';
 import { TeamRecordStore } from './team-record-store';
-import { activeParallelDirectories, createParallelSession } from './parallel-session';
+import { activeParallelDirectories, createParallelSession, projectPathForCopy } from './parallel-session';
 import { cleanupParallelWorktrees } from './git-worktrees';
 import { DesktopRunControl } from './run-control';
 import { DesktopWindowRegistry } from './desktop-windows';
@@ -234,7 +234,11 @@ function refreshJumpList(): void {
   const context = ipcContext;
   if (!context) return;
   void context.projects.list()
-    .then((projects) => applyJumpList(projects, jumpListIconPath()))
+    .then((projects) => {
+      const result = applyJumpList(projects, jumpListIconPath());
+      // Windows says why when it refuses a menu (for example, recent items switched off); say so in the log too.
+      if (result !== 'ok') context.logger.warn('internal', `The taskbar menu was not set: ${result}`);
+    })
     .catch(() => undefined);
 }
 
@@ -748,12 +752,16 @@ async function startApplication(): Promise<void> {
   const directApiOptions = {
     waitIfPaused: (conversationId: string, signal: AbortSignal) => runControl.waitIfPaused(conversationId, signal),
     // Rules and tool hooks are user-owned project preferences. A run only sees the project it is working in.
+    // A build running in a separate copy of the project (a parallel crew task) works in a folder that matches no project,
+    // so the copy is traced back to the project it was made from; otherwise it ran without the project's rules.
     loadPermissionRules: async (projectRoot: string) => {
-      const project = (await projects.list()).find((candidate) => candidate.path === projectRoot);
+      const owner = projectPathForCopy(projectRoot) ?? projectRoot;
+      const project = (await projects.list()).find((candidate) => candidate.path === owner);
       return project ? (await preferences.get(project.id))?.automation?.permissionRules ?? [] : [];
     },
     runToolHook: async (call: ToolHookCall) => {
-      const project = (await projects.list()).find((candidate) => candidate.path === call.projectRoot);
+      const owner = projectPathForCopy(call.projectRoot) ?? call.projectRoot;
+      const project = (await projects.list()).find((candidate) => candidate.path === owner);
       const automation = project ? (await preferences.get(project.id))?.automation : undefined;
       return runToolHooks(automation?.hooks, call, (command, timeoutMs, env) => runCheckCommand(
         call.projectRoot,
@@ -969,7 +977,7 @@ async function startApplication(): Promise<void> {
     createWindow: (projectId) => createMainWindow(projectId),
     remote,
   };
-  async function createBlankConversation(projectId: string, firstPrompt: string) {
+  async function createBlankConversation(projectId: string, firstPrompt: string, origin?: ConversationOrigin) {
     const now = new Date().toISOString();
     const conversation = {
       schemaVersion: 1 as const,
@@ -985,6 +993,7 @@ async function startApplication(): Promise<void> {
       autonomy: null,
       turns: [],
       events: [],
+      ...(origin ? { origin } : {}),
     };
     await conversations.save(conversation);
     return conversation;

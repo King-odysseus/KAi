@@ -433,6 +433,7 @@
     "desktop:smoke:team": "npm run smoke:team --workspace @kai/desktop",
     "desktop:smoke:mobile": "npm run smoke:mobile --workspace @kai/desktop",
     "desktop:package": "npm run package --workspace @kai/desktop",
+    "desktop:release": "node scripts/desktop-release.mjs",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:closeout": "npm run test:fast && npm run test:slow && npm run test:integration",

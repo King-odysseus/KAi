@@ -625,6 +625,9 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'crew:message', async ({ runId, kind, text }, request) => context.crew.message(runId, kind, text, request.ownerWindowId));
   handle(context, 'crew:keep-going', async ({ runId, keepGoing }, request) => context.crew.setKeepGoing(runId, keepGoing, request.ownerWindowId));
   handle(context, 'crew:update-config', async ({ runId, config }) => context.crew.updateConfig(runId, config));
+  handle(context, 'crew:decide', async ({ runId, approvalId, approve }, request) => context.crew.decide(runId, approvalId, approve, request.ownerWindowId));
+  handle(context, 'crew:explain-simply', async ({ runId, explainSimply }) => context.crew.setExplainSimply(runId, explainSimply));
+  handle(context, 'crew:find-phases', async ({ runId }, request) => context.crew.findPhases(runId, request.ownerWindowId));
   handle(context, 'crew:stop', async ({ runId }) => context.crew.stop(runId));
   handle(context, 'crew:defaults', async ({ projectId }) => context.crewSupport.defaults(projectId));
   handle(context, 'crew:save-defaults', async ({ projectId, config }) => context.crewSupport.saveDefaults(projectId, config));
@@ -1938,7 +1941,7 @@ export async function runConversationAgent(
   const userTurn: ConversationRecord['turns'][number] = {
     id: `turn_${crypto.randomUUID()}`,
     role: 'user',
-    text: request.prompt,
+    text: request.displayText ?? request.prompt,
     createdAt: now,
     ...(request.clientMessageId ? { clientMessageId: request.clientMessageId } : {}),
     ...(checkpoint ? { checkpoint } : {}),

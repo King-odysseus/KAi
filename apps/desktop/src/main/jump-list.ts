@@ -23,16 +23,23 @@ export interface JumpListProject {
   path: string;
 }
 
-/** The taskbar right-click menu: a "New window" task and the user's projects, which Windows lets them pin. */
-export function buildJumpList(projects: readonly JumpListProject[], program: string, icon: string): { tasks: Electron.Task[]; categories: JumpListCategory[] } {
-  const tasks: Electron.Task[] = [{
+/**
+ * The taskbar right-click menu: a "New window" task and the user's projects, which Windows lets them pin.
+ *
+ * Both are one list. The menu used to be set in two calls, tasks first and then the project list, and the second call
+ * replaces everything the first one set, so the "New window" entry was thrown away every time the menu was built and
+ * Windows only ever showed the projects. Tasks are a category of the one list, not a separate setting.
+ */
+export function buildJumpList(projects: readonly JumpListProject[], program: string, icon: string): { categories: JumpListCategory[] } {
+  const newWindow: JumpListItem = {
+    type: 'task',
     program,
-    arguments: NEW_WINDOW_FLAG,
+    args: NEW_WINDOW_FLAG,
     iconPath: icon,
     iconIndex: 0,
     title: 'New window',
     description: 'Open a separate KAI window',
-  }];
+  };
   const items: JumpListItem[] = projects.slice(0, MAX_PROJECTS).map((project) => ({
     type: 'task',
     program,
@@ -42,19 +49,22 @@ export function buildJumpList(projects: readonly JumpListProject[], program: str
     title: project.name,
     description: project.path,
   }));
-  const categories: JumpListCategory[] = items.length > 0 ? [{ type: 'custom', name: 'Projects', items }] : [];
-  return { tasks, categories };
+  const categories: JumpListCategory[] = [{ type: 'tasks', items: [newWindow] }];
+  if (items.length > 0) categories.push({ type: 'custom', name: 'Projects', items });
+  return { categories };
 }
 
-/** Installs the menu. Windows only, and a failure is not worth stopping for: the menu is a convenience. */
-export function applyJumpList(projects: readonly JumpListProject[], iconPath: string = process.execPath): void {
-  if (process.platform !== 'win32') return;
-  const { tasks, categories } = buildJumpList(projects, process.execPath, iconPath);
+/**
+ * Installs the menu. Windows only, and a failure is not worth stopping for: the menu is a convenience. Returns what
+ * Windows said ("ok", or why it refused) so a menu that did not take is noticed instead of silently missing.
+ */
+export function applyJumpList(projects: readonly JumpListProject[], iconPath: string = process.execPath): string {
+  if (process.platform !== 'win32') return 'ok';
+  const { categories } = buildJumpList(projects, process.execPath, iconPath);
   try {
-    app.setUserTasks(tasks);
-    app.setJumpList(categories);
-  } catch {
-    // Left as it was.
+    return app.setJumpList(categories);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
   }
 }
 

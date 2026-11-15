@@ -70,9 +70,11 @@ export function CrewDone({ run, project, onFollowUp, onOpenGit, onPreview, onRep
           <strong>Not finished yet</strong>
           <ul className="crew-list">{run.remaining.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul>
           <div className="studio-actions">
-            <UiButton type="button" className="primary-button" disabled={sending} onClick={() => void send(`Continue the plan with the next unfinished part: ${run.remaining[0]}.`)}>
-              <ArrowRight size={14} /> Start the next phase
-            </UiButton>
+            {run.remaining.slice(0, 6).map((phase, index) => (
+              <UiButton key={phase} type="button" className={index === 0 ? 'primary-button' : 'secondary-button'} disabled={sending || run.approvals.some((item) => item.status === 'pending')} onClick={() => void send(`Continue the plan with: ${phase}.`)} title={`Start: ${phase}`}>
+                <ArrowRight size={14} /> Start {phase}
+              </UiButton>
+            ))}
           </div>
           <label className="toggle-row"><span><strong>Keep going through every phase</strong><small>The crew plans each next phase itself and stops only for a security block, a limit, or a question only you can answer.</small></span><Switch checked={run.keepGoing} onChange={(event) => void onKeepGoing(event.target.checked).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)))} /></label>
         </div>

@@ -510,14 +510,19 @@ export const conversationCompactionSchema = z
  * is the Studio plan's own id, which is what Autopilot's status is keyed by; the window only ever sees the desktop
  * project the plan was registered as, so it could not be worked out from the rest of the record.
  */
-export const conversationOriginSchema = z
-  .object({
-    kind: z.literal('autopilot'),
-    studioProjectId: z.string().min(1),
-    cardId: z.string().min(1),
-    cardTitle: z.string(),
-  })
-  .strict();
+export const conversationOriginSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('autopilot'),
+      studioProjectId: z.string().min(1),
+      cardId: z.string().min(1),
+      cardTitle: z.string(),
+    })
+    .strict(),
+  // A Crew's work log: the Lead's and the builders' conversations, and the one a question to the Lead runs in. They
+  // belong to the Crew screen, so the Workspace keeps them out of its tabs and history and opens one only read-only.
+  z.object({ kind: z.literal('crew'), runId: z.string().min(1) }).strict(),
+]);
 
 export const conversationRecordV1Schema = z
   .object({

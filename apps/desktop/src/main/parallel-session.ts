@@ -54,9 +54,25 @@ export interface ParallelSession {
 
 const safeName = (value: string): string => value.replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 60) || 'part';
 const activeDirectories = new Set<string>();
+/** Which project each running copy was made from, so a rule written for the project still reaches work done in its copy. */
+const copyOrigins = new Map<string, string>();
 
 export function activeParallelDirectories(): string[] {
   return [...activeDirectories];
+}
+
+/**
+ * The project a folder belongs to when it is inside one of the running copies, or null when it is not in a copy.
+ * Permission rules and tool hooks are the project's, but a copy has a path of its own that matches no project, so
+ * looked up by folder they came back empty and a parallel build ran with none of them.
+ */
+export function projectPathForCopy(folder: string): string | null {
+  const resolved = path.resolve(folder).toLowerCase();
+  for (const [directory, projectPath] of copyOrigins) {
+    const root = directory.toLowerCase();
+    if (resolved === root || resolved.startsWith(root + path.sep)) return projectPath;
+  }
+  return null;
 }
 
 /** Whether a folder is inside one of the copies a running wave made, which is where a part or a card works. */
@@ -147,11 +163,13 @@ export async function createParallelSession(
     directory = path.join(baseDirectory, `${safeName(key)}-${Math.random().toString(36).slice(2, 6)}`);
   }
   activeDirectories.add(path.resolve(directory));
+  copyOrigins.set(path.resolve(directory), projectPath);
   let snapshot: string;
   try {
     snapshot = await snapshotWorkingTree(repository.root);
   } catch (error) {
     activeDirectories.delete(path.resolve(directory));
+    copyOrigins.delete(path.resolve(directory));
     throw error;
   }
   const checkouts = new Map<string, string>();
@@ -220,6 +238,7 @@ export async function createParallelSession(
       checkouts.clear();
       await removeFolder(directory).catch(() => undefined);
       activeDirectories.delete(path.resolve(directory));
+      copyOrigins.delete(path.resolve(directory));
     },
   };
 }

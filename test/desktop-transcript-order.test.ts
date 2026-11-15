@@ -39,9 +39,19 @@ describe('taskbar menu', () => {
 
   it('offers a new window and lists the projects', () => {
     const list = buildJumpList([{ id: 'p1', name: 'KAi', path: 'C:/KAi' }], 'KAI.exe', 'KAI.exe');
-    expect(list.tasks[0]?.arguments).toBe('--new-window');
-    expect(list.categories[0]?.name).toBe('Projects');
-    expect(buildJumpList([], 'KAI.exe', 'KAI.exe').categories).toEqual([]);
+    // The task is a category of the same list as the projects: set separately, the project list replaced it and
+    // Windows never showed "New window".
+    expect(list.categories[0]).toMatchObject({ type: 'tasks' });
+    expect(list.categories[0]?.items?.[0]).toMatchObject({ title: 'New window', args: '--new-window' });
+    const projects = list.categories.find((category) => category.name === 'Projects');
+    expect(projects?.items).toHaveLength(1);
+    expect(projects?.items?.[0]).toMatchObject({ title: 'KAi', args: '--open-project p1' });
+  });
+
+  it('still offers a new window when there are no projects', () => {
+    const list = buildJumpList([], 'KAI.exe', 'KAI.exe');
+    expect(list.categories).toHaveLength(1);
+    expect(list.categories[0]?.items?.[0]).toMatchObject({ title: 'New window' });
   });
 });
 

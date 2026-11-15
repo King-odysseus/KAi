@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { withoutTerminalTools } from '../apps/desktop/src/main/direct-provider-runtime';
-import { createParallelSession, isParallelCopy } from '../apps/desktop/src/main/parallel-session';
+import { createParallelSession, isParallelCopy, projectPathForCopy } from '../apps/desktop/src/main/parallel-session';
 import { copyRules } from '../apps/desktop/src/main/autopilot';
 import type { ExternalToolPort } from '../apps/desktop/src/main/project-tools';
 
@@ -71,6 +71,24 @@ describe('telling a copy of the project from the project', () => {
     expect(isParallelCopy(path.join(base, 'iso-wave-elsewhere'))).toBe(false);
     await session.dispose();
     expect(isParallelCopy(folder)).toBe(false);
+  });
+
+  it('traces a copy back to the project it was made from, so that project\'s rules reach it', async () => {
+    const root = await realpath(await mkdtemp(path.join(tmpdir(), 'kai-iso-repo-')));
+    const base = await realpath(await mkdtemp(path.join(tmpdir(), 'kai-iso-base-')));
+    directories.push(root, base);
+    const git = (...args: string[]) => run('git', ['-c', 'user.name=T', '-c', 'user.email=t@example.test', ...args], { cwd: root });
+    await git('init', '-q');
+    await writeFile(path.join(root, 'a.txt'), 'a\n');
+    await git('add', '-A');
+    await git('commit', '-q', '-m', 'initial');
+    const session = (await createParallelSession(root, 'iso-origin', base))!;
+    const folder = await session.checkout('task');
+    expect(projectPathForCopy(folder)).toBe(root);
+    expect(projectPathForCopy(path.join(folder, 'src', 'deep'))).toBe(root);
+    expect(projectPathForCopy(root)).toBeNull();
+    await session.dispose();
+    expect(projectPathForCopy(folder)).toBeNull();
   });
 });
 

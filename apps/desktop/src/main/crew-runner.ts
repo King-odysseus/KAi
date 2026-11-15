@@ -1,15 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { classifyWork, crewConfigSchema, crewRunSchema } from '@kai/contracts';
-import type { AgentRunRequest, AgentRunResult, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
+import type { AgentRunRequest, AgentRunResult, ConversationOrigin, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
 import {
-  addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, mergeChat, answerAsk, enforceLimits, failBuild, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
+  addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, mergeChat, requestApprovals, answerAsk, enforceLimits, failBuild, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
   reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun,
 } from './crew-engine';
-import { askPrompt, coveragePrompt, parseCoverage, parsePlan, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
+import { askPrompt, coveragePrompt, parseCoverage, parsePlanFull, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
 import type { ParallelSession } from './parallel-session';
 
 export interface CrewRunnerPorts {
-  createConversation(projectId: string, title: string): Promise<{ id: string }>;
+  /** Opens a conversation for the crew's agents. `origin` marks it as the crew's, so the Workspace keeps it out of its tabs. */
+  createConversation(projectId: string, title: string, origin?: ConversationOrigin): Promise<{ id: string }>;
   runAgent(request: AgentRunRequest, ownerWindowId: number, options?: { cwd?: string }): Promise<AgentRunResult>;
   cancelAgent(conversationId: string): boolean;
   runCheck(projectId: string, command: string, signal: AbortSignal, options?: { cwd?: string }): Promise<{ passed: boolean; output: string }>;
@@ -46,6 +47,13 @@ export interface CrewStartInput {
 
 /** The reviewer id the per-task project check is recorded under; it is not a role. */
 const CHECK_REVIEWER = 'check';
+/** What a Lead call is called in the conversation log, in place of the brief it was sent. */
+const ASK_LABEL: Record<'plan' | 'review' | 'stuck' | 'coverage', string> = {
+  plan: 'Plan the tasks',
+  review: 'Review a task',
+  stuck: 'Decide what to do with a stuck task',
+  coverage: 'Check the goal against what was built',
+};
 /** The most phases a crew moves through by itself in one run, so a plan that never runs out still stops. */
 const MAX_AUTO_PHASES = 12;
 
@@ -87,10 +95,11 @@ export class DesktopCrewRunner {
 
   async start(input: CrewStartInput, ownerWindowId: number): Promise<CrewRun> {
     const at = this.now().toISOString();
-    const conversation = await this.ports.createConversation(input.projectId, `Crew: ${input.goal.slice(0, 50)}`);
+    const runId = `crew_${randomUUID()}`;
+    const conversation = await this.ports.createConversation(input.projectId, `Crew: ${input.goal.slice(0, 50)}`, { kind: 'crew', runId });
     const briefSnapshot = await this.ports.readBrief?.(input.projectId).catch(() => null) ?? null;
     const run = crewRunSchema.parse({
-      schemaVersion: 1, id: `crew_${randomUUID()}`, projectId: input.projectId, goal: input.goal, briefSnapshot, status: 'planning', conversationId: conversation.id,
+      schemaVersion: 1, id: runId, projectId: input.projectId, goal: input.goal, briefSnapshot, status: 'planning', conversationId: conversation.id,
       config: input.config, tasks: [], feed: [], startedAt: at, updatedAt: at,
     });
     const active = this.attach(run, ownerWindowId, conversation.id);
@@ -190,6 +199,49 @@ export class DesktopCrewRunner {
     return next;
   }
 
+  /** Records the person's yes or no on one approval card, then carries on once every card is answered. */
+  async decide(runId: string, approvalId: string, approve: boolean, ownerWindowId: number): Promise<CrewRun> {
+    const run = await this.require(runId);
+    let next = decideApproval(run, approvalId, approve, this.now().toISOString());
+    // A crew set to show its plan first still does, once the approvals are answered and nothing has been started.
+    const untouched = next.tasks.every((task) => task.status === 'backlog' && task.reviews.length === 0);
+    if (next.status === 'running' && run.status !== 'running' && next.config.approvePlan && untouched) next = { ...next, status: 'awaitingApproval' };
+    return this.resumeWith(run, ownerWindowId, next);
+  }
+
+  /** Turns plain-language writing on or off for the Lead's replies. */
+  async setExplainSimply(runId: string, explainSimply: boolean): Promise<CrewRun> {
+    const run = await this.require(runId);
+    const next = { ...run, explainSimply, updatedAt: this.now().toISOString() };
+    const active = this.active.get(runId);
+    if (active) { await this.commit(active, next); return active.run; }
+    await this.ports.save(next);
+    return next;
+  }
+
+  /**
+   * Asks the Lead what is still undone in the plan. A crew that finished before the check existed has nothing stored, so
+   * its phases could not be shown as buttons; this runs the same check on request, without changing the board.
+   */
+  async findPhases(runId: string, ownerWindowId: number): Promise<CrewRun> {
+    const run = await this.require(runId);
+    if (run.status === 'running' || run.status === 'planning') throw new Error('The crew is working. Ask again when it has paused or finished.');
+    const lead = run.config.roles.find((role) => role.kind === 'lead');
+    if (!lead) throw new Error('This crew has no Lead to ask.');
+    const active = await this.localActive(run, ownerWindowId);
+    const answer = await this.askJson(active, lead, coveragePrompt(active.run), 'coverage', parseCoverage);
+    const at = this.now().toISOString();
+    const paid: CrewRun = { ...active.run, spentUsd: active.run.spentUsd + answer.costUsd };
+    const remaining = answer.value?.remaining ?? paid.remaining;
+    const text = answer.value === null
+      ? 'I could not tell what is left in the plan just now. Try again in a moment.'
+      : remaining.length > 0
+        ? `Still to do in the plan: ${remaining.join('; ')}.`
+        : 'I found nothing left undone in the plan.';
+    await this.commit(active, addChat({ ...paid, remaining }, { from: 'lead', kind: 'note', text }, at));
+    return active.run;
+  }
+
   /** Turns "keep going through every phase" on or off. Turning it on for a finished crew with work left starts the next phase. */
   async setKeepGoing(runId: string, keepGoing: boolean, ownerWindowId: number): Promise<CrewRun> {
     const run = await this.require(runId);
@@ -206,17 +258,24 @@ export class DesktopCrewRunner {
     return next;
   }
 
+  /** The crew's running state when it is working, otherwise one that borrows (or opens) its conversation for a call to the Lead. */
+  private async localActive(run: CrewRun, ownerWindowId: number): Promise<ActiveRun> {
+    const live = this.active.get(run.id);
+    if (live) return live;
+    const conversationId = run.conversationId ?? (await this.ports.createConversation(run.projectId, `Crew: ${run.goal.slice(0, 50)}`, { kind: 'crew', runId: run.id })).id;
+    return {
+      ownerWindowId, conversationId, controller: new AbortController(), run: { ...run, conversationId }, cancelled: false, done: Promise.resolve(),
+      wave: 0, leadDecided: new Set(), autoPhases: 0, serialRetryTasks: [], children: new Set(),
+    };
+  }
+
   private async askLead(run: CrewRun, question: string, ownerWindowId: number): Promise<CrewRun> {
     const lead = run.config.roles.find((role) => role.kind === 'lead');
     if (!lead) throw new Error('This crew has no Lead to ask.');
-    // A crew that is working already has its conversation; an idle one borrows its last conversation, or opens one.
-    const live = this.active.get(run.id);
-    const active: ActiveRun = live ?? {
-      ownerWindowId, conversationId: run.conversationId ?? (await this.ports.createConversation(run.projectId, `Crew: ${run.goal.slice(0, 50)}`)).id,
-      controller: new AbortController(), run, cancelled: false, done: Promise.resolve(), wave: 0, leadDecided: new Set(), autoPhases: 0, serialRetryTasks: [], children: new Set(),
-    };
+    const active = await this.localActive(run, ownerWindowId);
+    // The id is saved on the run with the first line, so the next question reuses this conversation.
     await this.commit(active, addChat(active.run, { from: 'you', kind: 'ask', text: question }, this.now().toISOString()));
-    const result = await this.call(active, lead, askPrompt(active.run, question), { fresh: true });
+    const result = await this.call(active, lead, askPrompt(active.run, question), { fresh: true, label: `Question to the Lead: ${question}` });
     const reply = result.status === 'completed' && result.output.trim() ? result.output.trim() : `I could not answer that just now${result.error ? `: ${result.error.slice(0, 200)}` : '.'}`;
     const at = this.now().toISOString();
     const paid: CrewRun = { ...active.run, spentUsd: active.run.spentUsd + (result.costUsd ?? 0) };
@@ -292,7 +351,11 @@ export class DesktopCrewRunner {
   private async resumeWith(previous: CrewRun, ownerWindowId: number, next: CrewRun): Promise<CrewRun> {
     const existing = this.active.get(previous.id);
     if (existing && !existing.cancelled) { await this.commit(existing, next); return next; }
-    const conversation = await this.ports.createConversation(next.projectId, `Crew: ${next.goal.slice(0, 50)}`);
+    // One conversation per run: a resume or follow-up carries on in the run's own, and only a run that never had one
+    // (started before the crew kept its id) gets a new one.
+    const conversation = next.conversationId
+      ? { id: next.conversationId }
+      : await this.ports.createConversation(next.projectId, `Crew: ${next.goal.slice(0, 50)}`, { kind: 'crew', runId: next.id });
     // The newest conversation holds the latest work, so it is the one the Chat tab links to.
     const stamped: CrewRun = { ...next, conversationId: conversation.id };
     const active = this.attach(stamped, ownerWindowId, conversation.id);
@@ -348,7 +411,7 @@ export class DesktopCrewRunner {
     const planner = current.config.roles.find((role) => role.kind === 'planner') ?? current.config.roles.find((role) => role.kind === 'lead')!;
     const conventions = (await this.ports.conventions?.(current.projectId, current.goal).catch(() => '')) ?? '';
     const design = (await this.ports.design?.status().catch(() => null)) ?? null;
-    const answer = await this.askJson(active, planner, planPrompt(current.goal, current.config, conventions, current, design), 'plan', parsePlan);
+    const answer = await this.askJson(active, planner, planPrompt(current.goal, current.config, conventions, current, design), 'plan', parsePlanFull);
     if (design) active.run = { ...active.run, design };
     if (active.cancelled) return;
     const at = this.now().toISOString();
@@ -365,7 +428,7 @@ export class DesktopCrewRunner {
       return;
     }
     const before = run.tasks.length;
-    const added = addTasks({ ...run, spentUsd: run.spentUsd + answer.costUsd }, uniqueTaskIds(run.tasks, answer.value), at);
+    const added = addTasks({ ...run, spentUsd: run.spentUsd + answer.costUsd }, uniqueTaskIds(run.tasks, answer.value.tasks), at);
     run = added.run;
     for (const reason of added.refused) run = { ...run, feed: [...run.feed, { id: `feed_${randomUUID()}`, at, who: 'crew', kind: 'info' as const, text: `Left out a task: ${reason}` }] };
     if (run.tasks.length === before && current.followUp) {
@@ -379,7 +442,9 @@ export class DesktopCrewRunner {
       return;
     }
     run = { ...run, feed: [...run.feed, { id: `feed_${randomUUID()}`, at, who: planner.id, kind: 'info' as const, text: `Wrote ${run.tasks.length - before} ${run.tasks.length - before === 1 ? 'task' : 'tasks'}.` }] };
-    await this.commit(active, { ...run, followUp: null, status: run.config.approvePlan ? 'awaitingApproval' : 'running', updatedAt: at });
+    // What the plan says needs the person's OK is asked for before anything is built; the crew never assumes it.
+    const planned = requestApprovals({ ...run, followUp: null }, answer.value.approvals, at);
+    await this.commit(active, planned.status === 'needsYou' ? { ...planned, updatedAt: at } : { ...planned, status: run.config.approvePlan ? 'awaitingApproval' : 'running', updatedAt: at });
   }
 
   /** On a fresh run, runs the project check once before any task, so a repository that already fails is not blamed on the first builder. */
@@ -473,13 +538,13 @@ export class DesktopCrewRunner {
         try {
           const cwd = await session.checkout(task.id);
           if (active.cancelled) return;
-          const conversation = await this.ports.createConversation(active.run.projectId, `Crew task: ${task.title}`);
+          const conversation = await this.ports.createConversation(active.run.projectId, `Crew task: ${task.title}`, { kind: 'crew', runId: active.run.id });
           conversationId = conversation.id;
           active.children.add(conversationId);
           this.announce(active);
           if (active.cancelled) return;
           const conventions = (await this.ports.conventions?.(active.run.projectId, `${active.run.goal} ${task.title}`).catch(() => '')) ?? '';
-          const result = await this.call(active, role, taskBrief(active.run, task.id, conventions), { effortFrom: `${task.title}\n${task.description}`, fresh: true, cwd, conversationId });
+          const result = await this.call(active, role, taskBrief(active.run, task.id, conventions), { effortFrom: `${task.title}\n${task.description}`, fresh: true, cwd, conversationId, label: `Build: ${task.title}` });
           if (active.cancelled) return;
           if (result.status === 'failed') {
             outcomes.set(task.id, { taskId: task.id, status: 'failed', files: [], output: result.output, costUsd: result.costUsd ?? 0, error: result.error ?? 'The agent stopped without finishing.' });
@@ -597,7 +662,7 @@ export class DesktopCrewRunner {
     const brief = taskBrief(active.run, taskId, conventions);
     const result = role.kind === 'designer' && this.ports.design
       ? await this.draw(active, task, brief)
-      : await this.call(active, role, brief, { effortFrom: `${task.title}\n${task.description}`, fresh: true });
+      : await this.call(active, role, brief, { effortFrom: `${task.title}\n${task.description}`, fresh: true, label: `Build: ${task.title}` });
     if (active.cancelled) return;
     let run = addSpend(active.run, taskId, result.costUsd ?? 0, at());
     if (result.status === 'failed') {
@@ -712,17 +777,17 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
   /** Asks a role for a reply that must parse; if it does not, asks once more with a stricter request. */
   private async askJson<T>(active: ActiveRun, role: CrewRole, prompt: string, kind: 'plan' | 'review' | 'stuck' | 'coverage', parse: (text: string) => T | null): Promise<{ value: T | null; costUsd: number }> {
     let costUsd = 0;
-    const first = await this.call(active, role, prompt, { fresh: true });
+    const first = await this.call(active, role, prompt, { fresh: true, label: ASK_LABEL[kind] });
     costUsd += first.costUsd ?? 0;
     if (active.cancelled) return { value: null, costUsd };
     const value = first.status === 'completed' ? parse(first.output) : null;
     if (value !== null || first.status === 'failed') return { value, costUsd };
-    const second = await this.call(active, role, retryPrompt(kind), { fresh: false });
+    const second = await this.call(active, role, retryPrompt(kind), { fresh: false, label: `${ASK_LABEL[kind]} (asked again)` });
     costUsd += second.costUsd ?? 0;
     return { value: second.status === 'completed' ? parse(second.output) : null, costUsd };
   }
 
-  private async call(active: ActiveRun, role: CrewRole, prompt: string, options: { fresh: boolean; effortFrom?: string; cwd?: string; conversationId?: string }): Promise<CallResult> {
+  private async call(active: ActiveRun, role: CrewRole, prompt: string, options: { fresh: boolean; effortFrom?: string; cwd?: string; conversationId?: string; label?: string }): Promise<CallResult> {
     const { config } = active.run;
     const instructions = role.instructions.trim();
     const request: AgentRunRequest = {
@@ -737,6 +802,8 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
       helpers: helperChoiceFor(subAgentsFor(config, role.id, 0)),
       ...(role.model ? { model: role.model } : options.effortFrom && config.savings.lightModelForRoutine ? { effort: classifyWork(options.effortFrom).level } : {}),
       ...(options.fresh ? { freshSession: true } : {}),
+      // The log shows a short line, not the whole brief.
+      ...(options.label ? { displayText: options.label.replace(/\s+/g, ' ').trim().slice(0, 500) } : {}),
     };
     try {
       return await this.ports.runAgent(request, active.ownerWindowId, options.cwd ? { cwd: options.cwd } : undefined);

@@ -1,5 +1,6 @@
 import { AlertTriangle, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { Dialog } from './components/ui/Dialog';
+import { isCrewConversation } from './crew-conversation';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction } from 'react';
 import type {
   AgentCapability,
@@ -453,7 +454,8 @@ export function App(): ReactNode {
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
   // A side conversation is reached only from the side-question panel on the conversation it was asked from, never
   // from the ordinary thread list or history — it would otherwise read as a second, unexplained conversation.
-  const visibleConversations = conversations.filter((conversation) => !conversation.sideOf);
+  // A crew's work log belongs to the Crew screen, so it is left out of the thread list and history as well as the tabs.
+  const visibleConversations = conversations.filter((conversation) => !conversation.sideOf && !isCrewConversation(conversation));
   const activeRunning = Boolean(activeConversationId && runningConversationIds.includes(activeConversationId));
   const activePaused = Boolean(
     activeConversationId
@@ -462,7 +464,8 @@ export function App(): ReactNode {
   const streamingText = activeConversationId ? streamingTextByConversation[activeConversationId] ?? '' : '';
   const openConversations = openConversationIds
     .map((id) => conversations.find((conversation) => conversation.id === id))
-    .filter((conversation): conversation is ConversationRecord => conversation !== undefined && conversation.projectId === activeProject?.id);
+    // A crew's log shows as a tab only while it is the one being read; it never sits in the bar once left.
+    .filter((conversation): conversation is ConversationRecord => conversation !== undefined && conversation.projectId === activeProject?.id && (!isCrewConversation(conversation) || conversation.id === activeConversationId));
   // BrowserWindows share localStorage, so both saved values and new-chat keys are window scoped.
   const windowId = bootstrap?.windowId;
   const activeDraftKey = activeConversationId ?? `__new__:${windowId ?? 'boot'}:${activeProject?.id ?? 'none'}`;
@@ -1122,6 +1125,8 @@ export function App(): ReactNode {
       if (background) {
         const loaded = await window.kaiDesktop.getConversation(conversationId).then(unwrap).catch(() => null);
         if (loaded) setConversations((current) => [loaded, ...current.filter((item) => item.id !== conversationId)]);
+        // An unattended crew run gets no tab: its log is read from the Crew screen.
+        if (loaded && isCrewConversation(loaded)) return;
         if (loaded?.projectId === activeProjectIdRef.current) {
           setOpenConversationIds((current) => (current.includes(conversationId) ? current : [...current, conversationId]));
         }
@@ -2627,6 +2632,7 @@ export function App(): ReactNode {
                 setStudioCardRequest({ projectId, cardId, nonce: Date.now() });
                 setView('studio');
               }}
+              onOpenCrew={() => { if (activeProject) void openProjectInCrew(activeProject.id); }}
               onCompactConversation={() => void compactActiveConversation()}
               onContinueInNewTab={() => void continueInNewTab()}
               sideConversation={sideConversation}
