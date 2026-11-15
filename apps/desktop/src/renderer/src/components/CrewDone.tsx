@@ -1,11 +1,12 @@
 import { Textarea } from 'flowbite-react';
-import { ArrowUp, Check, FileText, GitBranch, GitCommitHorizontal, Loader2, Eye, Send } from 'lucide-react';
+import { ArrowRight, ArrowUp, Check, FileText, MessageSquare, GitBranch, GitCommitHorizontal, Loader2, Eye, Send } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { buildReport } from '@kai/contracts';
 import type { CrewRun, GitOverview, ProjectRecord } from '@kai/contracts';
 import { draftCommitMessage } from '../crew-commit';
 import { unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
+import { Switch } from './ui/Switch';
 import { UiButton } from './UiButton';
 
 /** Things people ask for next, so the follow-up box is never an empty page. */
@@ -23,13 +24,17 @@ const SUGGESTIONS = [
  * from the same report the Report tab shows; the buttons do the same few things every time without a model; and
  * the box hands anything else to the Lead, which plans it onto this same board.
  */
-export function CrewDone({ run, project, onFollowUp, onOpenGit, onPreview, onReport }: {
+export function CrewDone({ run, project, onFollowUp, onOpenGit, onPreview, onReport, onKeepGoing, onChat }: {
   run: CrewRun;
   project: ProjectRecord | null;
   onFollowUp: (prompt: string) => Promise<void>;
   onOpenGit?: () => void;
   onPreview?: () => void;
   onReport: () => void;
+  /** Tells the crew to carry on through every phase, or to stop after each. */
+  onKeepGoing: (on: boolean) => Promise<void>;
+  /** Opens the Chat tab, where the Lead can be asked about what was done. */
+  onChat: () => void;
 }): ReactNode {
   const report = useMemo(() => buildReport(run), [run]);
   const files = useMemo(() => [...new Set(run.tasks.filter((task) => !task.proposed).flatMap((task) => task.files))], [run.tasks]);
@@ -55,10 +60,23 @@ export function CrewDone({ run, project, onFollowUp, onOpenGit, onPreview, onRep
 
   return (
     <section className="ops-panel crew-done" aria-label="What the crew finished">
-      <h2>{run.status === 'completed' ? 'Finished' : 'Stopped'}: {report.headline}</h2>
+      <h2>{run.status === 'completed' ? 'Finished' : 'Stopped'}: {run.remaining.length > 0 ? `${report.totals.accepted} planned ${report.totals.accepted === 1 ? 'task' : 'tasks'} accepted. The plan is not finished.` : report.headline}</h2>
       <p className="tasks-tab-help">
         {report.totals.accepted} of {report.totals.tasks} tasks accepted · {report.totals.files} files changed · ${report.totals.costUsd.toFixed(2)} · {report.totals.minutes} min
       </p>
+
+      {run.remaining.length > 0 && (
+        <div className="crew-remaining" role="status">
+          <strong>Not finished yet</strong>
+          <ul className="crew-list">{run.remaining.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul>
+          <div className="studio-actions">
+            <UiButton type="button" className="primary-button" disabled={sending} onClick={() => void send(`Continue the plan with the next unfinished part: ${run.remaining[0]}.`)}>
+              <ArrowRight size={14} /> Start the next phase
+            </UiButton>
+          </div>
+          <label className="toggle-row"><span><strong>Keep going through every phase</strong><small>The crew plans each next phase itself and stops only for a security block, a limit, or a question only you can answer.</small></span><Switch checked={run.keepGoing} onChange={(event) => void onKeepGoing(event.target.checked).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)))} /></label>
+        </div>
+      )}
 
       <h3 className="crew-subheading">What was made</h3>
       {report.built.length === 0
@@ -83,6 +101,7 @@ export function CrewDone({ run, project, onFollowUp, onOpenGit, onPreview, onRep
         <UiButton type="button" className="secondary-button" onClick={onPreview} disabled={!onPreview || !project} title="Open the live preview pane"><Eye size={14} /> Preview</UiButton>
         <UiButton type="button" className={committing ? 'primary-button' : 'secondary-button'} onClick={() => setCommitting((open) => !open)} disabled={!project} aria-expanded={committing}><GitCommitHorizontal size={14} /> Commit and push</UiButton>
         <UiButton type="button" className="secondary-button" onClick={onReport}><FileText size={14} /> Full report</UiButton>
+        <UiButton type="button" className="secondary-button" onClick={onChat} title="Ask the Lead what was done, or what is blocking the rest"><MessageSquare size={14} /> Ask the Lead</UiButton>
       </div>
       {committing && project && <CommitPanel project={project} built={report.built} onClose={() => setCommitting(false)} />}
 

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { MAX_SUB_AGENTS_TOTAL, roleAccess } from '@kai/contracts';
-import type { CrewAsk, CrewConfig, CrewFeedEntry, CrewReview, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
+import type { CrewAsk, CrewChatEntry, CrewConfig, CrewFeedEntry, CrewReview, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
 
 /**
  * The rules of a Crew run, kept apart from anything that starts an agent so they can be tested without one. Every
@@ -133,6 +133,29 @@ export function uniqueTaskIds<T extends { id: string; dependsOn?: readonly strin
     id: renamed.get(draft.id) ?? draft.id,
     ...(draft.dependsOn ? { dependsOn: draft.dependsOn.map((dependency) => renamed.get(dependency) ?? dependency) } : {}),
   }));
+}
+
+/** Adds a line to the thread between the person and the Lead. The newest 200 are kept. */
+export function addChat(run: CrewRun, entry: { from: 'you' | 'lead'; kind: CrewChatEntry['kind']; text: string }, at: string): CrewRun {
+  const next: CrewChatEntry = { id: `chat_${randomUUID()}`, at, from: entry.from, kind: entry.kind, text: entry.text.slice(0, 6_000) };
+  return { ...run, chat: [...run.chat, next].slice(-200), updatedAt: at };
+}
+
+/** Joins two copies of the thread by id, oldest first, so a line added while another save was in flight is not lost. */
+export function mergeChat(a: readonly CrewChatEntry[], b: readonly CrewChatEntry[]): CrewChatEntry[] {
+  const byId = new Map<string, CrewChatEntry>();
+  for (const entry of [...a, ...b]) byId.set(entry.id, entry);
+  return [...byId.values()].sort((x, y) => x.at.localeCompare(y.at)).slice(-200);
+}
+
+/**
+ * The board finished but the Lead found more of the plan undone, and the person told the crew to keep going: the run
+ * goes straight to planning the next part, with what is left attached so the Lead plans only that.
+ */
+export function continueToNextPhase(run: CrewRun, remaining: readonly string[], at: string): CrewRun {
+  const next = remaining[0] ?? 'the rest of the plan';
+  const request = `Continue the plan with the next unfinished part: ${next}.${remaining.length > 1 ? ` Still to do after it: ${remaining.slice(1, 8).join('; ')}.` : ''} The person has told the crew to keep going through every phase, so do not wait for their acceptance between phases; stop only where the plan says to stop on a failure.`;
+  return feed({ ...run, status: 'planning', followUp: request.slice(0, 2_000), remaining: [...remaining], completedAt: null }, { who: 'crew', kind: 'info', text: `Moving on to: ${shorten(next)}` }, at);
 }
 
 /** The role that takes work a read-only role was given: the builder, else any role that may edit files. */
@@ -359,7 +382,12 @@ export function settle(run: CrewRun, at: string, check?: { passed: boolean }): C
   if (run.ask || run.tasks.some((task) => task.status === 'needsYou')) return { ...run, status: 'needsYou', updatedAt: at };
   if (isFinished(run)) {
     if (run.config.checkCommand && !check?.passed) return { ...run, status: 'running', updatedAt: at };
-    return feed({ ...run, status: 'completed', completedAt: at }, { who: 'crew', kind: 'done', text: 'Every task is accepted. The project is done.' }, at);
+    // Done means the planned tasks are accepted. When the Lead found more of the plan undone, it says so, so the
+    // finish line never claims a project that is only partly built.
+    const text = run.remaining.length > 0
+      ? `All planned tasks are accepted. Not finished yet: ${shorten(run.remaining.join('; '), 240)}`
+      : 'Every task is accepted. The project is done.';
+    return feed({ ...run, status: 'completed', completedAt: at }, { who: 'crew', kind: 'done', text }, at);
   }
   return { ...run, status: run.status === 'planning' || run.status === 'awaitingApproval' ? run.status : 'running', updatedAt: at };
 }

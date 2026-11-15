@@ -194,7 +194,8 @@ export function reviewRolePrompt(kind: 'security' | 'tester' | 'auditor' | 'lice
   }
 }
 
-export function retryPrompt(kind: 'plan' | 'review' | 'stuck'): string {
+export function retryPrompt(kind: 'plan' | 'review' | 'stuck' | 'coverage'): string {
+  if (kind === 'coverage') return 'Your previous reply could not be used. Reply again with only one JSON object such as {"complete":true} or {"complete":false,"remaining":["Phase 1: ..."]}, and no other text.';
   if (kind === 'plan') return 'Your previous reply could not be used. Reply again with only the JSON object {"tasks":[...]} and no other text.';
   if (kind === 'stuck') return 'Your previous reply could not be used. Reply again with only one JSON object such as {"decision":"skip","reason":"..."} or {"decision":"retry","guidance":"..."} or {"decision":"ask","reason":"..."}, and no other text.';
   return 'Your previous reply could not be used. Reply again with only one JSON object such as {"verdict":"accept"} or {"verdict":"sendBack","feedback":"..."}, and no other text.';
@@ -225,6 +226,71 @@ export function stuckPrompt(run: CrewRun, task: CrewTask): string {
     '- {"decision":"skip","reason":"..."} when the task is not needed to reach the goal, cannot be done in this project, or is covered by other tasks. The project can still be finished without it.',
     '- {"decision":"ask","reason":"..."} only when the answer needs the user: a missing secret or account, a product choice only they can make, or something that would be unsafe to guess.',
     'Prefer deciding. Choose ask only when retry and skip would both be wrong.',
+  ].join('\n');
+}
+
+/**
+ * The Lead's check, once the board is finished, of whether the goal is: every planned task accepted does not mean
+ * the plan is. A goal that names a multi-phase plan is often planned one phase at a time, so "done" has to be
+ * measured against the goal and not against the tasks written so far.
+ */
+export function coveragePrompt(run: CrewRun): string {
+  const board = run.tasks.filter((task) => !task.proposed);
+  return [
+    'You are the Lead. Every task on the board is now accepted. Check whether the goal itself is finished.',
+    'Read the project, and read any plan or specification file the goal names. Do not change any files.',
+    '',
+    `Goal: ${run.goal}`,
+    '',
+    'Accepted so far:',
+    ...board.filter((task) => task.status === 'accepted').slice(0, 40).map((task) => `- ${task.title}`),
+    ...(board.some((task) => task.status === 'skipped') ? ['', 'Skipped:', ...board.filter((task) => task.status === 'skipped').slice(0, 20).map((task) => `- ${task.title}`)] : []),
+    '',
+    'Reply with only one JSON object:',
+    '{"complete":true} when nothing the goal asks for is left undone.',
+    '{"complete":false,"remaining":["Phase 1: name", "Phase 2: name"]} when parts of the plan are not built yet, listing each unfinished part in order, named the way the plan names it.',
+    'Do not list work that is already accepted. Do not invent work the goal does not ask for.',
+  ].join('\n');
+}
+
+/** Reads the Lead's coverage check. An unreadable answer means nothing is known to be left, so the run can finish. */
+export function parseCoverage(text: string): { remaining: string[] } | null {
+  const candidates = [...text.matchAll(/\{[^{}]*"complete"[^{}]*\}|\{[^{}]*\[[^\]]*\][^{}]*"complete"[^{}]*\}|\{[^{}]*"complete"[^{}]*\[[^\]]*\][^{}]*\}/g)].map((match) => match[0]);
+  for (const candidate of candidates.reverse()) {
+    try {
+      const value = JSON.parse(candidate) as { complete?: unknown; remaining?: unknown };
+      if (typeof value.complete !== 'boolean') continue;
+      if (value.complete) return { remaining: [] };
+      const remaining = Array.isArray(value.remaining)
+        ? value.remaining.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim().slice(0, 300)).slice(0, 20)
+        : [];
+      return { remaining };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/** A question to the Lead from the Chat tab. It answers from the board and the project, and changes nothing. */
+export function askPrompt(run: CrewRun, question: string): string {
+  const board = run.tasks.filter((task) => !task.proposed);
+  const recent = run.feed.slice(-14).map((entry) => `- ${entry.who}: ${entry.text}`);
+  const thread = run.chat.slice(-8).map((entry) => `${entry.from === 'you' ? 'The person' : 'You'}: ${entry.text.slice(0, 400)}`);
+  return [
+    'You are the Lead of a crew. The person who owns this project is asking you a question. Answer it plainly and briefly, in sentences, as you would to a colleague.',
+    'Use the board, the recent activity and, where it helps, the project files. Do not change any files and do not start any work.',
+    'If the question is really a request to build or change something, say so and tell them to use "Add work" or "Steer".',
+    '',
+    `Goal: ${run.goal}`,
+    `Crew status: ${run.status}${run.ask ? `; waiting on the person: ${run.ask.message}` : ''}`,
+    boardSummary(run),
+    ...(board.length > 0 ? ['', 'Tasks:', ...board.slice(0, 30).map((task) => `- ${task.title} [${task.status}${task.note ? `; ${task.note.slice(0, 120)}` : ''}]`)] : []),
+    ...(run.remaining.length > 0 ? ['', `Found still undone: ${run.remaining.join('; ')}`] : []),
+    ...(recent.length > 0 ? ['', 'Recent activity:', ...recent] : []),
+    ...(thread.length > 0 ? ['', 'This conversation so far:', ...thread] : []),
+    '',
+    `Question: ${question}`,
   ].join('\n');
 }
 

@@ -1036,6 +1036,8 @@ async function startApplication(): Promise<void> {
     const seen = await ipcContext!.studio.openPencilLook();
     return seen.state === 'running' ? { state: 'running', pages: seen.pages } : { state: seen.state, pages: [] };
   };
+  /** What each crew was last notified about, so one question or finish raises one notification, not one per save. */
+  const crewNotified = new Map<string, string>();
   crewRunner = new DesktopCrewRunner({
     design: {
       status: crewDesignStatus,
@@ -1065,7 +1067,19 @@ async function startApplication(): Promise<void> {
       if (!project) return null;
       return readFile(path.join(project.path, '.kai', 'spec', 'brief.md'), 'utf8').catch(() => null);
     },
-    notifyChanged: (ownerWindowId, run) => { desktopWindows.send(ownerWindowId, 'crew:changed', run); },
+    notifyChanged: (ownerWindowId, run) => {
+      desktopWindows.send(ownerWindowId, 'crew:changed', run);
+      // A crew that stops on a question, or finishes, tells the person once. A missed question used to leave it
+      // waiting for hours with nothing to say so.
+      const stateKey = run.status === 'needsYou' && run.ask ? `ask:${run.ask.message}` : run.status === 'completed' ? 'completed' : '';
+      if (stateKey && crewNotified.get(run.id) !== stateKey) {
+        crewNotified.set(run.id, stateKey);
+        const title = run.goal.replace(/\s+/g, ' ').slice(0, 60);
+        void notifications.notifyCrew(run.status === 'completed' ? 'finished' : 'needsYou', title, run.status === 'completed' ? (run.remaining.length > 0 ? `Not finished yet: ${run.remaining[0]}` : 'Every task is accepted.') : run.ask?.message ?? 'It is waiting for your answer.', ownerWindowId).catch(() => undefined);
+      } else if (!stateKey && run.status === 'running') {
+        crewNotified.delete(run.id);
+      }
+    },
     changedFiles: async (projectId) => {
       const project = (await ipcContext!.projects.list()).find((candidate) => candidate.id === projectId);
       return project ? (await gitOverview(project.path)).changes.map((change) => change.path) : [];

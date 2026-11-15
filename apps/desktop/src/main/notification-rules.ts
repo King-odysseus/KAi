@@ -79,6 +79,13 @@ export class NotificationCenter {
       : this.raise({ kind: 'failure', conversationId, title: 'Run failed', body: clip(detail ? `${title}: ${detail}` : title) }, ownerWindowId);
   }
 
+  /** A Crew run that stopped on a question for the person, or finished. Raised once per change by the caller. */
+  async notifyCrew(kind: 'needsYou' | 'finished', title: string, detail: string, ownerWindowId?: number): Promise<boolean> {
+    return kind === 'needsYou'
+      ? this.raise({ kind: 'approval', conversationId: null, title: 'Crew needs you', body: clip(`${detail} (${title})`) }, ownerWindowId)
+      : this.raise({ kind: 'complete', conversationId: null, title: 'Crew finished', body: clip(`${title}: ${detail}`) }, ownerWindowId);
+  }
+
   async notifyApproval(conversationId: string, title: string, approvalTitle: string, ownerWindowId?: number): Promise<boolean> {
     return this.raise({ kind: 'approval', conversationId, title: 'Approval needed', body: clip(`${approvalTitle} (${title})`) }, ownerWindowId);
   }

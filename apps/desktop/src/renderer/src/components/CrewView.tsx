@@ -1,7 +1,7 @@
 import { Textarea } from 'flowbite-react';
 import { Switch } from './ui/Switch';
 import {
-  Activity, AlertTriangle, ClipboardList, Coins, Compass, FileCheck, FileText, FlaskConical, Kanban, Lock, Minus, Palette, Pause, Pencil, Play, Plus, RefreshCw, Rocket, RotateCcw, Save, Scale, ScanSearch, ShieldCheck, Square, Trash2, Users, Wrench,
+  Activity, AlertTriangle, ClipboardList, Coins, Compass, FileCheck, FileText, FlaskConical, Kanban, Lock, MessageSquare, Minus, Palette, Pause, Pencil, Play, Plus, RefreshCw, Rocket, RotateCcw, Save, Scale, ScanSearch, ShieldCheck, Square, Trash2, Users, Wrench,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
@@ -20,11 +20,13 @@ import { UiTextInput } from './UiTextInput';
 import { PageHeader } from './ui/PageHeader';
 import { crewLimitPolicy } from '../cost-visibility';
 import { collapseFeed } from '../crew-feed';
+import { CrewChat } from './CrewChat';
 import { CrewDone } from './CrewDone';
 
-type Tab = 'board' | 'crew' | 'design' | 'cost' | 'report';
+type Tab = 'board' | 'chat' | 'crew' | 'design' | 'cost' | 'report';
 const TABS: ReadonlyArray<{ id: Tab; label: string; icon: typeof Kanban }> = [
   { id: 'board', label: 'Board', icon: Kanban },
+  { id: 'chat', label: 'Chat', icon: MessageSquare },
   { id: 'crew', label: 'Crew', icon: Users },
   { id: 'design', label: 'Design', icon: Palette },
   { id: 'cost', label: 'Cost', icon: Coins },
@@ -77,7 +79,9 @@ function money(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
-export function CrewView({ activeProject, agentCapabilities, settings, goalRequest = null, onOpenGit, onOpenPreview }: {
+export function CrewView({ activeProject, agentCapabilities, settings, goalRequest = null, onOpenGit, onOpenPreview, onOpenConversation }: {
+  /** Opens a conversation in the Workspace, so the full transcript of what the crew did can be read. */
+  onOpenConversation?: (conversationId: string) => void;
   /** Opens the Git page, where a finished crew's changes are read and committed. */
   onOpenGit?: () => void;
   /** Opens the live preview pane. */
@@ -134,6 +138,17 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
 
   function reconcile(run: CrewRun): void {
     setRuns((current) => [run, ...current.filter((item) => item.id !== run.id)].sort((a, b) => b.startedAt.localeCompare(a.startedAt)));
+  }
+
+  /** A message to the Lead from the Chat tab: a question, a change of direction, or more to build. */
+  async function sendMessage(kind: 'ask' | 'steer' | 'work', text: string): Promise<void> {
+    if (!activeRun) return;
+    reconcile(unwrap(await window.kaiDesktop.messageCrew(activeRun.id, kind, text)));
+  }
+
+  async function keepGoing(on: boolean): Promise<void> {
+    if (!activeRun) return;
+    reconcile(unwrap(await window.kaiDesktop.setCrewKeepGoing(activeRun.id, on)));
   }
 
   /** Hands a finished crew more work. The Lead plans it onto the same board, which then runs again. */
@@ -294,7 +309,7 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
             ? (
               <>
                 {(activeRun.status === 'completed' || activeRun.status === 'stopped') && (
-                  <CrewDone run={activeRun} project={activeProject} onFollowUp={followUp} onOpenGit={onOpenGit} onPreview={onOpenPreview} onReport={() => setTab('report')} />
+                  <CrewDone run={activeRun} project={activeProject} onFollowUp={followUp} onOpenGit={onOpenGit} onPreview={onOpenPreview} onReport={() => setTab('report')} onKeepGoing={keepGoing} onChat={() => setTab('chat')} />
                 )}
                 <Board run={activeRun} />
               </>
@@ -336,6 +351,9 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
               onLimits={(patch) => updateDraft((current) => ({ ...current, limits: { ...current.limits, ...patch } }))}
               onSavings={(patch) => updateDraft((current) => ({ ...current, savings: { ...current.savings, ...patch } }))} />
           )}
+          {tab === 'chat' && (activeRun
+            ? <CrewChat run={activeRun} activity={<LiveActivity run={activeRun} />} onSend={sendMessage} onKeepGoing={keepGoing} {...(onOpenConversation ? { onOpenConversation } : {})} />
+            : <div className="empty-list">Start a crew to chat with its Lead.</div>)}
           {tab === 'report' && <ReportTab run={activeRun} />}
         </>
       )}

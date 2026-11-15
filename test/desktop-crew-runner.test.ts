@@ -21,6 +21,10 @@ interface Script {
   security?: string[];
   /** The Lead's calls on a task that ran out of retries. The default hands the question to the user. */
   stuck?: string[];
+  /** The Lead's answers to "is the goal finished?", in order. The default says nothing is left. */
+  coverage?: string[];
+  /** The Lead's answer to a question from the Chat tab. */
+  answer?: string;
   buildFails?: number;
   costPerCall?: number;
 }
@@ -29,7 +33,7 @@ function fixture(script: Script = {}, patch: Partial<CrewConfig> = {}) {
   const requests: AgentRunRequest[] = [];
   const saved = new Map<string, CrewRun>();
   const notifications: CrewRun[] = [];
-  let plans = 0, leads = 0, securities = 0, builds = 0, stucks = 0;
+  let plans = 0, leads = 0, securities = 0, builds = 0, stucks = 0, coverages = 0;
   const checks: string[] = [];
   const pick = (list: string[] | undefined, index: number, fallback: string): string => (list && list.length > 0 ? list[Math.min(index, list.length - 1)]! : fallback);
 
@@ -46,6 +50,8 @@ function fixture(script: Script = {}, patch: Partial<CrewConfig> = {}) {
       if (request.prompt.includes('You are the auditor.')) return reply('{"verdict":"accept"}');
       if (request.prompt.includes('You are the Lead. Check this finished task')) return reply(pick(script.lead, leads++, '{"verdict":"accept"}'));
       if (request.prompt.includes('A task has failed or been sent back too many times')) return reply(pick(script.stuck, stucks++, '{"decision":"ask","reason":"Needs the user."}'));
+      if (request.prompt.includes('Every task on the board is now accepted')) return reply(pick(script.coverage, coverages++, '{"complete":true}'));
+      if (request.prompt.includes('is asking you a question')) return reply(script.answer ?? 'Phase 0 is finished.');
       builds += 1;
       if (builds <= (script.buildFails ?? 0)) return reply('', 'failed', 'The agent crashed.');
       return reply('Built it.');
@@ -303,6 +309,73 @@ describe('crew runner', () => {
     const unreadable = fixture({ lead: ['{"verdict":"sendBack","feedback":"No rate limit."}'], stuck: ['I would try again.'] });
     const two = await unreadable.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: unreadable.config }, 1);
     expect((await runToIdle(unreadable.runner, two.id)).ask?.reason).toBe('sameFailure');
+  });
+
+  it('says what is left instead of claiming the project is done, when the plan has more phases', async () => {
+    const f = fixture({ coverage: ['{"complete":false,"remaining":["Phase 1: Shell and gating","Phase 2: Provider layer"]}'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('completed');
+    expect(run.remaining).toEqual(['Phase 1: Shell and gating', 'Phase 2: Provider layer']);
+    const done = run.feed.find((entry) => entry.kind === 'done');
+    expect(done?.text).toContain('Not finished yet');
+    expect(done?.text).toContain('Phase 1: Shell and gating');
+    expect(done?.text).not.toContain('The project is done');
+  });
+
+  it('moves on to the next phase by itself when told to keep going, and stops when nothing is left', async () => {
+    const nextPlan = JSON.stringify({ tasks: [{ id: 'shell', title: 'Build the shell', role: 'builder', description: 'Phase 1', acceptance: ['The shell opens'], dependsOn: [] }] });
+    const f = fixture({
+      plan: [PLAN, nextPlan],
+      coverage: ['{"complete":false,"remaining":["Phase 1: Shell"]}', '{"complete":true}'],
+    });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: { ...f.config } }, 1);
+    await f.runner.setKeepGoing(started.id, true, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('completed');
+    expect(run.tasks.map((task) => task.id)).toEqual(['schema', 'ingest', 'shell']);
+    expect(run.remaining).toEqual([]);
+    expect(run.feed.some((entry) => entry.text.includes('Moving on to: Phase 1: Shell'))).toBe(true);
+    expect(f.requests.some((request) => request.prompt.includes('keep going through every phase'))).toBe(true);
+  });
+
+  it('answers a question from the Chat tab without changing the board', async () => {
+    const f = fixture({ answer: 'Phase 0 is finished; Phase 1 has not started.' });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const before = await runToIdle(f.runner, started.id);
+    const after = await f.runner.message(started.id, 'ask', 'What is done so far?', 1);
+    expect(after.tasks).toEqual(before.tasks);
+    expect(after.status).toBe('completed');
+    expect(after.chat.map((entry) => [entry.from, entry.kind])).toEqual([['you', 'ask'], ['lead', 'answer']]);
+    expect(after.chat[1]?.text).toContain('Phase 1 has not started');
+  });
+
+  it('keeps a steer for a working crew, and refuses it on a finished one', async () => {
+    const f = fixture({ lead: ['{"verdict":"sendBack","feedback":"No rate limit."}'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const waiting = await runToIdle(f.runner, started.id);
+    expect(waiting.status).toBe('needsYou');
+    const steered = await f.runner.message(started.id, 'steer', 'Use middleware for the limit.', 1);
+    expect(steered.goal).toContain('Use middleware for the limit.');
+    expect(steered.chat.map((entry) => entry.kind)).toEqual(['steer', 'note']);
+    await expect(f.runner.message(started.id, 'work', 'Build more.', 1)).rejects.toThrow(/finished or been stopped/);
+
+    const g = fixture();
+    const done = await g.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: g.config }, 1);
+    await runToIdle(g.runner, done.id);
+    await expect(g.runner.message(done.id, 'steer', 'Change course.', 1)).rejects.toThrow(/Add work/);
+  });
+
+  it('plans more work from the Chat tab onto a finished board', async () => {
+    const more = JSON.stringify({ tasks: [{ id: 'install', title: 'Install it', role: 'builder', description: 'Install', acceptance: ['Installed'], dependsOn: [] }] });
+    const f = fixture({ plan: [PLAN, more] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    await runToIdle(f.runner, started.id);
+    await f.runner.message(started.id, 'work', 'Now install it.', 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('completed');
+    expect(run.tasks.map((task) => task.id)).toEqual(['schema', 'ingest', 'install']);
+    expect(run.chat[0]).toMatchObject({ from: 'you', kind: 'work', text: 'Now install it.' });
   });
 
   it('plans a follow-up onto the same board after the crew has finished', async () => {

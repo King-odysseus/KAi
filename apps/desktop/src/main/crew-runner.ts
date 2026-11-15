@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { classifyWork, crewRunSchema } from '@kai/contracts';
 import type { AgentRunRequest, AgentRunResult, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
 import {
-  addCheckFix, addSpend, addTasks, answerAsk, enforceLimits, failBuild, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
+  addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, mergeChat, answerAsk, enforceLimits, failBuild, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
   reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun,
 } from './crew-engine';
-import { parsePlan, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
+import { askPrompt, coveragePrompt, parseCoverage, parsePlan, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
 import type { ParallelSession } from './parallel-session';
 
 export interface CrewRunnerPorts {
@@ -46,6 +46,8 @@ export interface CrewStartInput {
 
 /** The reviewer id the per-task project check is recorded under; it is not a role. */
 const CHECK_REVIEWER = 'check';
+/** The most phases a crew moves through by itself in one run, so a plan that never runs out still stops. */
+const MAX_AUTO_PHASES = 12;
 
 interface ActiveRun {
   ownerWindowId: number;
@@ -60,6 +62,8 @@ interface ActiveRun {
   serialRetryTasks: string[];
   /** Tasks the Lead has already been asked to unstick in this run; each gets one call. */
   leadDecided: Set<string>;
+  /** How many times the crew has moved on to the next phase by itself in this run, so a loop always ends. */
+  autoPhases: number;
   children: Set<string>;
 }
 
@@ -86,7 +90,7 @@ export class DesktopCrewRunner {
     const conversation = await this.ports.createConversation(input.projectId, `Crew: ${input.goal.slice(0, 50)}`);
     const briefSnapshot = await this.ports.readBrief?.(input.projectId).catch(() => null) ?? null;
     const run = crewRunSchema.parse({
-      schemaVersion: 1, id: `crew_${randomUUID()}`, projectId: input.projectId, goal: input.goal, briefSnapshot, status: 'planning',
+      schemaVersion: 1, id: `crew_${randomUUID()}`, projectId: input.projectId, goal: input.goal, briefSnapshot, status: 'planning', conversationId: conversation.id,
       config: input.config, tasks: [], feed: [], startedAt: at, updatedAt: at,
     });
     const active = this.attach(run, ownerWindowId, conversation.id);
@@ -139,6 +143,63 @@ export class DesktopCrewRunner {
     const run = await this.require(runId);
     if (this.active.has(runId)) throw new Error('This crew is still working. Use Tell the Lead to steer it.');
     return this.resumeWith(run, ownerWindowId, startFollowUp(run, prompt, this.now().toISOString()));
+  }
+
+  /**
+   * A message to the Lead from the Chat tab. Ask is answered from the board and the project and changes nothing; steer
+   * changes what the crew does from the next task on; work plans more onto a finished board.
+   */
+  async message(runId: string, kind: 'ask' | 'steer' | 'work', text: string, ownerWindowId: number): Promise<CrewRun> {
+    const run = await this.require(runId);
+    const body = text.trim();
+    if (!body) throw new Error('Write a message first.');
+    const at = this.now().toISOString();
+    const finished = run.status === 'completed' || run.status === 'stopped';
+    if (kind === 'ask') return this.askLead(run, body, ownerWindowId);
+    if (kind === 'work') {
+      if (!finished) throw new Error('More work can be added once the crew has finished or been stopped. Use Steer to change what it is doing now.');
+      return this.resumeWith(run, ownerWindowId, startFollowUp(addChat(run, { from: 'you', kind: 'work', text: body }, at), body, at));
+    }
+    if (finished) throw new Error('This crew has finished. Use Add work to give it more to do.');
+    const steered = addChat(addChat(guideCrewRun(run, body, at), { from: 'you', kind: 'steer', text: body }, at), { from: 'lead', kind: 'note', text: 'Noted. The Lead will follow this from the next task on.' }, at);
+    const active = this.active.get(runId);
+    if (active) { await this.commit(active, steered); return active.run; }
+    await this.ports.save(steered);
+    return steered;
+  }
+
+  /** Turns "keep going through every phase" on or off. Turning it on for a finished crew with work left starts the next phase. */
+  async setKeepGoing(runId: string, keepGoing: boolean, ownerWindowId: number): Promise<CrewRun> {
+    const run = await this.require(runId);
+    const at = this.now().toISOString();
+    const note = keepGoing
+      ? 'Keep going is on. When a phase is finished the crew will plan the next one itself, and stop only for a security block, a limit, or a question only you can answer.'
+      : 'Keep going is off. The crew will stop and say what is left when the planned tasks are finished.';
+    const next = addChat({ ...run, keepGoing }, { from: 'lead', kind: 'note', text: note }, at);
+    const active = this.active.get(runId);
+    if (active) { await this.commit(active, next); return active.run; }
+    const finished = run.status === 'completed' || run.status === 'stopped';
+    if (keepGoing && finished && run.remaining.length > 0) return this.resumeWith(run, ownerWindowId, continueToNextPhase(next, run.remaining, at));
+    await this.ports.save(next);
+    return next;
+  }
+
+  private async askLead(run: CrewRun, question: string, ownerWindowId: number): Promise<CrewRun> {
+    const lead = run.config.roles.find((role) => role.kind === 'lead');
+    if (!lead) throw new Error('This crew has no Lead to ask.');
+    // A crew that is working already has its conversation; an idle one borrows its last conversation, or opens one.
+    const live = this.active.get(run.id);
+    const active: ActiveRun = live ?? {
+      ownerWindowId, conversationId: run.conversationId ?? (await this.ports.createConversation(run.projectId, `Crew: ${run.goal.slice(0, 50)}`)).id,
+      controller: new AbortController(), run, cancelled: false, done: Promise.resolve(), wave: 0, leadDecided: new Set(), autoPhases: 0, serialRetryTasks: [], children: new Set(),
+    };
+    await this.commit(active, addChat(active.run, { from: 'you', kind: 'ask', text: question }, this.now().toISOString()));
+    const result = await this.call(active, lead, askPrompt(active.run, question), { fresh: true });
+    const reply = result.status === 'completed' && result.output.trim() ? result.output.trim() : `I could not answer that just now${result.error ? `: ${result.error.slice(0, 200)}` : '.'}`;
+    const at = this.now().toISOString();
+    const paid: CrewRun = { ...active.run, spentUsd: active.run.spentUsd + (result.costUsd ?? 0) };
+    await this.commit(active, addChat(paid, { from: 'lead', kind: 'answer', text: reply }, at));
+    return active.run;
   }
 
   /** Picks a paused or interrupted run back up. Work that was mid-build starts again; nothing accepted is redone. */
@@ -201,7 +262,7 @@ export class DesktopCrewRunner {
   }
 
   private attach(run: CrewRun, ownerWindowId: number, conversationId: string): ActiveRun {
-    const active: ActiveRun = { ownerWindowId, conversationId, controller: new AbortController(), run, cancelled: false, done: Promise.resolve(), wave: 0, leadDecided: new Set(), serialRetryTasks: run.tasks.filter((task) => task.note.startsWith('Its changes conflicted with another independent task') || task.note.startsWith('Its changes conflicted with another task')).map((task) => task.id), children: new Set() };
+    const active: ActiveRun = { ownerWindowId, conversationId, controller: new AbortController(), run, cancelled: false, done: Promise.resolve(), wave: 0, leadDecided: new Set(), autoPhases: 0, serialRetryTasks: run.tasks.filter((task) => task.note.startsWith('Its changes conflicted with another independent task') || task.note.startsWith('Its changes conflicted with another task')).map((task) => task.id), children: new Set() };
     this.active.set(run.id, active);
     return active;
   }
@@ -210,15 +271,18 @@ export class DesktopCrewRunner {
     const existing = this.active.get(previous.id);
     if (existing && !existing.cancelled) { await this.commit(existing, next); return next; }
     const conversation = await this.ports.createConversation(next.projectId, `Crew: ${next.goal.slice(0, 50)}`);
-    const active = this.attach(next, ownerWindowId, conversation.id);
-    await this.commit(active, next);
-    if (next.status === 'running' || next.status === 'planning') active.done = this.drive(active);
-    else this.active.delete(next.id);
-    return next;
+    // The newest conversation holds the latest work, so it is the one the Chat tab links to.
+    const stamped: CrewRun = { ...next, conversationId: conversation.id };
+    const active = this.attach(stamped, ownerWindowId, conversation.id);
+    await this.commit(active, stamped);
+    if (stamped.status === 'running' || stamped.status === 'planning') active.done = this.drive(active);
+    else this.active.delete(stamped.id);
+    return stamped;
   }
 
   private async commit(active: ActiveRun, run: CrewRun): Promise<void> {
-    const stamped = { ...run, liveConversations: this.liveIds(active) };
+    // A line added to the thread while another save was in flight is kept, whichever copy of the run reaches here.
+    const stamped = { ...run, chat: mergeChat(active.run.chat, run.chat), liveConversations: this.liveIds(active) };
     active.run = stamped;
     await this.ports.save(stamped);
     this.ports.notifyChanged(active.ownerWindowId, stamped);
@@ -464,13 +528,38 @@ export class DesktopCrewRunner {
   private async finish(active: ActiveRun): Promise<boolean> {
     const at = this.now().toISOString();
     const { run } = active;
-    if (!run.config.checkCommand) { await this.commit(active, settle(run, at)); return true; }
+    if (!run.config.checkCommand) return this.settleWithCoverage(active, at);
     const check = await this.ports.runCheck(run.projectId, run.config.checkCommand, active.controller.signal);
     if (active.cancelled) return true;
-    if (check.passed) { await this.commit(active, settle(run, at, { passed: true })); return true; }
+    if (check.passed) return this.settleWithCoverage(active, at, { passed: true });
     const fixed = addCheckFix(run, check.output, at);
     await this.commit(active, fixed);
     return fixed.status !== 'running';
+  }
+
+  /**
+   * Every planned task is accepted, but that is not the same as the goal being met: a goal that names a multi-phase plan
+   * is often planned one phase at a time. The Lead is asked what is still undone. With "keep going" on, the crew plans
+   * the next part itself; otherwise it finishes and says plainly what is left. Returns true when the run is over.
+   */
+  private async settleWithCoverage(active: ActiveRun, at: string, check?: { passed: boolean }): Promise<boolean> {
+    const lead = active.run.config.roles.find((role) => role.kind === 'lead');
+    if (lead) {
+      const answer = await this.askJson(active, lead, coveragePrompt(active.run), 'coverage', parseCoverage);
+      if (active.cancelled) return true;
+      const remaining = answer.value?.remaining ?? [];
+      const paid: CrewRun = { ...active.run, remaining, spentUsd: active.run.spentUsd + answer.costUsd, updatedAt: this.now().toISOString() };
+      if (remaining.length > 0 && active.run.keepGoing && active.autoPhases < MAX_AUTO_PHASES) {
+        active.autoPhases += 1;
+        await this.commit(active, continueToNextPhase(paid, remaining, this.now().toISOString()));
+        await this.plan(active);
+        // Planning left the run running (more tasks added) or put it back as finished (nothing to add); only the first goes on.
+        return (active.run as CrewRun).status !== 'running';
+      }
+      await this.commit(active, paid);
+    }
+    await this.commit(active, settle(active.run, at, check));
+    return true;
   }
 
   private async build(active: ActiveRun, taskId: string): Promise<void> {
@@ -599,7 +688,7 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
   }
 
   /** Asks a role for a reply that must parse; if it does not, asks once more with a stricter request. */
-  private async askJson<T>(active: ActiveRun, role: CrewRole, prompt: string, kind: 'plan' | 'review' | 'stuck', parse: (text: string) => T | null): Promise<{ value: T | null; costUsd: number }> {
+  private async askJson<T>(active: ActiveRun, role: CrewRole, prompt: string, kind: 'plan' | 'review' | 'stuck' | 'coverage', parse: (text: string) => T | null): Promise<{ value: T | null; costUsd: number }> {
     let costUsd = 0;
     const first = await this.call(active, role, prompt, { fresh: true });
     costUsd += first.costUsd ?? 0;

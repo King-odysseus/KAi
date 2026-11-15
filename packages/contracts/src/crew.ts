@@ -205,6 +205,20 @@ export const crewDesignInputSchema = z
   })
   .strict();
 
+/** One message in the crew's own conversation with the person: what they said, and what the Lead said back. */
+export const crewChatEntrySchema = z
+  .object({
+    id: z.string().min(1),
+    at: z.string().min(1),
+    from: z.enum(['you', 'lead']),
+    // ask: a question the Lead answers without changing anything. steer: a change of direction while it works.
+    // work: more to build. note: something the crew says on its own.
+    kind: z.enum(['ask', 'steer', 'work', 'answer', 'note']),
+    text: z.string().max(6_000),
+  })
+  .strict();
+export type CrewChatEntry = z.infer<typeof crewChatEntrySchema>;
+
 export const crewRunSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -221,6 +235,14 @@ export const crewRunSchema = z
     // A request made after the run finished, kept until the Lead has turned it into tasks, so an interrupted
     // follow-up plans again on resume instead of quietly doing nothing.
     followUp: z.string().max(2_000).nullable().default(null),
+    // The person's standing instruction to carry on through every phase of the plan without waiting to be told.
+    keepGoing: z.boolean().default(false),
+    // What the Lead found still undone when the board finished, so "done" says what is and is not.
+    remaining: z.array(z.string().max(300)).max(20).default([]),
+    // The conversation the crew works in, so the person can open the full transcript of what it did.
+    conversationId: z.string().min(1).nullable().default(null),
+    // The thread between the person and the Lead.
+    chat: z.array(crewChatEntrySchema).max(200).default([]),
     // The design as it was when the Lead planned, so the plan and the pages it names stay comparable.
     design: crewDesignSchema.nullable().default(null),
     // The conversations the crew's agents are running in right now, so the screen can show what they are doing.
@@ -271,6 +293,14 @@ export const crewStartInputSchema = z
 export type CrewStartInput = z.infer<typeof crewStartInputSchema>;
 
 export const crewControlInputSchema = z.object({ runId: z.string().min(1) }).strict();
+
+/** A message to the Lead from the Chat tab. */
+export const crewMessageInputSchema = z
+  .object({ runId: z.string().min(1), kind: z.enum(['ask', 'steer', 'work']), text: z.string().trim().min(1).max(2_000) })
+  .strict();
+export type CrewMessageInput = z.infer<typeof crewMessageInputSchema>;
+
+export const crewKeepGoingInputSchema = z.object({ runId: z.string().min(1), keepGoing: z.boolean() }).strict();
 
 /** More work for a crew that has finished: the Lead plans it onto the same board, with the same roles and context. */
 export const crewFollowUpInputSchema = z.object({ runId: z.string().min(1), prompt: z.string().trim().min(1).max(2_000) }).strict();

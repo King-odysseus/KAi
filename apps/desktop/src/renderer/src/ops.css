@@ -3171,3 +3171,13 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .crew-done-files code, .crew-commit code { font-size: 11px; color: var(--text-muted); }
 .crew-done-actions { flex-wrap: wrap; }
 .crew-commit { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--bg-shell); }
+
+/* The Crew chat and the "not finished yet" block on a finished crew. */
+.crew-chat { display: flex; flex-direction: column; gap: 10px; }
+.crew-chat-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.crew-chat-thread { max-height: 55vh; overflow-y: auto; }
+.crew-chat-log { display: flex; flex-direction: column; gap: 2px; padding-left: 8px; border-left: 2px solid var(--border); font-size: 12px; }
+.crew-chat-log small { color: var(--text-dim); }
+.crew-chat-tag { display: block; color: var(--text-dim); font-size: 11px; }
+.crew-chat-text { white-space: pre-wrap; }
+.crew-remaining { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--amber); border-radius: var(--radius); background: color-mix(in srgb, var(--amber) 10%, transparent); }
