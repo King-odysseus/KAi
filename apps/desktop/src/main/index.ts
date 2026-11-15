@@ -71,6 +71,8 @@ import { EditorSessionManager } from './editor-sessions';
 import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { DesktopWorkflowRunner } from './workflow-runner';
 import { DesktopCrewRunner } from './crew-runner';
+import { CrewBlockerStore } from './crew-blockers';
+import { createProjectCheckpoint, diffFromCheckpoint, restoreCheckpoint } from './checkpoints';
 import { DesktopCrewInterview } from './crew-interview';
 import { CrewRunStore } from './crew-store';
 import { CrewSupport } from './crew-support';
@@ -1042,6 +1044,7 @@ async function startApplication(): Promise<void> {
   });
   ipcContext.workflows = workflowRunner;
   const crewStore = new CrewRunStore(path.join(paths.root, 'crew-runs.json'), fileSystem);
+  const crewBlockers = new CrewBlockerStore(path.join(paths.root, 'crew-blockers.json'), fileSystem);
   // How this developer builds: learned from their own projects, kept up to date, filed into C1, and handed to every
   // agent run (the composer, Studio, Autopilot, workflows and the crew all start runs the same way).
   conventionService = new ConventionService(path.join(paths.root, 'conventions.json'), fileSystem, {
@@ -1111,6 +1114,16 @@ async function startApplication(): Promise<void> {
       return project ? (await gitOverview(project.path)).changes.map((change) => change.path) : [];
     },
     worktrees: { prepare: async (projectId, key) => createParallelSession(await projectRootFor(projectId), key) },
+    // Undo: the project as it was before a task started, what would change if it were put back, and putting it back.
+    checkpoint: async (projectId) => createProjectCheckpoint(await projectRootFor(projectId)),
+    diffSince: async (projectId, checkpoint) => (await diffFromCheckpoint(await projectRootFor(projectId), checkpoint)).map((change) => ({ path: change.path, added: change.added ?? 0, removed: change.removed ?? 0 })),
+    restore: async (projectId, checkpoint) => restoreCheckpoint(await projectRootFor(projectId), checkpoint),
+    // A crew conversation made before the crew marker existed is marked now, so the Workspace keeps it out of its tabs.
+    adoptConversation: async (conversationId, origin) => {
+      const existing = await conversations.get(conversationId);
+      if (existing && !existing.origin) await conversations.save({ ...existing, origin });
+    },
+    blockers: { load: (projectId) => crewBlockers.load(projectId), save: (projectId, item) => crewBlockers.save(projectId, item) },
     conventions: async () => conventionService.briefing(),
   });
   ipcContext.crew = crewRunner;

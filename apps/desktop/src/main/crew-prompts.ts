@@ -14,6 +14,8 @@ export interface PlannedTask {
   acceptance: string[];
   dependsOn: string[];
   designRef: string | null;
+  /** The phase of the plan this task belongs to, when the plan has phases. */
+  phase: string | null;
 }
 
 /** What the planner is told about Open Pencil: the pages to build, or that a designer should draw them first. */
@@ -65,10 +67,11 @@ export function planPrompt(goal: string, config: CrewConfig, conventions: string
     '- Each task has 1 to 5 acceptance criteria that can be checked by reading the code or running a command.',
     '- "dependsOn" lists task ids that must be accepted first. Use it only where order truly matters.',
     '- Give code tasks to a role that writes code. Never give a task to a read-only role.',
+    '- When the goal or its plan is divided into phases, give every task a "phase": the name of the phase as the plan names it ("Phase 1: Shell, gating, access"). Otherwise leave "phase" null.',
     '- If the plan or the project rules say something needs the person\'s approval before it is built (a new package or dependency, a paid service, deleting data), do NOT assume they approved it. List it under "approvals" with a plain one-line explanation of what it is and why it is wanted, written for someone who is not very technical. Leave "approvals" empty when nothing needs approval.',
     '',
     'Reply shape:',
-    '{"tasks":[{"id":"short-kebab-id","title":"...","role":"builder","description":"...","acceptance":["..."],"dependsOn":[],"designRef":null}],"approvals":[{"what":"zod","why":"A small library that checks the messages inside the app are well-formed."}]}',
+    '{"tasks":[{"id":"short-kebab-id","title":"...","role":"builder","description":"...","acceptance":["..."],"dependsOn":[],"designRef":null,"phase":null}],"approvals":[{"what":"zod","why":"A small library that checks the messages inside the app are well-formed."}]}',
   ].join('\n');
 }
 
@@ -354,6 +357,7 @@ export function parsePlan(text: string): PlannedTask[] | null {
       acceptance: Array.isArray(item.acceptance) ? item.acceptance.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).map((entry) => entry.trim().slice(0, 400)).slice(0, 20) : [],
       dependsOn: Array.isArray(item.dependsOn) ? item.dependsOn.filter((entry): entry is string => typeof entry === 'string') : [],
       designRef: typeof item.designRef === 'string' && item.designRef.trim() ? item.designRef.trim().slice(0, 300) : null,
+      phase: typeof item.phase === 'string' && item.phase.trim() ? item.phase.trim().slice(0, 200) : null,
     });
   }
   if (planned.length === 0) return null;

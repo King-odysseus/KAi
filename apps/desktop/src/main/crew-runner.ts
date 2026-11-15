@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { classifyWork, crewConfigSchema, crewRunSchema } from '@kai/contracts';
-import type { AgentRunRequest, AgentRunResult, ConversationOrigin, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
+import type { AgentRunRequest, AgentRunResult, ConversationOrigin, CrewRevertPreview, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
 import {
-  addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, isBareContinue, mergeChat, requestApprovals, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
+  acceptPhase, addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, isBareContinue, mergeChat, phaseFromFollowUp, requestApprovals, resetForRevert, ruleBlock, setTaskCheckpoint, tasksToRebuild, teachBlockers, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
   reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun,
 } from './crew-engine';
 import { askPrompt, coveragePrompt, parseCoverage, parsePlanFull, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
@@ -32,6 +32,19 @@ export interface CrewRunnerPorts {
     ensureRunning(): Promise<void>;
     /** One design turn with Open Pencil's tools, run in the project's folder. */
     draw(projectId: string, prompt: string, conversationId: string): Promise<{ status: 'completed' | 'failed'; output: string; error?: string; costUsd?: number }>;
+  };
+  /** The project as it is now, kept before a task starts so the task can be undone. Null when it cannot be saved. */
+  checkpoint?(projectId: string): Promise<{ ref: string; untracked: string[]; createdAt: string } | null>;
+  /** The files that differ from a checkpoint, for showing what an undo would change. */
+  diffSince?(projectId: string, checkpoint: { ref: string; untracked: string[]; createdAt: string }): Promise<Array<{ path: string; added: number; removed: number }>>;
+  /** Puts the project back to a checkpoint. */
+  restore?(projectId: string, checkpoint: { ref: string; untracked: string[]; createdAt: string }): Promise<{ restored: string[]; deleted: string[] }>;
+  /** Marks a conversation made before the crew marker existed as the crew's, so the Workspace treats it as one. */
+  adoptConversation?(conversationId: string, origin: ConversationOrigin): Promise<void>;
+  /** What earlier crews on a project learned about getting past a blocker, so a new crew starts knowing it. */
+  blockers?: {
+    load(projectId: string): Promise<Array<{ key: string; note: string }>>;
+    save(projectId: string, item: { key: string; note: string }): Promise<void>;
   };
   now?(): Date;
 }
@@ -104,11 +117,13 @@ export class DesktopCrewRunner {
     const runId = `crew_${randomUUID()}`;
     const conversation = await this.ports.createConversation(input.projectId, `Crew: ${input.goal.slice(0, 50)}`, { kind: 'crew', runId });
     const briefSnapshot = await this.ports.readBrief?.(input.projectId).catch(() => null) ?? null;
-    const run = crewRunSchema.parse({
+    const learned = (await this.ports.blockers?.load(input.projectId).catch(() => [])) ?? [];
+    const base = crewRunSchema.parse({
       schemaVersion: 1, id: runId, projectId: input.projectId, goal: input.goal, briefSnapshot, status: 'planning', conversationId: conversation.id,
       ...(input.keepGoing !== undefined ? { keepGoing: input.keepGoing } : {}), ...(input.explainSimply !== undefined ? { explainSimply: input.explainSimply } : {}),
       config: input.config, tasks: [], feed: [], startedAt: at, updatedAt: at,
     });
+    const run = teachBlockers(base, learned);
     const active = this.attach(run, ownerWindowId, conversation.id);
     await this.commit(active, run);
     active.done = this.drive(active);
@@ -202,6 +217,44 @@ export class DesktopCrewRunner {
     const next = addChat({ ...run, config: parsed.data }, { from: 'lead', kind: 'note', text: 'The team was changed. The new roles apply from the next task.' }, at);
     const active = this.active.get(runId);
     if (active) { await this.commit(active, next); return active.run; }
+    await this.ports.save(next);
+    return next;
+  }
+
+  /** Records the person's acceptance of a finished phase. */
+  async acceptPhase(runId: string, phase: string): Promise<CrewRun> {
+    const run = await this.require(runId);
+    const next = acceptPhase(run, phase, this.now().toISOString());
+    const active = this.active.get(runId);
+    if (active) { await this.commit(active, next); return active.run; }
+    await this.ports.save(next);
+    return next;
+  }
+
+  /** What undoing a task would change, so the person sees it before agreeing. */
+  async previewRevert(runId: string, taskId: string): Promise<CrewRevertPreview> {
+    const run = await this.require(runId);
+    const task = run.tasks.find((item) => item.id === taskId);
+    if (!task?.checkpoint) throw new Error('This task has no saved starting point, so it cannot be undone. Tasks built in a separate copy of the project have none.');
+    if (!this.ports.diffSince) throw new Error('Undo is not available in this build.');
+    const files = await this.ports.diffSince(run.projectId, task.checkpoint);
+    return { files: files.slice(0, 200), tasks: tasksToRebuild(run, taskId).map((item) => item.title) };
+  }
+
+  /**
+   * Puts the project back as it was before a task started. The task and every task that started after it wait to be
+   * built again. A safety copy of the project as it is now is taken first, and the crew has to be paused.
+   */
+  async revertTask(runId: string, taskId: string): Promise<CrewRun> {
+    const run = await this.require(runId);
+    if (this.active.has(runId) || run.status === 'running' || run.status === 'planning') throw new Error('Pause the crew first. Undoing a task while it is building would pull the files from under it.');
+    const task = run.tasks.find((item) => item.id === taskId);
+    if (!task?.checkpoint) throw new Error('This task has no saved starting point, so it cannot be undone.');
+    if (!this.ports.restore) throw new Error('Undo is not available in this build.');
+    const safety = (await this.ports.checkpoint?.(run.projectId).catch(() => null)) ?? null;
+    const result = await this.ports.restore(run.projectId, task.checkpoint);
+    const summary = `Went back to before "${task.title}": ${result.restored.length} ${result.restored.length === 1 ? 'file' : 'files'} put back, ${result.deleted.length} removed.${safety ? ` A copy of the project as it was just before is kept (${safety.ref.slice(0, 12)}).` : ''} It and every task after it will be built again when you resume.`;
+    const next = resetForRevert(run, taskId, summary, this.now().toISOString());
     await this.ports.save(next);
     return next;
   }
@@ -415,6 +468,7 @@ export class DesktopCrewRunner {
     const conversation = next.conversationId
       ? { id: next.conversationId }
       : await this.ports.createConversation(next.projectId, `Crew: ${next.goal.slice(0, 50)}`, { kind: 'crew', runId: next.id });
+    if (next.conversationId) await this.ports.adoptConversation?.(next.conversationId, { kind: 'crew', runId: next.id }).catch(() => undefined);
     // The newest conversation holds the latest work, so it is the one the Chat tab links to.
     const stamped: CrewRun = { ...next, conversationId: conversation.id };
     const active = this.attach(stamped, ownerWindowId, conversation.id);
@@ -496,7 +550,7 @@ export class DesktopCrewRunner {
       return;
     }
     const before = run.tasks.length;
-    const added = addTasks({ ...run, spentUsd: run.spentUsd + answer.costUsd }, uniqueTaskIds(run.tasks, answer.value.tasks), at);
+    const added = addTasks({ ...run, spentUsd: run.spentUsd + answer.costUsd }, uniqueTaskIds(run.tasks, answer.value.tasks.map((planned) => (planned.phase ? planned : { ...planned, phase: phaseFromFollowUp(current.followUp) }))), at);
     run = added.run;
     for (const reason of added.refused) run = { ...run, feed: [...run.feed, { id: `feed_${randomUUID()}`, at, who: 'crew', kind: 'info' as const, text: `Left out a task: ${reason}` }] };
     if (run.tasks.length === before && current.followUp) {
@@ -653,7 +707,7 @@ export class DesktopCrewRunner {
           continue;
         }
         if (outcome.status === 'failed') {
-          await this.commit(active, failBuildSmart(addSpend(active.run, task.id, outcome.costUsd, at()), task.id, outcome.error ?? 'The agent stopped without finishing.', at()));
+          await this.recordFailure(active, addSpend(active.run, task.id, outcome.costUsd, at()), task.id, outcome.error ?? 'The agent stopped without finishing.');
           continue;
         }
         if (outcome.status === 'checkFailed') {
@@ -717,6 +771,19 @@ export class DesktopCrewRunner {
     return true;
   }
 
+  /**
+   * Records a failed build. When it is a blocker the crew has not met before, what it learned is also kept for the
+   * project, so the next crew on it starts knowing the way past instead of finding it out again.
+   */
+  private async recordFailure(active: ActiveRun, base: CrewRun, taskId: string, error: string): Promise<void> {
+    const next = failBuildSmart(base, taskId, error, this.now().toISOString());
+    await this.commit(active, next);
+    if (next.knownBlockers.length > base.knownBlockers.length) {
+      const block = ruleBlock(error);
+      if (block) await this.ports.blockers?.save(base.projectId, { key: block.key, note: block.note }).catch(() => undefined);
+    }
+  }
+
   private async build(active: ActiveRun, taskId: string): Promise<void> {
     const at = (): string => this.now().toISOString();
     let task = active.run.tasks.find((item) => item.id === taskId)!;
@@ -725,16 +792,21 @@ export class DesktopCrewRunner {
     if (roleAccess(role) !== 'edit') { await this.commit(active, failBuild(active.run, taskId, `${role.label} cannot change files, so it cannot build this.`, at())); return; }
 
     await this.commit(active, startTask(active.run, taskId, role.id, at()));
+    // The project as it is before this task's first attempt, so the work can be undone.
+    if (!task.checkpoint) {
+      const saved = (await this.ports.checkpoint?.(active.run.projectId).catch(() => null)) ?? null;
+      if (saved) await this.commit(active, setTaskCheckpoint(active.run, taskId, saved, at()));
+    }
     const conventions = (await this.ports.conventions?.(active.run.projectId, `${active.run.goal} ${task.title}`).catch(() => '')) ?? '';
     const before = await this.changed(active.run.projectId);
     const brief = taskBrief(active.run, taskId, conventions);
     const result = role.kind === 'designer' && this.ports.design
       ? await this.draw(active, task, brief)
-      : await this.call(active, role, brief, { effortFrom: `${task.title}\n${task.description}`, fresh: true, label: `Build: ${task.title}` });
+      : await this.call(active, role, brief, { effortFrom: `${task.title}\n${task.description}`, fresh: true, label: `Build: ${task.title}`, escalate: task.round >= 2 });
     if (active.cancelled) return;
     let run = addSpend(active.run, taskId, result.costUsd ?? 0, at());
     if (result.status === 'failed') {
-      await this.commit(active, failBuildSmart(run, taskId, result.error ?? 'The agent stopped without finishing.', at()));
+      await this.recordFailure(active, run, taskId, result.error ?? 'The agent stopped without finishing.');
       return;
     }
     const after = await this.changed(active.run.projectId);
@@ -850,12 +922,12 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
     if (active.cancelled) return { value: null, costUsd, raw: '' };
     const value = first.status === 'completed' ? parse(first.output) : null;
     if (value !== null || first.status === 'failed') return { value, costUsd, raw: first.output };
-    const second = await this.call(active, role, retryPrompt(kind), { fresh: false, label: `${ASK_LABEL[kind]} (asked again)` });
+    const second = await this.call(active, role, retryPrompt(kind), { fresh: false, label: `${ASK_LABEL[kind]} (asked again)`, escalate: true });
     costUsd += second.costUsd ?? 0;
     return { value: second.status === 'completed' ? parse(second.output) : null, costUsd, raw: first.output || second.output };
   }
 
-  private async call(active: ActiveRun, role: CrewRole, prompt: string, options: { fresh: boolean; effortFrom?: string; cwd?: string; conversationId?: string; label?: string }): Promise<CallResult> {
+  private async call(active: ActiveRun, role: CrewRole, prompt: string, options: { fresh: boolean; effortFrom?: string; cwd?: string; conversationId?: string; label?: string; escalate?: boolean }): Promise<CallResult> {
     const { config } = active.run;
     const instructions = role.instructions.trim();
     const request: AgentRunRequest = {
@@ -868,7 +940,8 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
       // A role that cannot edit runs in Plan, whatever the crew's autonomy says.
       autonomy: roleAccess(role) === 'edit' ? config.autonomy : 'plan',
       helpers: helperChoiceFor(subAgentsFor(config, role.id, 0)),
-      ...(role.model ? { model: role.model } : options.effortFrom && config.savings.lightModelForRoutine ? { effort: classifyWork(options.effortFrom).level } : {}),
+      // A task on its third attempt, or a reply asked for again, is not routine work: it is given the heavier setting.
+      ...(role.model ? { model: role.model } : options.escalate ? { effort: 'heavy' as const } : options.effortFrom && config.savings.lightModelForRoutine ? { effort: classifyWork(options.effortFrom).level } : {}),
       ...(options.fresh ? { freshSession: true } : {}),
       // The log shows a short line, not the whole brief.
       ...(options.label ? { displayText: options.label.replace(/\s+/g, ' ').trim().slice(0, 500) } : {}),

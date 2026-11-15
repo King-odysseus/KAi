@@ -376,7 +376,7 @@ import {
 } from './terminal';
 import { planSchema, type Plan } from './plan';
 import { conventionsGetInputSchema, conventionsMuteInputSchema, conventionsReferenceInputSchema, conventionsRuleAddInputSchema, conventionsRuleRemoveInputSchema, type ConventionsState } from './conventions';
-import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewFollowUpInputSchema, crewDecideInputSchema, crewExplainSimplyInputSchema, crewInterviewInputSchema, type CrewInterview, crewKeepGoingInputSchema, crewMessageInputSchema, crewStartInputSchema, crewUpdateConfigInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
+import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewFollowUpInputSchema, crewAcceptPhaseInputSchema, crewRevertInputSchema, type CrewRevertPreview, crewDecideInputSchema, crewExplainSimplyInputSchema, crewInterviewInputSchema, type CrewInterview, crewKeepGoingInputSchema, crewMessageInputSchema, crewStartInputSchema, crewUpdateConfigInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
 import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitBlameInputSchema, type GitBlameResult, type GitChangesResult, todoScanInputSchema, type TodoScanResult, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, gitTeamBranchInputSchema, gitTeamCloneInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
 import { importAddCardsInputSchema, importScanInputSchema, type ImportReport } from './import';
 import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
@@ -569,6 +569,9 @@ export const ipcChannels = [
   'crew:keep-going',
   'crew:update-config',
   'crew:decide',
+  'crew:accept-phase',
+  'crew:revert-preview',
+  'crew:revert',
   'crew:stop-ask',
   'crew:interview',
   'crew:explain-simply',
@@ -1003,6 +1006,9 @@ export const ipcInputSchemas = {
   'crew:keep-going': crewKeepGoingInputSchema,
   'crew:update-config': crewUpdateConfigInputSchema,
   'crew:decide': crewDecideInputSchema,
+  'crew:accept-phase': crewAcceptPhaseInputSchema,
+  'crew:revert-preview': crewRevertInputSchema,
+  'crew:revert': crewRevertInputSchema,
   'crew:stop-ask': crewControlInputSchema,
   'crew:interview': crewInterviewInputSchema,
   'crew:explain-simply': crewExplainSimplyInputSchema,
@@ -1836,6 +1842,12 @@ export interface KaiDesktopBridge {
   updateCrewConfig(runId: string, config: CrewConfig): Promise<IpcResponse<CrewRun>>;
   /** Answers one approval card. The crew carries on once every card is answered. */
   decideCrewApproval(runId: string, approvalId: string, approve: boolean): Promise<IpcResponse<CrewRun>>;
+  /** Records the person's acceptance of a finished phase, which is what the plan's wait for acceptance means. */
+  acceptCrewPhase(runId: string, phase: string): Promise<IpcResponse<CrewRun>>;
+  /** What undoing a task would change, to show before asking. */
+  previewCrewRevert(runId: string, taskId: string): Promise<IpcResponse<CrewRevertPreview>>;
+  /** Puts the project back as it was before a task started, and has it and every later task built again. */
+  revertCrewTask(runId: string, taskId: string): Promise<IpcResponse<CrewRun>>;
   /** Stops the Lead answering a question, without touching the crew's own agents. */
   stopCrewAsk(runId: string): Promise<IpcResponse<CrewRun>>;
   /** Reads the goal (and any plan file it names) and returns the few questions worth asking before the crew plans. */

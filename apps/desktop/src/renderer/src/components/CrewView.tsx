@@ -24,6 +24,9 @@ import { collapseFeed } from '../crew-feed';
 import { CrewApprovals } from './CrewApprovals';
 import { CrewChat } from './CrewChat';
 import { CrewDone } from './CrewDone';
+import { CrewRoadmap } from './CrewRoadmap';
+import { CrewTaskDetail } from './CrewTaskDetail';
+import { confirmDialog } from './AppDialog';
 import { CrewInterviewPanel } from './CrewInterviewPanel';
 import { compileBrief, keepGoingFrom, type InterviewAnswer } from '../crew-brief';
 
@@ -83,7 +86,9 @@ function money(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
-export function CrewView({ activeProject, agentCapabilities, settings, goalRequest = null, onOpenGit, onOpenPreview, onOpenConversation }: {
+export function CrewView({ activeProject, agentCapabilities, settings, goalRequest = null, onOpenGit, onOpenPreview, onOpenConversation, onRunCommand }: {
+  /** Runs a command in the terminal, for the Run and Install buttons of a finished crew. */
+  onRunCommand?: (command: string) => void;
   /** Opens a conversation in the Workspace, so the full transcript of what the crew did can be read. */
   onOpenConversation?: (conversationId: string) => void;
   /** Opens the Git page, where a finished crew's changes are read and committed. */
@@ -113,6 +118,8 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
 
   // A handed-over goal needs the new-crew form, so the run list loading afterwards must not pick an old run over it.
   const wantsNewRun = useRef(false);
+  /** The task whose details are open, if any. */
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   /** Changes to an existing crew's team that are not saved yet, kept with the crew they belong to. */
   const [edited, setEdited] = useState<{ runId: string; config: CrewConfig } | null>(null);
   useEffect(() => {
@@ -127,6 +134,7 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
   const config = unsaved ?? activeRun?.config ?? draft;
   // A crew can be changed whenever it is not working: its next task uses whatever is saved.
   const readOnly = Boolean(activeRun && (activeRun.status === 'running' || activeRun.status === 'planning'));
+  const selectedTask = activeRun?.tasks.find((task) => task.id === selectedTaskId) ?? null;
 
   useEffect(() => {
     if (!activeRun?.briefSnapshot || !activeProject) { setBriefDiff(null); return; }
@@ -155,6 +163,51 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
   async function sendMessage(kind: 'ask' | 'steer' | 'work', text: string): Promise<void> {
     if (!activeRun) return;
     reconcile(unwrap(await window.kaiDesktop.messageCrew(activeRun.id, kind, text)));
+  }
+
+  /** Runs an action under the crew screen's busy flag and error line, for the phase and undo buttons. */
+  async function guardedAction(action: () => Promise<void>): Promise<void> {
+    setWorking(true);
+    setError(null);
+    try {
+      await action();
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function startPhase(name: string): Promise<void> {
+    await sendMessage('work', `Continue the plan with: ${name}.`);
+    setTab('board');
+  }
+
+  async function explainPhase(name: string): Promise<void> {
+    setTab('chat');
+    await sendMessage('ask', `Explain in plain words what "${name}" involves, what it will change, and whether I need to decide anything before it starts.`);
+  }
+
+  /** Records the person's OK on a finished phase, and optionally starts the next one in the same step. */
+  async function acceptPhase(name: string, thenStart?: string): Promise<void> {
+    if (!activeRun) return;
+    reconcile(unwrap(await window.kaiDesktop.acceptCrewPhase(activeRun.id, name)));
+    if (thenStart) await startPhase(thenStart);
+  }
+
+  /** Goes back to before a task, after showing what it would change and asking. */
+  async function revertTask(taskId: string): Promise<void> {
+    if (!activeRun) return;
+    const preview = unwrap(await window.kaiDesktop.previewCrewRevert(activeRun.id, taskId));
+    const shown = preview.files.slice(0, 12).map((file) => `${file.path} (+${file.added} -${file.removed})`).join('\n');
+    const confirmed = await confirmDialog({
+      title: 'Go back to before this task?',
+      detail: `This puts ${preview.files.length} ${preview.files.length === 1 ? 'file' : 'files'} back as they were before the task started, and the crew builds ${preview.tasks.length} ${preview.tasks.length === 1 ? 'task' : 'tasks'} again: ${preview.tasks.join(', ')}.\n\n${shown}${preview.files.length > 12 ? `\nand ${preview.files.length - 12} more` : ''}\n\nAnything you changed in those files since will be put back too. A copy of the project as it is now is kept first.`,
+      confirmLabel: 'Go back',
+    });
+    if (!confirmed) return;
+    reconcile(unwrap(await window.kaiDesktop.revertCrewTask(activeRun.id, taskId)));
+    setSelectedTaskId(null);
   }
 
   /** Stops the Lead answering a question, without touching the crew's own agents. */
@@ -407,9 +460,11 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
             ? (
               <>
                 {(activeRun.status === 'completed' || activeRun.status === 'stopped') && (
-                  <CrewDone run={activeRun} project={activeProject} onFollowUp={followUp} onOpenGit={onOpenGit} onPreview={onOpenPreview} onReport={() => setTab('report')} onKeepGoing={keepGoing} onChat={() => setTab('chat')} />
+                  <CrewDone run={activeRun} project={activeProject} onFollowUp={followUp} onOpenGit={onOpenGit} onPreview={onOpenPreview} onReport={() => setTab('report')} onKeepGoing={keepGoing} onChat={() => setTab('chat')} {...(onRunCommand ? { onRunCommand } : {})} />
                 )}
-                <Board run={activeRun} />
+                <CrewRoadmap run={activeRun} busy={working} onStart={(name) => void guardedAction(() => startPhase(name))} onExplain={(name) => void guardedAction(() => explainPhase(name))} onAccept={(name, then) => void guardedAction(() => acceptPhase(name, then))} />
+                {selectedTask && <CrewTaskDetail run={activeRun} task={selectedTask} busy={working} onClose={() => setSelectedTaskId(null)} onRevert={(id) => void guardedAction(() => revertTask(id))} />}
+                <Board run={activeRun} onSelect={setSelectedTaskId} />
               </>
             )
             : (
@@ -430,6 +485,12 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
                 </div>
                 <label className="workflow-field" htmlFor="crew-check"><span>Project check (optional)</span>
                   <UiTextInput id="crew-check" value={draft.checkCommand} onChange={(event) => updateDraft((current) => ({ ...current, checkCommand: event.target.value }))} placeholder="For example: npm test. The project is not done until it passes." />
+                </label>
+                <label className="workflow-field" htmlFor="crew-run"><span>Run it with (optional)</span>
+                  <UiTextInput id="crew-run" value={draft.runCommand} onChange={(event) => updateDraft((current) => ({ ...current, runCommand: event.target.value }))} placeholder="For example: npm run dev. A finished crew then offers a Run button." />
+                </label>
+                <label className="workflow-field" htmlFor="crew-install"><span>Install it with (optional)</span>
+                  <UiTextInput id="crew-install" value={draft.installCommand} onChange={(event) => updateDraft((current) => ({ ...current, installCommand: event.target.value }))} placeholder="For example: npm run desktop:release. A finished crew then offers an Install button." />
                 </label>
                 <div className="ops-actions">
                   <UiButton type="button" className="primary-button" disabled={working || interview === 'loading' || goal.trim().length === 0} onClick={() => void start()}><Play size={14} /><span>{interview === 'loading' ? 'Reading your goal…' : 'Start crew'}</span></UiButton>
@@ -464,7 +525,8 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
           {tab === 'crew' && (
             <CrewTab directApi={settings.directApi} config={config} readOnly={readOnly} capabilityOf={capabilityOf} agentCapabilities={agentCapabilities} onRole={updateRole} onAdd={addRole} onSaveDefault={() => void saveDefault()} onResetDefault={() => void resetDefault()}
               onRemove={(id) => updateDraft((current) => ({ ...current, roles: current.roles.filter((role) => role.id !== id) }))}
-              onLimits={(patch) => updateDraft((current) => ({ ...current, limits: { ...current.limits, ...patch } }))} />
+              onLimits={(patch) => updateDraft((current) => ({ ...current, limits: { ...current.limits, ...patch } }))}
+              onSettings={(patch) => updateDraft((current) => ({ ...current, ...patch }))} />
           )}
           {tab === 'design' && <DesignTab run={activeRun} design={design} onRead={(launch) => void readDesign(launch)} />}
           {tab === 'cost' && (
@@ -618,7 +680,7 @@ function LiveActivity({ run }: { run: CrewRun }): ReactNode {
   );
 }
 
-function Board({ run }: { run: CrewRun }): ReactNode {
+function Board({ run, onSelect }: { run: CrewRun; onSelect: (taskId: string) => void }): ReactNode {
   const board = run.tasks.filter((task) => !task.proposed);
   const roleLabel = (id: string): string => run.config.roles.find((role) => role.id === id)?.label ?? id;
   const working = run.status === 'running' || run.status === 'planning';
@@ -642,7 +704,7 @@ function Board({ run }: { run: CrewRun }): ReactNode {
                 const status = TASK_STATUS[task.status];
                 const feedback = [...task.reviews].reverse().find((review) => review.verdict !== 'accept' && review.feedback);
                 return (
-                  <article key={task.id} className={`kanban-card crew-task ${task.status === 'needsYou' ? 'flag' : ''}`}>
+                  <article key={task.id} className={`kanban-card crew-task crew-task-clickable ${task.status === 'needsYou' ? 'flag' : ''}`} role="button" tabIndex={0} aria-label={`Details: ${task.title}`} onClick={() => onSelect(task.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(task.id); } }}>
                     <strong>{task.title}</strong>
                     <small>{roleLabel(task.role)}{task.round > 0 ? ` · round ${task.round}` : ''} · {task.acceptance.length} {task.acceptance.length === 1 ? 'criterion' : 'criteria'}</small>
                     {task.designRef && <small className="crew-design-ref"><Palette size={11} />{task.designRef}</small>}
@@ -748,7 +810,7 @@ function DesignTab({ run, design, onRead }: { run: CrewRun | null; design: CrewD
   );
 }
 
-function CrewTab({ directApi, config, readOnly, capabilityOf, agentCapabilities, onRole, onAdd, onSaveDefault, onResetDefault, onRemove, onLimits }: {
+function CrewTab({ directApi, config, readOnly, capabilityOf, agentCapabilities, onRole, onAdd, onSaveDefault, onResetDefault, onRemove, onLimits, onSettings }: {
   directApi: AppSettings['directApi'];
   config: CrewConfig;
   readOnly: boolean;
@@ -760,6 +822,7 @@ function CrewTab({ directApi, config, readOnly, capabilityOf, agentCapabilities,
   onResetDefault: () => void;
   onRemove: (id: string) => void;
   onLimits: (patch: Partial<CrewConfig['limits']>) => void;
+  onSettings: (patch: Partial<CrewConfig>) => void;
 }): ReactNode {
   // Which providers have a key saved. Read when the tab opens and when the window regains focus, so a key added in Settings shows up.
   const [credentialIds, setCredentialIds] = useState<readonly string[]>([]);
@@ -857,6 +920,23 @@ function CrewTab({ directApi, config, readOnly, capabilityOf, agentCapabilities,
         <label className="workflow-field"><span>Sub-agents at once, whole crew</span>
           <UiTextInput type="number" min={0} max={24} disabled={readOnly} value={config.limits.maxSubAgents} onChange={(event) => onLimits({ maxSubAgents: clampInt(event.target.value, 0, 24) })} />
         </label>
+      </div>
+      <div className="crew-project-settings">
+        <h3 className="crew-subheading">Project commands and commits</h3>
+        <label className="toggle-row">
+          <span>
+            <strong>Builders commit their own work</strong>
+            <small>{config.commitWork ? 'On: each builder commits when its task is done.' : 'Off: builders leave changes uncommitted. You review them and commit from the Crew screen when a phase is done.'}</small>
+          </span>
+          <Switch checked={config.commitWork} disabled={readOnly} onChange={(event) => onSettings({ commitWork: event.target.checked })} />
+        </label>
+        <label className="workflow-field"><span>Run it with (optional)</span>
+          <UiTextInput value={config.runCommand} disabled={readOnly} onChange={(event) => onSettings({ runCommand: event.target.value })} placeholder="For example: npm run dev" />
+        </label>
+        <label className="workflow-field"><span>Install it with (optional)</span>
+          <UiTextInput value={config.installCommand} disabled={readOnly} onChange={(event) => onSettings({ installCommand: event.target.value })} placeholder="For example: npm run desktop:release" />
+        </label>
+        <small className="crew-empty">When set, a finished crew shows Run it and Install buttons that run the command in the terminal.</small>
       </div>
       {!readOnly && (
         <div className="ops-actions">

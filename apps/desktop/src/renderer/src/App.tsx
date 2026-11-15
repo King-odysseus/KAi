@@ -2417,7 +2417,7 @@ export function App(): ReactNode {
           />
         );
       case 'crew':
-        return <CrewView goalRequest={crewGoalRequest} activeProject={activeProject} agentCapabilities={agentCapabilities} settings={bootstrap.settings} onOpenGit={() => setView('git')} onOpenPreview={() => setPreviewOpen(true)} onOpenConversation={(id) => void openConversation(id)} />;
+        return <CrewView goalRequest={crewGoalRequest} activeProject={activeProject} agentCapabilities={agentCapabilities} settings={bootstrap.settings} onOpenGit={() => setView('git')} onOpenPreview={() => setPreviewOpen(true)} onOpenConversation={(id) => void openConversation(id)} onRunCommand={(command) => { setTerminalCommand({ command, nonce: Date.now() }); setTerminalOpen(true); }} />;
       case 'history':
         return (
           <HistoryView

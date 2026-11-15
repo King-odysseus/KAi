@@ -95,7 +95,7 @@ import { attachmentText } from './attachment-text';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort, DirectApiApprovalRequest } from './direct-provider-runtime';
 import { awaitsTheUser } from './direct-provider-runtime';
-import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, injectRulesIntoProjects, plainDashes, RULES_MARKER, shouldCarryRules, withAutopilotException } from './execution-rules';
+import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, injectRulesIntoProjects, plainDashes, RULES_MARKER, shouldCarryRules, withAutopilotException, withCrewException } from './execution-rules';
 import type { DesktopExecutionRules } from './execution-rules';
 import type { DesktopMcpRuntime } from './mcp-runtime';
 import type { Cognitive1Client } from './cognitive1-client';
@@ -630,6 +630,9 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'crew:keep-going', async ({ runId, keepGoing }, request) => context.crew.setKeepGoing(runId, keepGoing, request.ownerWindowId));
   handle(context, 'crew:update-config', async ({ runId, config }) => context.crew.updateConfig(runId, config));
   handle(context, 'crew:stop-ask', async ({ runId }) => context.crew.stopAsk(runId));
+  handle(context, 'crew:accept-phase', async ({ runId, phase }) => context.crew.acceptPhase(runId, phase));
+  handle(context, 'crew:revert-preview', async ({ runId, taskId }) => context.crew.previewRevert(runId, taskId));
+  handle(context, 'crew:revert', async ({ runId, taskId }) => context.crew.revertTask(runId, taskId));
   handle(context, 'crew:decide', async ({ runId, approvalId, approve }, request) => context.crew.decide(runId, approvalId, approve, request.ownerWindowId));
   handle(context, 'crew:explain-simply', async ({ runId, explainSimply }) => context.crew.setExplainSimply(runId, explainSimply));
   handle(context, 'crew:find-phases', async ({ runId }, request) => context.crew.findPhases(runId, request.ownerWindowId));
@@ -1900,6 +1903,11 @@ export async function runConversationAgent(
   // Autopilot promises to work on this machine only, so its runs are told, inside the rules, that the commit and push
   // step does not apply to them. Everything built from the rules below (the briefing and the project context) sees it.
   if (conversation.origin?.kind === 'autopilot') authoritativeRules = withAutopilotException(authoritativeRules);
+  // A crew whose builders do not commit is told so inside the rules, which otherwise call commit and push mandatory.
+  if (conversation.origin?.kind === 'crew') {
+    const crewRun = await context.crew.get(conversation.origin.runId).catch(() => null);
+    if (crewRun && !crewRun.config.commitWork) authoritativeRules = withCrewException(authoritativeRules);
+  }
   const rulesBriefing = buildExecutionRulesBriefing(authoritativeRules);
 
   const executionMode = request.execution ?? 'cli';

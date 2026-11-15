@@ -591,6 +591,82 @@ describe('crew runner', () => {
     expect(run.feed.at(-1)?.text).toContain('phase buttons');
   });
 
+  it('files tasks under their phases, files a follow-up\'s tasks under the phase it asked for, and lets the person accept a finished one', async () => {
+    const phased = JSON.stringify({ tasks: [
+      { id: 'spike', title: 'Spike', role: 'builder', description: 'Prove it', acceptance: ['Works'], dependsOn: [], phase: 'Phase 0: Spike' },
+    ] });
+    const next = JSON.stringify({ tasks: [{ id: 'shell', title: 'Shell', role: 'builder', description: 'Build it', acceptance: ['Opens'], dependsOn: [] }] });
+    const f = fixture({ plan: [phased, next], coverage: ['{"complete":false,"remaining":["Phase 1: Shell"]}', '{"complete":true}'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.tasks[0]?.phase).toBe('Phase 0: Spike');
+    expect(run.remaining).toEqual(['Phase 1: Shell']);
+
+    const accepted = await f.runner.acceptPhase(started.id, 'Phase 0: Spike');
+    expect(accepted.acceptedPhases).toEqual(['phase 0']);
+
+    await f.runner.message(started.id, 'work', 'Continue the plan with: Phase 1: Shell.', 1);
+    const after = await runToIdle(f.runner, started.id);
+    expect(after.tasks.find((task) => task.id === 'shell')?.phase).toBe('Phase 1: Shell');
+  });
+
+  it('keeps the project as it was before each task, and can put it back after showing what would change', async () => {
+    const f = fixture();
+    const restored: string[] = [];
+    f.ports.checkpoint = async () => ({ ref: `ref-${restored.length}-${Math.random().toString(36).slice(2, 6)}`, untracked: [], createdAt: new Date(Date.now() + restored.length).toISOString() });
+    f.ports.diffSince = async () => [{ path: 'src/a.ts', added: 3, removed: 1 }];
+    f.ports.restore = async (_projectId, checkpoint) => { restored.push(checkpoint.ref); return { restored: ['src/a.ts'], deleted: ['src/new.ts'] }; };
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    const first = run.tasks[0]!;
+    expect(first.checkpoint).not.toBeNull();
+
+    const preview = await f.runner.previewRevert(started.id, first.id);
+    expect(preview.files).toEqual([{ path: 'src/a.ts', added: 3, removed: 1 }]);
+    expect(preview.tasks.length).toBeGreaterThanOrEqual(1);
+
+    const back = await f.runner.revertTask(started.id, first.id);
+    expect(restored).toEqual([first.checkpoint!.ref]);
+    expect(back.status).toBe('paused');
+    expect(back.tasks.find((task) => task.id === first.id)).toMatchObject({ status: 'backlog', round: 0, checkpoint: null });
+    expect(back.chat.at(-1)?.text).toContain('1 file put back, 1 removed');
+  });
+
+  it('refuses to undo while the crew is working, and a task that has no saved starting point', async () => {
+    const f = fixture();
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    await expect(f.runner.revertTask(started.id, 'schema')).rejects.toThrow(/Pause the crew first/);
+    const done = await runToIdle(f.runner, started.id);
+    await expect(f.runner.previewRevert(started.id, done.tasks[0]!.id)).rejects.toThrow(/no saved starting point/);
+  });
+
+  it('starts a new crew knowing what earlier crews learned, and keeps what a new blocker teaches for the next one', async () => {
+    const saved: Array<{ projectId: string; key: string }> = [];
+    const hook = 'git commit failed: [BLOCKED] Self-tagging detected: \'copilot\' Commit blocked.';
+    const f = fixture({ buildFails: 1, buildError: hook });
+    f.ports.blockers = {
+      load: async () => [{ key: 'hook:old', note: 'Run the formatter before every commit.' }],
+      save: async (projectId, item) => { saved.push({ projectId, key: item.key }); },
+    };
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.goal).toContain('Run the formatter before every commit.');
+    expect(run.knownBlockers).toEqual(['hook:old', 'selftag:copilot']);
+    expect(saved).toEqual([{ projectId: 'p1', key: 'selftag:copilot' }]);
+  });
+
+  it('gives a task a stronger setting from its third attempt', async () => {
+    const base = createDefaultCrewConfig('claude', 'codex');
+    const f = fixture({ buildFails: 2 }, { savings: { ...base.savings, lightModelForRoutine: false } });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    await runToIdle(f.runner, started.id);
+    const attempts = f.requests.filter((request) => request.prompt.includes('Your task: Log schema'));
+    expect(attempts.length).toBeGreaterThanOrEqual(3);
+    expect(attempts[0]?.effort).toBeUndefined();
+    expect(attempts[1]?.effort).toBeUndefined();
+    expect(attempts[2]?.effort).toBe('heavy');
+  });
+
   it('plans a follow-up onto the same board after the crew has finished', async () => {
     const followPlan = JSON.stringify({ tasks: [{ id: 'schema', title: 'Install the app', role: 'builder', description: 'Build and install', acceptance: ['The app is installed'], dependsOn: [] }] });
     const f = fixture({ plan: [PLAN, followPlan] });

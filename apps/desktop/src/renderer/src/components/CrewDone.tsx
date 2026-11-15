@@ -1,5 +1,5 @@
 import { Textarea } from 'flowbite-react';
-import { ArrowRight, ArrowUp, Check, FileText, MessageSquare, GitBranch, GitCommitHorizontal, Loader2, Eye, Send } from 'lucide-react';
+import { ArrowRight, ArrowUp, Check, Download, FileText, MessageSquare, Play, GitBranch, GitCommitHorizontal, Loader2, Eye, Send } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { buildReport } from '@kai/contracts';
 import type { CrewRun, GitOverview, ProjectRecord } from '@kai/contracts';
@@ -24,7 +24,7 @@ const SUGGESTIONS = [
  * from the same report the Report tab shows; the buttons do the same few things every time without a model; and
  * the box hands anything else to the Lead, which plans it onto this same board.
  */
-export function CrewDone({ run, project, onFollowUp, onOpenGit, onPreview, onReport, onKeepGoing, onChat }: {
+export function CrewDone({ run, project, onFollowUp, onOpenGit, onPreview, onReport, onKeepGoing, onChat, onRunCommand }: {
   run: CrewRun;
   project: ProjectRecord | null;
   onFollowUp: (prompt: string) => Promise<void>;
@@ -35,6 +35,8 @@ export function CrewDone({ run, project, onFollowUp, onOpenGit, onPreview, onRep
   onKeepGoing: (on: boolean) => Promise<void>;
   /** Opens the Chat tab, where the Lead can be asked about what was done. */
   onChat: () => void;
+  /** Runs a command in the terminal, for Run it and Install. */
+  onRunCommand?: (command: string) => void;
 }): ReactNode {
   const report = useMemo(() => buildReport(run), [run]);
   const files = useMemo(() => [...new Set(run.tasks.filter((task) => !task.proposed).flatMap((task) => task.files))], [run.tasks]);
@@ -104,6 +106,8 @@ export function CrewDone({ run, project, onFollowUp, onOpenGit, onPreview, onRep
         <UiButton type="button" className={committing ? 'primary-button' : 'secondary-button'} onClick={() => setCommitting((open) => !open)} disabled={!project} aria-expanded={committing}><GitCommitHorizontal size={14} /> Commit and push</UiButton>
         <UiButton type="button" className="secondary-button" onClick={onReport}><FileText size={14} /> Full report</UiButton>
         <UiButton type="button" className="secondary-button" onClick={onChat} title="Ask the Lead what was done, or what is blocking the rest"><MessageSquare size={14} /> Ask the Lead</UiButton>
+        {run.config.runCommand && onRunCommand && <UiButton type="button" className="secondary-button" onClick={() => onRunCommand(run.config.runCommand)} title={run.config.runCommand}><Play size={14} /> Run it</UiButton>}
+        {run.config.installCommand && onRunCommand && <UiButton type="button" className="secondary-button" onClick={() => onRunCommand(run.config.installCommand)} title={run.config.installCommand}><Download size={14} /> Install</UiButton>}
       </div>
       {committing && project && <CommitPanel project={project} built={report.built} onClose={() => setCommitting(false)} />}
 

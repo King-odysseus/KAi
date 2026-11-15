@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { MAX_SUB_AGENTS_TOTAL, roleAccess } from '@kai/contracts';
+import { MAX_SUB_AGENTS_TOTAL, buildRoadmap, phaseKey, roleAccess } from '@kai/contracts';
 import type { CrewAsk, CrewChatEntry, CrewConfig, CrewFeedEntry, CrewReview, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
 
 /**
@@ -93,7 +93,7 @@ export function addTasks(run: CrewRun, drafts: readonly CrewTaskDraft[], at: str
     if (next.tasks.some((task) => task.id === draft.id)) { refused.push(`${draft.title}: a task with id ${draft.id} already exists.`); continue; }
     const task: CrewTask = {
       description: '', dependsOn: [], status: 'backlog', round: 0, reviews: [], designRef: null, proposed: false,
-      assignedTo: null, files: [], costUsd: 0, note: '', ...draft, createdBy: by, updatedAt: at,
+      assignedTo: null, files: [], costUsd: 0, note: '', phase: null, checkpoint: null, ...draft, createdBy: by, updatedAt: at,
     };
     // A task for a role that cannot edit could never be built, so it starts with a role that can.
     const drafted = roleOf(run.config, draft.role);
@@ -143,6 +143,66 @@ export function uniqueTaskIds<T extends { id: string; dependsOn?: readonly strin
 export function isBareContinue(text: string): boolean {
   const flat = text.trim().toLowerCase().replace(/[.!?,]+$/g, '').replace(/\s+/g, ' ');
   return /^(?:ok(?:ay)?[, ]+)?(?:please )?(?:continue|go on|go ahead|carry on|keep going|proceed|resume|move on|do it|yes|yes please|go|next|next phase|next part|next step|start (?:the )?next(?: phase| part)?)(?: please)?$/.test(flat);
+}
+
+/** The phase a follow-up asked for ("Continue the plan with: Phase 1: Shell."), so its tasks are filed under it. */
+export function phaseFromFollowUp(text: string | null): string | null {
+  const match = /Continue the plan with(?: the next unfinished part)?:\s*(.+?)\.(?:\s+Still to do|\s+The person has told|$)/.exec(text ?? '');
+  const name = match?.[1]?.trim();
+  return name ? name.slice(0, 200) : null;
+}
+
+/**
+ * Records the person's acceptance of a finished phase. The plan asks for it before the next phase; it is given by a
+ * button and kept on the run, so the crew can tell an accepted phase from one that has only been finished.
+ */
+export function acceptPhase(run: CrewRun, phase: string, at: string): CrewRun {
+  const key = phaseKey(phase);
+  const row = buildRoadmap(run).find((item) => item.key === key);
+  if (!row) throw new Error('That phase is not on this crew\'s plan.');
+  if (row.status === 'accepted') return run;
+  if (row.status !== 'done') throw new Error(`${row.name} is not finished yet, so it cannot be accepted.`);
+  return feed(addChat({ ...run, acceptedPhases: [...run.acceptedPhases, key].slice(-40) }, { from: 'you', kind: 'note', text: `Accepted: ${row.name}` }, at), { who: 'you', kind: 'accepted', text: `Accepted ${row.name}.` }, at);
+}
+
+/** Remembers the project as it was before a task first started, so the work can be undone. A task keeps its first one. */
+export function setTaskCheckpoint(run: CrewRun, taskId: string, checkpoint: CrewTask['checkpoint'], at: string): CrewRun {
+  if (!checkpoint) return run;
+  const task = taskOf(run, taskId);
+  if (task.checkpoint) return run;
+  return patchTask(run, taskId, (item) => ({ ...item, checkpoint }), at);
+}
+
+/**
+ * The tasks that undoing one would have built again: it, and every task that started after it. Tasks started later
+ * carry later checkpoints, so the order they started in is the order of their checkpoints.
+ */
+export function tasksToRebuild(run: CrewRun, taskId: string): CrewTask[] {
+  const task = taskOf(run, taskId);
+  if (!task.checkpoint) return [];
+  const since = task.checkpoint.createdAt;
+  return run.tasks.filter((item) => !item.proposed && item.checkpoint !== null && item.checkpoint.createdAt >= since);
+}
+
+/** After the project was put back, the task and every later one wait to be built again from nothing. */
+export function resetForRevert(run: CrewRun, taskId: string, summary: string, at: string): CrewRun {
+  const rebuild = new Set(tasksToRebuild(run, taskId).map((item) => item.id));
+  const tasks = run.tasks.map((item) => (rebuild.has(item.id)
+    ? { ...item, status: 'backlog' as const, round: 0, reviews: [], files: [], note: '', checkpoint: null, updatedAt: at }
+    : item));
+  const accepted = run.acceptedPhases.filter((key) => !tasks.some((item) => item.phase !== null && phaseKey(item.phase) === key && rebuild.has(item.id)));
+  const paused: CrewRun = { ...run, tasks, acceptedPhases: accepted, status: 'paused', ask: null, completedAt: null, updatedAt: at };
+  return addChat(feed(paused, { who: 'you', kind: 'info', text: summary }, at), { from: 'lead', kind: 'note', text: summary }, at);
+}
+
+/** Tells a new crew what earlier crews on this project learned, so it does not meet the same blocker as if it were new. */
+export function teachBlockers(run: CrewRun, learned: ReadonlyArray<{ key: string; note: string }>): CrewRun {
+  let next = run;
+  for (const item of learned) {
+    if (next.knownBlockers.includes(item.key)) continue;
+    next = withGuidance({ ...next, knownBlockers: [...next.knownBlockers, item.key].slice(-20) }, item.note);
+  }
+  return next;
 }
 
 /** Adds a line to the thread between the person and the Lead. The newest 200 are kept. */
@@ -472,6 +532,7 @@ export function taskBrief(run: CrewRun, taskId: string, conventions = ''): strin
     boardSummary(run),
     '',
     writes ? 'You may change files. Keep the change to this task, run the relevant checks, and report the files you changed.' : 'Do not change any files. Report what you found.',
+    ...(writes && !run.config.commitWork ? ['Do not run git commit or git push, and do not stage files. Leave your changes uncommitted: the person reviews them and commits when the phase is done.'] : []),
   ].join('\n');
 }
 

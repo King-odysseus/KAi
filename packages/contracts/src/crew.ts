@@ -104,6 +104,12 @@ export const crewConfigSchema = z
     savings: crewSavingsSchema.default({}),
     // A command that must pass (for example "npm test") before the Lead may call the project done.
     checkCommand: z.string().trim().max(1_000).default(''),
+    // How to run and install what was built, so a finished crew can offer Run and Install buttons. Both are optional.
+    runCommand: z.string().trim().max(300).default(''),
+    installCommand: z.string().trim().max(300).default(''),
+    // Whether builders commit their own work. Off, they leave changes uncommitted for the person to review and commit
+    // when a phase ends, which is also how a commit hook that rejects a message can never stall a build.
+    commitWork: z.boolean().default(false),
   })
   .strict()
   .superRefine((config, ctx) => {
@@ -155,6 +161,10 @@ export const crewTaskSchema = z
     assignedTo: z.string().max(40).nullable().default(null),
     // The files the builder reported changing, for the final report and for skipping an unchanged review.
     files: z.array(z.string().max(300)).max(200).default([]),
+    // The part of the plan this task belongs to ("Phase 1: Shell"), when the plan is split into parts.
+    phase: z.string().max(200).nullable().default(null),
+    // The project as it was before this task first started, so the work can be undone. Absent for work done in a copy.
+    checkpoint: z.object({ ref: z.string().min(1).max(300), untracked: z.array(z.string().min(1).max(500)).max(2_000).default([]), createdAt: z.string().min(1) }).strict().nullable().default(null),
     costUsd: z.number().min(0).default(0),
     note: z.string().max(1_000).default(''),
     updatedAt: timestampSchema,
@@ -253,6 +263,8 @@ export const crewRunSchema = z
     followUp: z.string().max(2_000).nullable().default(null),
     // The person's standing instruction to carry on through every phase of the plan without waiting to be told.
     keepGoing: z.boolean().default(false),
+    // Phases the person has accepted, by key, so the plan's wait for acceptance is a recorded yes and not a typed sentence.
+    acceptedPhases: z.array(z.string().max(200)).max(40).default([]),
     // Blockers the crew has already worked out a way past (a commit hook rejecting a word, say), so the same one is
     // not met again as if it were new and its workaround is not repeated.
     knownBlockers: z.array(z.string().max(120)).max(20).default([]),
@@ -319,6 +331,15 @@ export const crewStartInputSchema = z
   })
   .strict();
 export type CrewStartInput = z.infer<typeof crewStartInputSchema>;
+
+export const crewAcceptPhaseInputSchema = z.object({ runId: z.string().min(1), phase: z.string().min(1).max(200) }).strict();
+export const crewRevertInputSchema = z.object({ runId: z.string().min(1), taskId: z.string().min(1) }).strict();
+/** What undoing a task would change, listed before the person is asked to agree. */
+export interface CrewRevertPreview {
+  files: Array<{ path: string; added: number; removed: number }>;
+  /** The tasks that would be built again: the chosen one and every task that started after it. */
+  tasks: string[];
+}
 
 export const crewControlInputSchema = z.object({ runId: z.string().min(1) }).strict();
 
@@ -460,6 +481,58 @@ export function buildReport(run: CrewRun, now: Date = new Date()): CrewReport {
       minutes: Math.max(0, Math.round((end.getTime() - new Date(run.startedAt).getTime()) / 60_000)),
     },
   };
+}
+
+/** The same phase under different wordings ("Phase 1: Shell" and "Phase 1 - Shell, gating") reads as one. */
+export function phaseKey(name: string): string {
+  const numbered = /phase\s*(\d+)/i.exec(name);
+  if (numbered) return `phase ${numbered[1]}`;
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 40);
+}
+
+export interface CrewRoadmapPhase {
+  key: string;
+  name: string;
+  /** notStarted has no tasks yet; done has every task accepted but not yet accepted by the person. */
+  status: 'notStarted' | 'waiting' | 'building' | 'done' | 'accepted';
+  tasks: number;
+  finished: number;
+  costUsd: number;
+  /** A rough cost for a phase not started, from the phases already finished; null when none has finished. */
+  estimateUsd: number | null;
+}
+
+/**
+ * The plan as a list of phases with where each one stands, instead of one flat board. A phase is known from the tasks
+ * planned for it and from what the Lead found still undone, so phases not started yet are on the list too.
+ */
+export function buildRoadmap(run: Pick<CrewRun, 'tasks' | 'remaining' | 'acceptedPhases'>): CrewRoadmapPhase[] {
+  const order: string[] = [];
+  const names = new Map<string, string>();
+  const byPhase = new Map<string, CrewTask[]>();
+  for (const task of run.tasks) {
+    if (task.proposed || !task.phase) continue;
+    const key = phaseKey(task.phase);
+    if (!byPhase.has(key)) { byPhase.set(key, []); order.push(key); names.set(key, task.phase); }
+    byPhase.get(key)!.push(task);
+  }
+  for (const text of run.remaining) {
+    const key = phaseKey(text);
+    if (!names.has(key)) { names.set(key, text); order.push(key); }
+  }
+  const rows: CrewRoadmapPhase[] = order.map((key) => {
+    const tasks = byPhase.get(key) ?? [];
+    const finished = tasks.filter((task) => task.status === 'accepted' || task.status === 'skipped').length;
+    const status: CrewRoadmapPhase['status'] = tasks.length === 0
+      ? 'notStarted'
+      : finished === tasks.length
+        ? (run.acceptedPhases.includes(key) ? 'accepted' : 'done')
+        : tasks.some((task) => task.status !== 'backlog') ? 'building' : 'waiting';
+    return { key, name: names.get(key) ?? key, status, tasks: tasks.length, finished, costUsd: Math.round(tasks.reduce((sum, task) => sum + task.costUsd, 0) * 100) / 100, estimateUsd: null };
+  });
+  const paid = rows.filter((row) => (row.status === 'done' || row.status === 'accepted') && row.costUsd > 0);
+  const average = paid.length > 0 ? Math.round((paid.reduce((sum, row) => sum + row.costUsd, 0) / paid.length) * 100) / 100 : null;
+  return rows.map((row) => (row.status === 'notStarted' ? { ...row, estimateUsd: average } : row));
 }
 
 /** A saved starting point for new crews: one for every project, and optionally one for a single project. */

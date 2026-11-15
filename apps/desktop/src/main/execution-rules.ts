@@ -111,6 +111,21 @@ export const AUTOPILOT_EXCEPTION = [
 ].join('\n');
 
 /**
+ * What a Crew run is told about committing when its builders are not to commit. Like the Autopilot exception it lives
+ * inside the rule set, since the rules say they win any conflict and a line in the task's own brief would lose to them.
+ */
+export const CREW_EXCEPTION = [
+  '## Exception for Crew runs',
+  '',
+  'This run belongs to a Crew whose builders do not commit. For this run the Commit & Push rules and the end-of-session commit and push step do not apply: do not run git add, git commit or git push. Leave your changes in the working tree. The person reviews them and commits from the Crew screen when a phase is finished.',
+].join('\n');
+
+/** The rule set as a crew run receives it when builders are not to commit. */
+export function withCrewException(markdown: string): string {
+  return `${markdown.trim()}\n\n${CREW_EXCEPTION}\n`;
+}
+
+/**
  * What every run is told about styling, whoever is designing: Autopilot, the composer's agent or a CLI agent.
  *
  * It rides the briefing rather than the editable rules file for the same reason the Autopilot exception does: the file
