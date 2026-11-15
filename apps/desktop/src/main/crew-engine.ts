@@ -496,10 +496,12 @@ export function stuckTask(run: CrewRun): CrewTask | null {
  * Applies the Lead's call on a stuck task: retry with its guidance (the failure count starts again), or skip it so the
  * rest of the project can finish. Returns null for "ask", leaving the question with the user.
  */
-export function resolveStuck(run: CrewRun, decision: { decision: 'retry' | 'skip' | 'ask'; text: string }, leadId: string, at: string): CrewRun | null {
+export function resolveStuck(run: CrewRun, decision: { decision: 'retry' | 'skip' | 'ask'; text: string; options?: string[]; lesson?: string }, leadId: string, at: string): CrewRun | null {
   const task = stuckTask(run);
   if (!task || decision.decision === 'ask') return null;
-  const cleared: CrewRun = { ...run, ask: null, status: 'running', updatedAt: at };
+  // A cause in the environment, not the task, is told to every agent so the next task does not hit it too.
+  const learned = decision.decision === 'retry' && decision.lesson ? withGuidance(run, decision.lesson) : run;
+  const cleared: CrewRun = { ...learned, ask: null, status: 'running', updatedAt: at };
   if (decision.decision === 'skip') {
     const skipped = patchTask(cleared, task.id, (item) => ({ ...item, status: 'skipped', note: 'Skipped by the Lead.' }), at);
     return feed(skipped, { who: leadId, kind: 'info', text: `Skipped "${task.title}" and went on without it${decision.text ? `: ${shorten(decision.text)}` : '.'}`, taskId: task.id }, at);
@@ -509,6 +511,87 @@ export function resolveStuck(run: CrewRun, decision: { decision: 'retry' | 'skip
     reviews: [...item.reviews.filter((review) => review.verdict !== 'sendBack'), { round: item.round, verdict: 'sendBack' as const, feedback: decision.text, reviewer: leadId, at }],
   }), at);
   return feed(retried, { who: leadId, kind: 'info', text: `Tried "${task.title}" a different way: ${shorten(decision.text)}`, taskId: task.id }, at);
+}
+
+/**
+ * The Lead could not settle a stuck task alone: its reason and the ways forward it worked out go on the question, so the
+ * person picks one instead of writing the fix. With no usable options the question stays as it was.
+ */
+export function offerOptions(run: CrewRun, decision: { text: string; options?: string[] } | null): CrewRun {
+  if (!run.ask || !decision) return run;
+  const options = decision.options ?? [];
+  if (options.length === 0 && !decision.text) return run;
+  const reason = decision.text ? ` The Lead's view: ${decision.text}` : '';
+  const message = `${run.ask.message.slice(0, 250)}${reason}`.slice(0, 500);
+  return { ...run, ask: { ...run.ask, message, ...(options.length > 0 ? { options } : {}) } };
+}
+
+/** The most automatic choices away mode makes on one task, and in one run, so a bad pick cannot snowball. */
+export const AWAY_MAX_PER_TASK = 2;
+export const AWAY_MAX_PER_RUN = 10;
+
+/**
+ * The stuck task away mode may settle, or null. Only a task question the Lead gave options for qualifies: security
+ * blocks, approvals, limits and anything else that is the person's own to decide never reach here.
+ */
+export function awayEligible(run: CrewRun): CrewTask | null {
+  const ask = run.ask;
+  if (!run.away.enabled || run.status !== 'needsYou' || !ask?.taskId || !ask.options?.length) return null;
+  if (ask.reason !== 'sendBacks' && ask.reason !== 'sameFailure' && ask.reason !== 'noProgress') return null;
+  const task = run.tasks.find((item) => item.id === ask.taskId);
+  if (!task || task.status !== 'needsYou') return null;
+  if (run.away.picked.length >= AWAY_MAX_PER_RUN || run.away.picked.filter((id) => id === task.id).length >= AWAY_MAX_PER_TASK) return null;
+  return task;
+}
+
+/** Turns away mode on or off. What was chosen so far is kept, so the ceilings hold across switches. */
+export function setAway(run: CrewRun, enabled: boolean, minutes: number, at: string): CrewRun {
+  const text = enabled
+    ? (minutes > 0 ? `Away mode is on. If a stuck task waits ${minutes} minutes for you, the Lead takes the safest of its own options.` : 'Away mode is on. The Lead takes the safest of its own options as soon as a task is stuck.')
+    : 'Away mode is off. The crew waits for you on every question.';
+  return addChat({ ...run, away: { ...run.away, enabled, minutes }, updatedAt: at }, { from: 'lead', kind: 'note', text }, at);
+}
+
+/** The Lead's pick, applied as the answer to the question, and recorded so the person can see it on return. */
+export function applyAwayPick(run: CrewRun, option: string, reason: string, at: string): CrewRun {
+  const taskId = run.ask?.taskId;
+  if (!taskId) return run;
+  const answered = answerAsk(run, 'continue', option, at);
+  const text = `Chose automatically while you were away: ${shorten(option)}${reason ? ` (${shorten(reason)})` : ''}`;
+  const next = { ...answered, away: { ...answered.away, picked: [...answered.away.picked, taskId].slice(-40) } };
+  return addChat(feed(next, { who: 'lead', kind: 'info', text, taskId }, at), { from: 'lead', kind: 'note', text }, at);
+}
+
+/**
+ * A build failed the same way twice: the Lead is asked now, not after the retries are spent. A usable answer redirects
+ * the task without using a retry (skip, or a different instruction with an optional lesson for every agent), or
+ * raises the question at once when the Lead has options for the person. Anything else returns null and the crew carries on.
+ */
+export function applyTriage(run: CrewRun, taskId: string, decision: { decision: 'retry' | 'skip' | 'ask'; text: string; options?: string[]; lesson?: string } | null, leadId: string, at: string): CrewRun | null {
+  const task = run.tasks.find((item) => item.id === taskId);
+  if (!task || !decision || task.status !== 'backlog') return null;
+  if (decision.decision === 'skip') {
+    return feed(patchTask(run, taskId, (item) => ({ ...item, status: 'skipped', note: 'Skipped by the Lead.' }), at), { who: leadId, kind: 'info', text: `Skipped "${task.title}" after it failed twice the same way${decision.text ? `: ${shorten(decision.text)}` : '.'}`, taskId }, at);
+  }
+  if (decision.decision === 'retry') {
+    const learned = decision.lesson ? withGuidance(run, decision.lesson) : run;
+    const redirected = patchTask(learned, taskId, (item) => ({
+      ...item, status: 'sentBack', note: '',
+      reviews: [...item.reviews.filter((review) => review.verdict !== 'sendBack'), { round: item.round, verdict: 'sendBack' as const, feedback: decision.text, reviewer: leadId, at }],
+    }), at);
+    return feed(redirected, { who: leadId, kind: 'info', text: `"${task.title}" failed the same way twice, so the Lead redirected it: ${shorten(decision.text)}`, taskId }, at);
+  }
+  if (!decision.options?.length) return null;
+  const ask: CrewAsk = { reason: 'sameFailure', message: `"${task.title}" failed the same way twice: ${shorten(task.note.replace(/^Build failed \(\d+\):\s*/, ''))}`, taskId };
+  const stopped = feed({ ...patchTask(run, taskId, (item) => ({ ...item, status: 'needsYou' }), at), status: 'needsYou', ask }, { who: 'crew', kind: 'needsYou', text: ask.message, taskId }, at);
+  return offerOptions(stopped, decision);
+}
+
+/** Whether a failure repeats the one before it: the same cause twice, which a plain retry will not fix. */
+export function repeatsFailure(previousNote: string, error: string): boolean {
+  if (!previousNote.startsWith('Build failed')) return false;
+  const fingerprint = cleanError(error).toLowerCase().slice(0, 40);
+  return fingerprint.length > 0 && previousNote.toLowerCase().includes(fingerprint);
 }
 
 /** Adds fresh project guidance to a live run without requiring the crew to be stopped on an Ask. */

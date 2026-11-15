@@ -223,6 +223,11 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
     reconcile(unwrap(await window.kaiDesktop.setCrewKeepGoing(activeRun.id, on)));
   }
 
+  async function away(on: boolean, minutes: number): Promise<void> {
+    if (!activeRun) return;
+    reconcile(unwrap(await window.kaiDesktop.setCrewAway(activeRun.id, on, minutes)));
+  }
+
   async function explainSimply(on: boolean): Promise<void> {
     if (!activeRun) return;
     reconcile(unwrap(await window.kaiDesktop.setCrewExplainSimply(activeRun.id, on)));
@@ -432,6 +437,13 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
               <div className="needs-you-body">
                 <strong>Needs you</strong>
                 <p className="needs-you-detail">{activeRun.ask.message}</p>
+                {activeRun.ask.options && activeRun.ask.options.length > 0 && (
+                  <div className="crew-ask-options" role="group" aria-label="Ways forward from the Lead">
+                    {activeRun.ask.options.map((option) => (
+                      <UiButton key={option} type="button" className="secondary-button crew-ask-option" disabled={working} onClick={() => void run(async () => { const next = unwrap(await window.kaiDesktop.answerCrew(activeRun.id, 'continue', option)); setGuidance(''); return next; })}>{option}</UiButton>
+                    ))}
+                  </div>
+                )}
                 <Textarea className="crew-guidance" rows={2} value={guidance} onChange={(event) => setGuidance(event.target.value)} placeholder="Optional: tell the crew what to do, in your own words" aria-label="Guidance for the crew" />
               </div>
               <div className="crew-answer-actions">
@@ -539,7 +551,7 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
               onSavings={(patch) => updateDraft((current) => ({ ...current, savings: { ...current.savings, ...patch } }))} />
           )}
           {tab === 'chat' && (activeRun
-            ? <CrewChat run={activeRun} activity={<LiveActivity run={activeRun} />} working={working} onSend={sendMessage} onStopAsk={stopAsk} onKeepGoing={keepGoing} onExplainSimply={explainSimply} onFindPhases={findPhases} onDecide={decideApproval}
+            ? <CrewChat run={activeRun} activity={<LiveActivity run={activeRun} />} working={working} onSend={sendMessage} onStopAsk={stopAsk} onKeepGoing={keepGoing} onAway={away} onExplainSimply={explainSimply} onFindPhases={findPhases} onDecide={decideApproval}
                 onPause={() => void run(async () => unwrap(await window.kaiDesktop.pauseCrew(activeRun.id)))}
                 onResume={() => void run(async () => unwrap(await window.kaiDesktop.resumeCrew(activeRun.id)))}
                 onStop={() => void run(async () => unwrap(await window.kaiDesktop.stopCrew(activeRun.id)))}

@@ -21,6 +21,8 @@ interface Script {
   security?: string[];
   /** The Lead's calls on a task that ran out of retries. The default hands the question to the user. */
   stuck?: string[];
+  /** The Lead's away-mode answers: which of its own options is safe, or none. */
+  away?: string[];
   /** The Lead's answers to "is the goal finished?", in order. The default says nothing is left. */
   coverage?: string[];
   /** The Lead's answer to a question from the Chat tab. */
@@ -35,7 +37,7 @@ function fixture(script: Script = {}, patch: Partial<CrewConfig> = {}) {
   const requests: AgentRunRequest[] = [];
   const saved = new Map<string, CrewRun>();
   const notifications: CrewRun[] = [];
-  let plans = 0, leads = 0, securities = 0, builds = 0, stucks = 0, coverages = 0;
+  let plans = 0, leads = 0, securities = 0, builds = 0, stucks = 0, coverages = 0, aways = 0;
   const checks: string[] = [];
   const pick = (list: string[] | undefined, index: number, fallback: string): string => (list && list.length > 0 ? list[Math.min(index, list.length - 1)]! : fallback);
 
@@ -52,6 +54,7 @@ function fixture(script: Script = {}, patch: Partial<CrewConfig> = {}) {
       if (request.prompt.includes('You are the auditor.')) return reply('{"verdict":"accept"}');
       if (request.prompt.includes('You are the Lead. Check this finished task')) return reply(pick(script.lead, leads++, '{"verdict":"accept"}'));
       if (request.prompt.includes('A task has failed or been sent back too many times')) return reply(pick(script.stuck, stucks++, '{"decision":"ask","reason":"Needs the user."}'));
+      if (request.prompt.includes('The person is away from the computer')) return reply(pick(script.away, aways++, '{"choice":"none","reason":"Their call."}'));
       if (request.prompt.includes('Every task on the board is now accepted')) return reply(pick(script.coverage, coverages++, '{"complete":true}'));
       if (request.prompt.includes('is asking you a question')) return reply(script.answer ?? 'Phase 0 is finished.');
       builds += 1;
@@ -313,6 +316,30 @@ describe('crew runner', () => {
     expect((await runToIdle(unreadable.runner, two.id)).ask?.reason).toBe('sameFailure');
   });
 
+  it('puts the Lead\'s ways forward on the question, so the person picks one instead of writing the fix', async () => {
+    const f = fixture({
+      lead: ['{"verdict":"sendBack","feedback":"No rate limit."}'],
+      stuck: ['{"decision":"ask","reason":"Two valid designs.","options":["Use middleware for the limit.","Use a per-route decorator.","  "]}'],
+    });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.ask?.options).toEqual(['Use middleware for the limit.', 'Use a per-route decorator.']);
+    expect(run.ask?.message).toContain('Two valid designs.');
+    // Picking one is an ordinary answer: it becomes the task's next instruction.
+    const answered = await f.runner.answer(started.id, 'continue', run.ask!.options![0]!, 1);
+    expect(answered.tasks.find((task) => task.id === run.ask!.taskId)?.reviews.at(-1)?.feedback).toBe('Use middleware for the limit.');
+  });
+
+  it('tells every agent a lesson the Lead drew from a stuck task', async () => {
+    const f = fixture({
+      lead: ['{"verdict":"sendBack","feedback":"No rate limit."}', '{"verdict":"sendBack","feedback":"no rate limit"}', '{"verdict":"accept"}'],
+      stuck: ['{"decision":"retry","guidance":"Put the limit in middleware.","lesson":"The repo lint rejects default exports; use named exports."}'],
+    });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.goal).toContain('The repo lint rejects default exports');
+  });
+
   it('holds the crew for the person\'s yes or no on what the plan says needs approval, and never assumes it', async () => {
     const withApproval = JSON.stringify({
       tasks: [{ id: 'shell', title: 'Build the shell', role: 'builder', description: 'Phase 1', acceptance: ['The shell opens'], dependsOn: [] }],
@@ -494,6 +521,86 @@ describe('crew runner', () => {
     expect(run.status).toBe('needsYou');
     expect(run.ask?.message).not.toContain('\u001b');
     expect(run.goal.match(/Write commit messages that describe what changed/g)).toHaveLength(1);
+  });
+
+  it('asks the Lead on the second failure with the same cause, and the redirect does not spend a retry', async () => {
+    const f = fixture({ buildFails: 2, buildError: 'The test runner cannot find the module.', stuck: ['{"decision":"retry","guidance":"Install the missing module first.","lesson":"The test runner needs the module installed before any test."}'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('completed');
+    expect(f.requests.filter((request) => request.prompt.includes('A task has failed or been sent back too many times'))).toHaveLength(1);
+    expect(run.feed.some((entry) => entry.text.includes('failed the same way twice, so the Lead redirected it'))).toBe(true);
+    expect(run.goal).toContain('The test runner needs the module installed');
+  });
+
+  it('does not bother the Lead about a first failure', async () => {
+    const once = fixture({ buildFails: 1, buildError: 'A one-off crash.' });
+    const a = await once.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: once.config }, 1);
+    await runToIdle(once.runner, a.id);
+    expect(once.requests.some((request) => request.prompt.includes('A task has failed or been sent back too many times'))).toBe(false);
+  });
+
+  it('puts options on the question at once when the Lead has them for a repeated failure', async () => {
+    const f = fixture({ buildFails: 99, buildError: 'The API key is rejected.', stuck: ['{"decision":"ask","reason":"Needs a key.","options":["Use the sandbox key.","Mock the API."]}'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('needsYou');
+    expect(run.ask?.options).toEqual(['Use the sandbox key.', 'Mock the API.']);
+    // Failed twice, asked once: the Lead is not asked again for the same stop.
+    expect(f.requests.filter((request) => request.prompt.includes('A task has failed or been sent back too many times'))).toHaveLength(1);
+  });
+
+  it('lets the Lead take its own safe option while the person is away, and says so', async () => {
+    const f = fixture({
+      buildFails: 99, buildError: 'The API key is rejected.',
+      stuck: ['{"decision":"ask","reason":"Needs a key.","options":["Use the sandbox key.","Mock the API."]}'],
+      away: ['{"choice":2,"reason":"Mocking is reversible."}'],
+    });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const stuck = await runToIdle(f.runner, started.id);
+    expect(stuck.status).toBe('needsYou');
+    await f.runner.setAway(started.id, true, 0, 1);
+    await f.runner.whenIdle(started.id);
+    const run = (await f.runner.get(started.id))!;
+    expect(run.away.picked[0]).toBe(stuck.ask!.taskId);
+    expect(run.feed.some((entry) => entry.text.includes('Chose automatically while you were away: Mock the API.'))).toBe(true);
+    expect(run.chat.some((entry) => entry.text.includes('Chose automatically while you were away'))).toBe(true);
+    expect(run.tasks.find((task) => task.id === stuck.ask!.taskId)?.reviews.some((review) => review.feedback === 'Mock the API.')).toBe(true);
+  });
+
+  it('leaves the question for the person when the Lead says none of its options is safe', async () => {
+    const f = fixture({
+      buildFails: 99, buildError: 'The API key is rejected.',
+      stuck: ['{"decision":"ask","reason":"Needs a key.","options":["Buy a paid plan.","Mock the API."]}'],
+      away: ['{"choice":"none","reason":"Both change what the person pays for or relies on."}'],
+    });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    await runToIdle(f.runner, started.id);
+    await f.runner.setAway(started.id, true, 0, 1);
+    const run = (await f.runner.get(started.id))!;
+    expect(run.status).toBe('needsYou');
+    expect(run.away.picked).toEqual([]);
+    expect(run.feed.some((entry) => entry.text.includes('none of its options is safe to take without you'))).toBe(true);
+  });
+
+  it('never lets away mode settle a question that has no options from the Lead', async () => {
+    const f = fixture({ buildFails: 99, buildError: 'The API key is rejected.' });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    await runToIdle(f.runner, started.id);
+    await f.runner.setAway(started.id, true, 0, 1);
+    const run = (await f.runner.get(started.id))!;
+    expect(run.status).toBe('needsYou');
+    expect(f.requests.some((request) => request.prompt.includes('The person is away from the computer'))).toBe(false);
+  });
+
+  it('tries the planned task titles against the commit rules before the first build', async () => {
+    const f = fixture();
+    f.ports.preflight = async (_project, text) => (/ingestion/i.test(text) ? { key: 'selftag:ingestion', note: 'A commit hook rejects the word "ingestion".' } : null);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.knownBlockers).toContain('selftag:ingestion');
+    expect(run.goal).toContain('A commit hook rejects the word "ingestion".');
+    expect(run.feed.some((entry) => entry.text.includes('Tried the planned tasks against the project'))).toBe(true);
   });
 
   it('asks once when an agent has run out of usage, instead of retrying and wasting the retries', async () => {

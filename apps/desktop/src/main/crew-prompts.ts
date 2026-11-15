@@ -212,9 +212,10 @@ function reviewRoleBase(kind: 'security' | 'tester' | 'auditor' | 'license' | 'c
   }
 }
 
-export function retryPrompt(kind: 'plan' | 'review' | 'stuck' | 'coverage'): string {
+export function retryPrompt(kind: 'plan' | 'review' | 'stuck' | 'coverage' | 'away'): string {
   if (kind === 'coverage') return 'Your previous reply could not be used. Reply again with only one JSON object such as {"complete":true} or {"complete":false,"remaining":["Phase 1: ..."]}, and no other text.';
   if (kind === 'plan') return 'Your previous reply could not be used. Reply again with only the JSON object {"tasks":[...]} and no other text.';
+  if (kind === 'away') return 'Your previous reply could not be used. Reply again with only one JSON object such as {"choice":1,"reason":"..."} or {"choice":"none","reason":"..."}, and no other text.';
   if (kind === 'stuck') return 'Your previous reply could not be used. Reply again with only one JSON object such as {"decision":"skip","reason":"..."} or {"decision":"retry","guidance":"..."} or {"decision":"ask","reason":"..."}, and no other text.';
   return 'Your previous reply could not be used. Reply again with only one JSON object such as {"verdict":"accept"} or {"verdict":"sendBack","feedback":"..."}, and no other text.';
 }
@@ -240,10 +241,10 @@ export function stuckPrompt(run: CrewRun, task: CrewTask): string {
     ...(history.length > 0 ? ['', 'Recent verdicts:', ...history] : []),
     '',
     'Reply with only one JSON object:',
-    '- {"decision":"retry","guidance":"..."} when a specific, different instruction would change the outcome. The guidance must say what to do differently; repeating the same request will fail the same way.',
+    '- {"decision":"retry","guidance":"...","lesson":"..."} when a specific, different instruction would change the outcome. The guidance must say what to do differently; repeating the same request will fail the same way. Add "lesson" only when the cause is the environment (a hook, a missing tool, a rule of the repository) and not this task: one sentence every other agent should follow too.',
     '- {"decision":"skip","reason":"..."} when the task is not needed to reach the goal, cannot be done in this project, or is covered by other tasks. The project can still be finished without it.',
-    '- {"decision":"ask","reason":"..."} only when the answer needs the user: a missing secret or account, a product choice only they can make, or something that would be unsafe to guess.',
-    'Prefer deciding. Choose ask only when retry and skip would both be wrong.',
+    '- {"decision":"ask","reason":"...","options":["...","..."]} only when the answer needs the user: a missing secret or account, a product choice only they can make, or something that would be unsafe to guess. Always include 2 or 3 options: concrete ways forward, each a complete instruction the crew can follow as written, best first. The user picks one.',
+    'Read the error first: if it names a rule (a hook, a lint, a permission), the fix is usually to work within it, not to ask. Prefer deciding. Choose ask only when retry and skip would both be wrong.',
   ].join('\n');
 }
 
@@ -320,17 +321,57 @@ export function askPrompt(run: CrewRun, question: string): string {
   ].join('\n');
 }
 
+/**
+ * Away mode: the person is not at the computer, so the Lead is asked whether one of the options it offered is safe to
+ * take without them. "none" is the right answer whenever the choice is theirs: it keeps the question waiting.
+ */
+export function awayPrompt(run: CrewRun, task: CrewTask): string {
+  const options = run.ask?.options ?? [];
+  return [
+    'You are the Lead. The person is away from the computer and a task is waiting on a question you raised. Decide whether one of your own options is safe to take without them.',
+    '',
+    `Task: ${task.title}`,
+    `The question: ${run.ask?.message ?? task.note}`,
+    '',
+    'Options:',
+    ...options.map((option, index) => `${index + 1}. ${option}`),
+    '',
+    "Take an option only if it is a reversible change to this project that stays inside the goal. Answer none when any option would need a secret, an account, a new paid service, a new dependency, a change to security or permissions, deleting or overwriting the person's work, or a product decision only they can make.",
+    'Reply with only one JSON object: {"choice":<option number>,"reason":"..."} or {"choice":"none","reason":"..."}.',
+  ].join('\n');
+}
+
+/** Reads the Lead's away-mode answer. "none", an option that does not exist, or anything unreadable keeps the question waiting. */
+export function parseAwayChoice(text: string, count: number): { index: number; reason: string } | null {
+  const candidates = [...text.matchAll(/\{[^{}]*"choice"[^{}]*\}/g)].map((match) => match[0]);
+  for (const candidate of candidates.reverse()) {
+    try {
+      const value = JSON.parse(candidate) as { choice?: unknown; reason?: unknown };
+      const reason = typeof value.reason === 'string' ? value.reason.trim().slice(0, 300) : '';
+      if (value.choice === 'none') return null;
+      const number = typeof value.choice === 'number' ? value.choice : typeof value.choice === 'string' ? Number(value.choice) : NaN;
+      if (Number.isInteger(number) && number >= 1 && number <= count) return { index: number - 1, reason };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 /** Reads the Lead's call on a stuck task. Anything else reads as no decision, so the user is asked. */
-export function parseStuckDecision(text: string): { decision: 'retry' | 'skip' | 'ask'; text: string } | null {
+export function parseStuckDecision(text: string): { decision: 'retry' | 'skip' | 'ask'; text: string; options?: string[]; lesson?: string } | null {
   const candidates = [...text.matchAll(/\{[^{}]*"decision"[^{}]*\}/g)].map((match) => match[0]);
   for (const candidate of candidates.reverse()) {
     try {
-      const value = JSON.parse(candidate) as { decision?: unknown; guidance?: unknown; reason?: unknown };
+      const value = JSON.parse(candidate) as { decision?: unknown; guidance?: unknown; reason?: unknown; options?: unknown; lesson?: unknown };
+      const options = Array.isArray(value.options) ? value.options.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim().slice(0, 400)).slice(0, 3) : [];
+      const lesson = typeof value.lesson === 'string' ? value.lesson.trim().slice(0, 400) : '';
+      const extras = { ...(options.length > 0 ? { options } : {}), ...(lesson ? { lesson } : {}) };
       if (value.decision !== 'retry' && value.decision !== 'skip' && value.decision !== 'ask') continue;
       const words = typeof value.guidance === 'string' && value.guidance.trim() ? value.guidance : typeof value.reason === 'string' ? value.reason : '';
       // A retry with nothing new to say would only fail again, so it is not a usable decision.
       if (value.decision === 'retry' && !words.trim()) continue;
-      return { decision: value.decision, text: words.trim() };
+      return { decision: value.decision, text: words.trim(), ...extras };
     } catch {
       continue;
     }

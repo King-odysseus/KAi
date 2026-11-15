@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { classifyWork, crewConfigSchema, crewRunSchema, phaseReportMarkdown } from '@kai/contracts';
 import type { AgentRunRequest, AgentRunResult, ConversationOrigin, CrewRevertPreview, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask, CrewTaskDiff } from '@kai/contracts';
 import {
-  acceptPhase, addNotes, clearNotes, phaseToPauseAfter, setPauseAfter, openTasks, reopenOpenTasks, addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, isBareContinue, mergeChat, phaseFromFollowUp, requestApprovals, resetForRevert, ruleBlock, setTaskCheckpoint, tasksToRebuild, teachBlockers, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
-  reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun,
+  acceptPhase, addNotes, clearNotes, phaseToPauseAfter, setPauseAfter, openTasks, reopenOpenTasks, addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, isBareContinue, mergeChat, phaseFromFollowUp, requestApprovals, resetForRevert, ruleBlock, isUsageLimit, setTaskCheckpoint, tasksToRebuild, teachBlockers, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
+  reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun, offerOptions, awayEligible, applyAwayPick, applyTriage, repeatsFailure, setAway,
 } from './crew-engine';
-import { askPrompt, coveragePrompt, parseCoverage, parsePlanFull, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
+import { askPrompt, awayPrompt, parseAwayChoice, coveragePrompt, parseCoverage, parsePlanFull, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
 import type { ParallelSession } from './parallel-session';
 
 export interface CrewRunnerPorts {
@@ -71,11 +71,12 @@ export interface CrewStartInput {
 /** The reviewer id the per-task project check is recorded under; it is not a role. */
 const CHECK_REVIEWER = 'check';
 /** What a Lead call is called in the conversation log, in place of the brief it was sent. */
-const ASK_LABEL: Record<'plan' | 'review' | 'stuck' | 'coverage', string> = {
+const ASK_LABEL: Record<'plan' | 'review' | 'stuck' | 'coverage' | 'away', string> = {
   plan: 'Plan the tasks',
   review: 'Review a task',
   stuck: 'Decide what to do with a stuck task',
   coverage: 'Check the goal against what was built',
+  away: 'Pick a safe option while the person is away',
 };
 /** The most phases a crew moves through by itself in one run, so a plan that never runs out still stops. */
 const MAX_AUTO_PHASES = 12;
@@ -111,6 +112,15 @@ export class DesktopCrewRunner {
   private readonly builderReply = new Map<string, string>();
   /** What the per-task project check found, for the Lead's review of the same task. */
   private readonly checkNote = new Map<string, string>();
+
+  /** How many times the Lead has been asked about a task that failed the same way twice, so each task gets at most two. */
+  private readonly triaged = new Map<string, number>();
+  /** Away-mode waits: one timer per run, replaced when the question changes. */
+  private readonly awayTimers = new Map<string, { key: string; timer: ReturnType<typeof setTimeout> }>();
+  /** Questions the Lead judged were the person's to answer, so they are not put to it again and again. */
+  private readonly awayDeclined = new Set<string>();
+  /** Whether the task titles have been tried against the project's commit rules in this run. */
+  private readonly preflighted = new Set<string>();
 
   constructor(private readonly ports: CrewRunnerPorts) {}
 
@@ -324,6 +334,21 @@ export class DesktopCrewRunner {
     return this.resumeWith(run, ownerWindowId, next);
   }
 
+  /** Turns away mode on or off. With it on, a stuck task the Lead has options for is settled by the Lead, after the wait the person set. */
+  async setAway(runId: string, enabled: boolean, minutes: number, ownerWindowId: number): Promise<CrewRun> {
+    const run = await this.require(runId);
+    const next = setAway(run, enabled, minutes, this.now().toISOString());
+    const active = this.active.get(runId);
+    if (active) await this.commit(active, next);
+    else {
+      await this.ports.save(next);
+      this.armAway(next, ownerWindowId);
+    }
+    // A question already waiting is looked at now, not at the next change.
+    if (enabled && minutes === 0 && !active && awayEligible(next)) await this.awayNow(next, ownerWindowId);
+    return (await this.get(runId)) ?? next;
+  }
+
   /** Turns plain-language writing on or off for the Lead's replies. */
   async setExplainSimply(runId: string, explainSimply: boolean): Promise<CrewRun> {
     const run = await this.require(runId);
@@ -496,6 +521,8 @@ export class DesktopCrewRunner {
   }
 
   async dispose(): Promise<void> {
+    for (const { timer } of this.awayTimers.values()) clearTimeout(timer);
+    this.awayTimers.clear();
     await Promise.all([...this.active.keys()].map((id) => this.pause(id).catch(() => undefined)));
   }
 
@@ -544,6 +571,57 @@ export class DesktopCrewRunner {
     active.run = stamped;
     await this.ports.save(stamped);
     this.ports.notifyChanged(active.ownerWindowId, stamped);
+    this.armAway(stamped, active.ownerWindowId);
+  }
+
+  /**
+   * Away mode with a wait: when a question the Lead gave options for is left unanswered for the set time, the Lead
+   * looks at its own options. One timer per run; a changed or answered question clears it.
+   */
+  private armAway(run: CrewRun, ownerWindowId: number): void {
+    const current = this.awayTimers.get(run.id);
+    const task = run.away.minutes > 0 ? awayEligible(run) : null;
+    const key = task ? `${task.id}|${run.ask?.message ?? ''}` : '';
+    if (current && current.key !== key) { clearTimeout(current.timer); this.awayTimers.delete(run.id); }
+    if (!task || (current && current.key === key)) return;
+    const timer = setTimeout(() => {
+      this.awayTimers.delete(run.id);
+      void this.get(run.id).then((latest) => (latest && awayEligible(latest) ? this.awayNow(latest, ownerWindowId) : undefined)).catch(() => undefined);
+    }, run.away.minutes * 60_000);
+    (timer as { unref?: () => void }).unref?.();
+    this.awayTimers.set(run.id, { key, timer });
+  }
+
+  /** The Lead looks at its own options for an idle crew's waiting question, and the crew carries on when one is safe. */
+  private async awayNow(run: CrewRun, ownerWindowId: number): Promise<void> {
+    if (this.active.has(run.id)) return;
+    const active = await this.localActive(run, ownerWindowId);
+    const next = await this.awayDecide(active);
+    if (next) await this.resumeWith(active.run, ownerWindowId, next);
+  }
+
+  /**
+   * Asks the Lead whether one of its options is safe to take without the person. Returns the run with that option
+   * applied, or null when the question stays waiting (nothing eligible, the Lead said none, or it could not be read).
+   */
+  private async awayDecide(active: ActiveRun): Promise<CrewRun | null> {
+    const task = awayEligible(active.run);
+    const options = active.run.ask?.options ?? [];
+    if (!task || options.length === 0) return null;
+    const key = `${active.run.id}|${task.id}|${active.run.ask?.message ?? ''}`;
+    if (this.awayDeclined.has(key)) return null;
+    const lead = active.run.config.roles.find((role) => role.kind === 'lead');
+    if (!lead) return null;
+    const answer = await this.askJson(active, lead, awayPrompt(active.run, task), 'away', (text) => parseAwayChoice(text, options.length));
+    if (active.cancelled) return null;
+    const at = this.now().toISOString();
+    const paid = addSpend(active.run, task.id, answer.costUsd, at);
+    if (!answer.value) {
+      this.awayDeclined.add(key);
+      await this.commit(active, this.info(paid, 'The Lead left this question for you: none of its options is safe to take without you.'));
+      return null;
+    }
+    return applyAwayPick(paid, options[answer.value.index]!, answer.value.reason, at);
   }
 
   private liveIds(active: ActiveRun): string[] {
@@ -636,6 +714,22 @@ export class DesktopCrewRunner {
     await this.commit(active, planned.status === 'needsYou' ? { ...planned, updatedAt: at } : { ...planned, status: run.config.approvePlan ? 'awaitingApproval' : 'running', updatedAt: at });
   }
 
+  /**
+   * Tries the planned task titles against the project's commit rules once, before the first build. A task named after a
+   * word the rules reject (a feature called "Copilot" in a repo that bans the word) would fail every commit, so every
+   * agent is told now instead of after the failures.
+   */
+  private async preflightTasks(active: ActiveRun): Promise<void> {
+    const { run } = active;
+    if (!this.ports.preflight || this.preflighted.has(run.id) || run.tasks.length === 0) return;
+    this.preflighted.add(run.id);
+    const text = run.tasks.filter((task) => task.status !== 'accepted' && task.status !== 'skipped').map((task) => `${task.title}. ${task.description}`).join('\n').slice(0, 6_000);
+    const found = await this.ports.preflight(run.projectId, text).catch(() => null);
+    if (!found || run.knownBlockers.includes(found.key) || active.cancelled) return;
+    await this.commit(active, this.info(teachBlockers(active.run, [found]), `Tried the planned tasks against the project's commit rules first: ${found.note}`));
+    await this.ports.blockers?.save(run.projectId, found).catch(() => undefined);
+  }
+
   /** On a fresh run, runs the project check once before any task, so a repository that already fails is not blamed on the first builder. */
   private async measureBaseline(active: ActiveRun): Promise<void> {
     const { run } = active;
@@ -651,12 +745,18 @@ export class DesktopCrewRunner {
 
   private async loop(active: ActiveRun): Promise<void> {
     await this.measureBaseline(active);
+    await this.preflightTasks(active);
     for (;;) {
       if (active.cancelled) return;
       let run = reassignReadOnlyTasks(enforceLimits(active.run, this.now()), this.now().toISOString());
       if (run !== active.run) await this.commit(active, run);
       // A task that ran out of retries goes to the Lead before it goes to the user, once per task per run.
       if (run.status === 'needsYou' && await this.leadUnsticks(active)) continue;
+      // Away mode with no wait: the Lead takes one of its own safe options as soon as it has offered them.
+      if (run.status === 'needsYou' && run.away.enabled && run.away.minutes === 0) {
+        const picked = await this.awayDecide(active);
+        if (picked) { await this.commit(active, picked); continue; }
+      }
       if (run.status !== 'running') return;
 
       // Work waiting for a verdict (a task whose review was cut short) is judged before anything new is started.
@@ -849,12 +949,35 @@ export class DesktopCrewRunner {
    * project, so the next crew on it starts knowing the way past instead of finding it out again.
    */
   private async recordFailure(active: ActiveRun, base: CrewRun, taskId: string, error: string): Promise<void> {
+    const previousNote = base.tasks.find((item) => item.id === taskId)?.note ?? '';
     const next = failBuildSmart(base, taskId, error, this.now().toISOString());
     await this.commit(active, next);
     if (next.knownBlockers.length > base.knownBlockers.length) {
       const block = ruleBlock(error);
       if (block) await this.ports.blockers?.save(base.projectId, { key: block.key, note: block.note }).catch(() => undefined);
     }
+    await this.triage(active, taskId, error, previousNote);
+  }
+
+  /**
+   * A build that fails the same way twice is put to the Lead straight away, not after every retry is spent: it can see the
+   * error and the whole board, and a plain retry would fail the same way. Known rules and a spent subscription are not
+   * put to it (the crew already handles those), and each task gets at most two calls.
+   */
+  private async triage(active: ActiveRun, taskId: string, error: string, previousNote: string): Promise<void> {
+    const task = active.run.tasks.find((item) => item.id === taskId);
+    const key = `${active.run.id}|${taskId}`;
+    if (!task || task.status !== 'backlog' || !repeatsFailure(previousNote, error) || ruleBlock(error) || isUsageLimit(error) || (this.triaged.get(key) ?? 0) >= 2) return;
+    const lead = active.run.config.roles.find((role) => role.kind === 'lead');
+    if (!lead) return;
+    this.triaged.set(key, (this.triaged.get(key) ?? 0) + 1);
+    const answer = await this.askJson(active, lead, stuckPrompt(active.run, task), 'stuck', parseStuckDecision);
+    if (active.cancelled) return;
+    const at = this.now().toISOString();
+    const paid = addSpend(active.run, taskId, answer.costUsd, at);
+    const next = applyTriage(paid, taskId, answer.value, lead.id, at);
+    if (next?.status === 'needsYou') active.leadDecided.add(taskId);
+    await this.commit(active, next ?? paid);
   }
 
   private async build(active: ActiveRun, taskId: string): Promise<void> {
@@ -968,7 +1091,7 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
     const at = this.now().toISOString();
     const paid = addSpend(active.run, stuck.id, answer.costUsd, at);
     const next = answer.value ? resolveStuck(paid, answer.value, lead.id, at) : null;
-    await this.commit(active, next ?? paid);
+    await this.commit(active, next ?? offerOptions(paid, answer.value));
     return next !== null;
   }
 
@@ -990,7 +1113,7 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
   }
 
   /** Asks a role for a reply that must parse; if it does not, asks once more with a stricter request. */
-  private async askJson<T>(active: ActiveRun, role: CrewRole, prompt: string, kind: 'plan' | 'review' | 'stuck' | 'coverage', parse: (text: string) => T | null): Promise<{ value: T | null; costUsd: number; raw: string }> {
+  private async askJson<T>(active: ActiveRun, role: CrewRole, prompt: string, kind: 'plan' | 'review' | 'stuck' | 'coverage' | 'away', parse: (text: string) => T | null): Promise<{ value: T | null; costUsd: number; raw: string }> {
     let costUsd = 0;
     const first = await this.call(active, role, prompt, { fresh: true, label: ASK_LABEL[kind] });
     costUsd += first.costUsd ?? 0;

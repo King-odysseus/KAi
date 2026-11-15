@@ -1101,6 +1101,15 @@ html[data-theme="code"]:root .learning-chat-question {
   border: 1px solid rgba(183, 183, 183, 0.55);
   background: rgba(183, 183, 183, 0.14);
 }
+html[data-theme="code"]:root .crew-status-line.tone-waiting {
+  color: var(--warning, #d9a21b);
+}
+html[data-theme="code"]:root .crew-status-line.tone-problem {
+  color: var(--danger, #e5484d);
+}
+html[data-theme="code"]:root .crew-diff-body {
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+}
 
 /* purple theme */
 html[data-theme="purple"]:root select, html[data-theme="purple"]:root .kai-select {
@@ -2203,6 +2212,15 @@ html[data-theme="purple"]:root .learning-chat-question {
   border: 1px solid rgba(143, 138, 228, 0.55);
   background: rgba(143, 138, 228, 0.14);
 }
+html[data-theme="purple"]:root .crew-status-line.tone-waiting {
+  color: var(--warning, #d9b61b);
+}
+html[data-theme="purple"]:root .crew-status-line.tone-problem {
+  color: var(--danger, #e5484d);
+}
+html[data-theme="purple"]:root .crew-diff-body {
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+}
 
 /* navy theme */
 html[data-theme="navy"]:root select, html[data-theme="navy"]:root .kai-select {
@@ -3304,4 +3322,13 @@ html[data-theme="navy"]:root .git-change-group li.git-renamed .git-file {
 html[data-theme="navy"]:root .learning-chat-question {
   border: 1px solid rgba(111, 153, 255, 0.55);
   background: rgba(111, 153, 255, 0.14);
+}
+html[data-theme="navy"]:root .crew-status-line.tone-waiting {
+  color: var(--warning, #d9a21b);
+}
+html[data-theme="navy"]:root .crew-status-line.tone-problem {
+  color: var(--danger, #e5484d);
+}
+html[data-theme="navy"]:root .crew-diff-body {
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
 }

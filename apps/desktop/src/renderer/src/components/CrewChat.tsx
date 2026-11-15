@@ -33,7 +33,7 @@ const TAG: Record<CrewChatEntry['kind'], string> = { ask: 'Question', steer: 'St
  * Underneath is the same message box as the Workspace. The person never has to say whether a message is a question, a
  * change of direction or more work: the box works it out and says which it chose, and a small picker overrides it.
  */
-export function CrewChat({ run, activity, working, onSend, onStopAsk, onKeepGoing, onExplainSimply, onFindPhases, onDecide, onPause, onResume, onStop, onOpenConversation }: {
+export function CrewChat({ run, activity, working, onSend, onStopAsk, onKeepGoing, onAway, onExplainSimply, onFindPhases, onDecide, onPause, onResume, onStop, onOpenConversation }: {
   run: CrewRun;
   /** The live "what is each role doing now" strip, shown while the crew works. */
   activity: ReactNode;
@@ -43,6 +43,7 @@ export function CrewChat({ run, activity, working, onSend, onStopAsk, onKeepGoin
   /** Stops the Lead answering, without touching the crew's own agents. */
   onStopAsk: () => Promise<void>;
   onKeepGoing: (on: boolean) => Promise<void>;
+  onAway: (on: boolean, minutes: number) => Promise<void>;
   onExplainSimply: (on: boolean) => Promise<void>;
   onFindPhases: () => Promise<void>;
   onDecide: (approvalId: string, approve: boolean) => void;
@@ -149,6 +150,21 @@ export function CrewChat({ run, activity, working, onSend, onStopAsk, onKeepGoin
           </span>
           <Switch checked={run.keepGoing} onChange={(event) => void guarded(() => onKeepGoing(event.target.checked))} />
         </label>
+        <label className="toggle-row">
+          <span>
+            <strong>I am away</strong>
+            <small>{run.away.enabled ? (run.away.minutes > 0 ? `On: a stuck task that waits ${run.away.minutes} minutes for you is settled by the Lead, using the safest of its own options.` : 'On: the Lead settles a stuck task at once, using the safest of its own options.') : 'Off: the crew waits for you on every question.'} Security, approvals, spend and time limits always wait for you.{run.away.picked.length > 0 ? ` ${run.away.picked.length} chosen so far, listed in the log.` : ''}</small>
+          </span>
+          <Switch checked={run.away.enabled} onChange={(event) => void guarded(() => onAway(event.target.checked, run.away.minutes))} />
+        </label>
+        {run.away.enabled && (
+          <label className="toggle-row">
+            <span><strong>Wait for me first</strong><small>How long a question waits before the Lead picks.</small></span>
+            <Select aria-label="How long to wait before the Lead picks" value={String(run.away.minutes)} onChange={(event) => void guarded(() => onAway(true, Number(event.target.value)))}>
+              {[0, 5, 15, 30, 60, 120].map((minutes) => <option key={minutes} value={minutes}>{minutes === 0 ? 'Not at all' : `${minutes} minutes`}</option>)}
+            </Select>
+          </label>
+        )}
         <label className="toggle-row">
           <span>
             <strong>Explain things simply</strong>

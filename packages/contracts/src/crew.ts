@@ -199,6 +199,8 @@ export const crewAskSchema = z
     taskId: z.string().max(60).optional(),
     // The phase a phase-spend question is about, so answering it can be remembered for that phase.
     phase: z.string().max(200).optional(),
+    // Ways forward the Lead worked out for a stuck task. Picking one is the answer; each is a full instruction.
+    options: z.array(z.string().min(1).max(400)).max(3).optional(),
   })
   .strict();
 export type CrewAsk = z.infer<typeof crewAskSchema>;
@@ -261,6 +263,18 @@ export const crewChatEntrySchema = z
   .strict();
 export type CrewChatEntry = z.infer<typeof crewChatEntrySchema>;
 
+/** The person's standing permission for the Lead to settle a stuck task alone while they are away from the computer. */
+export const crewAwaySchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    // How long to wait for the person first. 0 means the Lead acts as soon as it has options.
+    minutes: z.number().int().min(0).max(240).default(15),
+    // The task of every automatic choice made so far, so each task and the whole run have a ceiling.
+    picked: z.array(z.string().max(60)).max(40).default([]),
+  })
+  .strict();
+export type CrewAway = z.infer<typeof crewAwaySchema>;
+
 export const crewRunSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -292,6 +306,8 @@ export const crewRunSchema = z
     knownBlockers: z.array(z.string().max(120)).max(20).default([]),
     // Whether the Lead writes for someone who is not very technical: no jargon, terms explained the first time.
     explainSimply: z.boolean().default(true),
+    // Away mode: the Lead takes one of its own safe options for a stuck task instead of waiting for the person.
+    away: crewAwaySchema.default({ enabled: false, minutes: 15, picked: [] }),
     // Things waiting for, or already given, the person's yes or no.
     approvals: z.array(crewApprovalSchema).max(30).default([]),
     // What the Lead found still undone when the board finished, so "done" says what is and is not.
@@ -382,6 +398,7 @@ export const crewDecideInputSchema = z.object({ runId: z.string().min(1), approv
 export type CrewDecideInput = z.infer<typeof crewDecideInputSchema>;
 export const crewExplainSimplyInputSchema = z.object({ runId: z.string().min(1), explainSimply: z.boolean() }).strict();
 
+export const crewAwayInputSchema = z.object({ runId: z.string().min(1), enabled: z.boolean(), minutes: z.number().int().min(0).max(240) }).strict();
 export const crewKeepGoingInputSchema = z.object({ runId: z.string().min(1), keepGoing: z.boolean() }).strict();
 
 /**

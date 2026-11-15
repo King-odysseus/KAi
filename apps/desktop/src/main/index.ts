@@ -1139,7 +1139,7 @@ async function startApplication(): Promise<void> {
     preflight: async (projectId, goal) => {
       const root = await projectRootFor(projectId);
       const messageFile = path.join(app.getPath('temp'), `kai-preflight-${Date.now()}.txt`);
-      await writeFile(messageFile, `Start work on ${goal.replace(/\s+/g, ' ').slice(0, 60)}\n\nSample message used to check the commit rules. Nothing is committed.\n`, 'utf8');
+      await writeFile(messageFile, `Start work on the planned tasks\n\nSample message used to check the commit rules. Nothing is committed.\n\n${goal.replace(/\s+/g, ' ').slice(0, 6000)}\n`, 'utf8');
       try {
         await runGit(root, ['hook', 'run', '--ignore-missing', 'commit-msg', '--', messageFile]);
         return null;
