@@ -667,6 +667,35 @@ describe('crew runner', () => {
     expect(attempts[2]?.effort).toBe('heavy');
   });
 
+  it('carries on with the tasks already on the board when told to continue, without asking the Lead to plan them again', async () => {
+    const f = fixture();
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const finished = await runToIdle(f.runner, started.id);
+    // A crew that was stopped part way keeps what it had not built.
+    f.saved.set(started.id, { ...finished, status: 'stopped', tasks: finished.tasks.map((task) => (task.id === 'ingest' ? { ...task, status: 'backlog' as const, round: 0, reviews: [] } : task)) });
+    const requestsBefore = f.requests.length;
+
+    await f.runner.message(started.id, 'work', 'continue', 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('completed');
+    expect(run.tasks.find((task) => task.id === 'ingest')?.status).toBe('accepted');
+    expect(f.requests.slice(requestsBefore).some((request) => request.prompt.includes('Plan only this'))).toBe(false);
+    expect(run.chat.at(-1)?.text).toContain('Carrying on with the 1 unfinished task');
+  });
+
+  it('carries on with planned tasks, instead of finishing with them undone, when a follow-up has nothing new to plan', async () => {
+    const f = fixture({ plan: [PLAN, 'The existing board already covers that.'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const finished = await runToIdle(f.runner, started.id);
+    f.saved.set(started.id, { ...finished, status: 'stopped', tasks: finished.tasks.map((task) => (task.id === 'ingest' ? { ...task, status: 'backlog' as const, round: 0, reviews: [] } : task)) });
+
+    await f.runner.message(started.id, 'work', 'Start Phase 1.', 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('completed');
+    expect(run.tasks.find((task) => task.id === 'ingest')?.status).toBe('accepted');
+    expect(run.feed.some((entry) => entry.text.includes('already planned') && entry.text.includes('waiting on the board'))).toBe(true);
+  });
+
   it('plans a follow-up onto the same board after the crew has finished', async () => {
     const followPlan = JSON.stringify({ tasks: [{ id: 'schema', title: 'Install the app', role: 'builder', description: 'Build and install', acceptance: ['The app is installed'], dependsOn: [] }] });
     const f = fixture({ plan: [PLAN, followPlan] });

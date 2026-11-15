@@ -135,6 +135,8 @@ export function CrewChat({ run, activity, working, onSend, onStopAsk, onKeepGoin
   }
 
   const phaseRoute: CrewRoute = finished ? 'work' : 'steer';
+  // Tasks still on the board when the crew has stopped: one button carries on with them.
+  const unfinished = run.tasks.filter((task) => !task.proposed && task.status !== 'accepted' && task.status !== 'skipped').length;
   const phases = run.remaining.slice(0, MAX_PHASE_BUTTONS);
 
   return (
@@ -164,6 +166,14 @@ export function CrewChat({ run, activity, working, onSend, onStopAsk, onKeepGoin
       <CrewApprovals run={run} working={working} onDecide={onDecide} />
 
       {!finished && run.status !== 'paused' && activity}
+
+      {finished && unfinished > 0 && (
+        <div className="studio-actions">
+          <UiButton type="button" className="primary-button" disabled={working} onClick={() => void send('work', 'continue')} title="Build the tasks that are already planned and waiting">
+            <Play size={14} /> Carry on with the {unfinished} unfinished {unfinished === 1 ? 'task' : 'tasks'}
+          </UiButton>
+        </div>
+      )}
 
       <div className="crew-phases" role="group" aria-label="The plan's phases">
         {phases.length > 0 ? (

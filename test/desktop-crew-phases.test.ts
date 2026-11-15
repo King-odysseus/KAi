@@ -6,7 +6,7 @@ import { buildRoadmap, createDefaultCrewConfig, crewConfigSchema, crewRunSchema,
 import type { CrewRun } from '@kai/contracts';
 import { NodeFileSystem } from '../packages/runtime/src';
 import {
-  acceptPhase, addTasks, phaseFromFollowUp, resetForRevert, setTaskCheckpoint, taskBrief, tasksToRebuild, teachBlockers,
+  acceptPhase, addTasks, openTasks, phaseFromFollowUp, reopenOpenTasks, resetForRevert, setTaskCheckpoint, taskBrief, tasksToRebuild, teachBlockers,
 } from '../apps/desktop/src/main/crew-engine';
 import { parsePlan, planPrompt } from '../apps/desktop/src/main/crew-prompts';
 import { withCrewException } from '../apps/desktop/src/main/execution-rules';
@@ -172,5 +172,21 @@ describe('the project\'s remembered blockers', () => {
     expect(await store.load('p1')).toEqual([{ key: 'selftag:copilot', note: 'Leave the word out of commit messages.' }]);
     expect(await store.load('p2')).toHaveLength(1);
     expect(await store.load('nobody')).toEqual([]);
+  });
+});
+
+describe('carrying on with what is already on the board', () => {
+  it('counts the tasks that are planned and not done, and nothing accepted or skipped', () => {
+    expect(openTasks(phased()).map((task) => task.id)).toEqual(['c', 'd']);
+  });
+
+  it('sets a stopped crew running again, putting work that was mid-build back to waiting', () => {
+    const stopped = { ...phased(), status: 'stopped' as const, completedAt: T0 };
+    const next = reopenOpenTasks(stopped, 'Carrying on.', T1);
+    expect(next.status).toBe('running');
+    expect(next.completedAt).toBeNull();
+    expect(next.tasks.find((task) => task.id === 'c')?.status).toBe('backlog');
+    expect(next.tasks.find((task) => task.id === 'a')?.status).toBe('accepted');
+    expect(next.chat.at(-1)?.text).toBe('Carrying on.');
   });
 });

@@ -145,6 +145,22 @@ export function isBareContinue(text: string): boolean {
   return /^(?:ok(?:ay)?[, ]+)?(?:please )?(?:continue|go on|go ahead|carry on|keep going|proceed|resume|move on|do it|yes|yes please|go|next|next phase|next part|next step|start (?:the )?next(?: phase| part)?)(?: please)?$/.test(flat);
 }
 
+/** Tasks on the board that are not accepted or skipped: work that is planned and still to be done. */
+export function openTasks(run: Pick<CrewRun, 'tasks'>): CrewTask[] {
+  return run.tasks.filter((task) => !task.proposed && task.status !== 'accepted' && task.status !== 'skipped');
+}
+
+/**
+ * Carries on with the tasks already on the board. A crew that was stopped, or interrupted, keeps its unfinished tasks;
+ * "continue" means build those, not plan them again. Work that was mid-build has no result to review, so it waits to
+ * be built again from the start.
+ */
+export function reopenOpenTasks(run: CrewRun, summary: string, at: string): CrewRun {
+  const tasks = run.tasks.map((task) => (task.status === 'building' || task.status === 'needsYou' ? { ...task, status: 'backlog' as const, updatedAt: at } : task));
+  const reopened: CrewRun = { ...run, tasks, status: 'running', ask: null, followUp: null, completedAt: null, updatedAt: at };
+  return addChat(feed(reopened, { who: 'crew', kind: 'info', text: summary }, at), { from: 'lead', kind: 'note', text: summary }, at);
+}
+
 /** The phase a follow-up asked for ("Continue the plan with: Phase 1: Shell."), so its tasks are filed under it. */
 export function phaseFromFollowUp(text: string | null): string | null {
   const match = /Continue the plan with(?: the next unfinished part)?:\s*(.+?)\.(?:\s+Still to do|\s+The person has told|$)/.exec(text ?? '');

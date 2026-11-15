@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { classifyWork, crewConfigSchema, crewRunSchema } from '@kai/contracts';
 import type { AgentRunRequest, AgentRunResult, ConversationOrigin, CrewRevertPreview, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
 import {
-  acceptPhase, addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, isBareContinue, mergeChat, phaseFromFollowUp, requestApprovals, resetForRevert, ruleBlock, setTaskCheckpoint, tasksToRebuild, teachBlockers, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
+  acceptPhase, openTasks, reopenOpenTasks, addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, isBareContinue, mergeChat, phaseFromFollowUp, requestApprovals, resetForRevert, ruleBlock, setTaskCheckpoint, tasksToRebuild, teachBlockers, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
   reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun,
 } from './crew-engine';
 import { askPrompt, coveragePrompt, parseCoverage, parsePlanFull, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
@@ -327,6 +327,11 @@ export class DesktopCrewRunner {
     const withMessage = addChat(run, { from: 'you', kind, text: body }, at);
     await this.ports.save(withMessage);
     let request = body;
+    // A bare "continue" on a crew that still has tasks on its board means those tasks: nothing needs planning.
+    if (isBareContinue(body) && openTasks(withMessage).length > 0) {
+      const waiting = openTasks(withMessage).length;
+      return this.resumeWith(withMessage, ownerWindowId, reopenOpenTasks(withMessage, `Carrying on with the ${waiting} unfinished ${waiting === 1 ? 'task' : 'tasks'} already on the board.`, at));
+    }
     if (isBareContinue(body)) {
       // The check saves its own note to the thread; with nothing left, that note is the answer and nothing is planned.
       const checked = withMessage.remaining.length > 0 ? withMessage : await this.findPhases(run.id, ownerWindowId);
@@ -529,6 +534,13 @@ export class DesktopCrewRunner {
     if (active.cancelled) return;
     const at = this.now().toISOString();
     let run = active.run;
+    // A crew that still has planned tasks carries on with them. "Continue" meant that, and a plan with nothing to add
+    // is the Lead saying so, not a reason to finish with work still on the board.
+    if ((answer.value === null || answer.value.tasks.length === 0) && current.followUp && openTasks(run).length > 0) {
+      const waiting = openTasks(run).length;
+      await this.commit(active, reopenOpenTasks({ ...run, spentUsd: run.spentUsd + answer.costUsd }, `The rest of that is already planned: ${waiting} ${waiting === 1 ? 'task is' : 'tasks are'} waiting on the board, so the crew carries on with ${waiting === 1 ? 'it' : 'them'}.`, at));
+      return;
+    }
     if (answer.value === null && current.followUp) {
       // The finished work is still finished: a follow-up the Lead could not plan puts the run back as it was.
       // What the Lead actually said is shown, so a reply that was not a plan can be understood and answered.
