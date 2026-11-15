@@ -501,8 +501,14 @@ export class DesktopCrewRunner {
     if (!active) return this.require(runId);
     active.cancelled = true;
     active.controller.abort();
-    await Promise.all([active.conversationId, ...active.children].map((id) => this.ports.cancelAgent(id)));
-    await active.done.catch(() => undefined);
+    // An agent that was still starting registers after the first cancel, so cancelling is repeated while the run lets go,
+    // and Pause gives up waiting after a few tries: the crew is marked paused whether or not a straggler has exited.
+    let settled = false;
+    void active.done.catch(() => undefined).then(() => { settled = true; });
+    for (let attempt = 0; attempt < 6 && !settled; attempt += 1) {
+      await Promise.all([active.conversationId, ...active.children].map((id) => this.ports.cancelAgent(id)));
+      await Promise.race([active.done.catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 1_500))]);
+    }
     this.active.delete(runId);
     // A run that finished or stopped to ask while Pause was pressed keeps that outcome.
     if (active.run.status !== 'running' && active.run.status !== 'planning') return active.run;
@@ -847,7 +853,7 @@ export class DesktopCrewRunner {
             }
           }
           if (active.cancelled) return;
-          const commit = await session.commit(task.id, `Crew: ${task.title}`);
+          const commit = await session.commit(task.id, 'Crew task snapshot');
           if (active.cancelled) return;
           const files = await session.filesChanged(commit);
           outcomes.set(task.id, { taskId: task.id, status: 'success', commit, files, output: result.output, costUsd: result.costUsd ?? 0 });
@@ -1126,6 +1132,8 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
   }
 
   private async call(active: ActiveRun, role: CrewRole, prompt: string, options: { fresh: boolean; effortFrom?: string; cwd?: string; conversationId?: string; label?: string; escalate?: boolean }): Promise<CallResult> {
+    // A stop that lands while an agent is between attempts must not be followed by a new agent that nothing cancels.
+    if (active.cancelled) return { status: 'failed', output: '', error: 'Stopped before this started.' };
     const { config } = active.run;
     const instructions = role.instructions.trim();
     const request: AgentRunRequest = {

@@ -603,6 +603,28 @@ describe('crew runner', () => {
     expect(run.feed.some((entry) => entry.text.includes('Tried the planned tasks against the project'))).toBe(true);
   });
 
+  it('stops a crew whose builder is mid-run, and never starts another agent afterwards', async () => {
+    const f = fixture();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const inner = f.ports.runAgent;
+    let startedAfterStop = 0;
+    let stopped = false;
+    f.ports.runAgent = async (request, ...rest) => {
+      if (stopped) startedAfterStop += 1;
+      if (request.prompt.startsWith('Project goal:')) await gate;
+      return inner(request, ...rest);
+    };
+    f.ports.cancelAgent = () => { release(); return true; };
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stopped = true;
+    const run = await f.runner.stop(started.id);
+    expect(run.status).toBe('stopped');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(startedAfterStop).toBe(0);
+  });
+
   it('asks once when an agent has run out of usage, instead of retrying and wasting the retries', async () => {
     const f = fixture({ buildFails: 99, buildError: 'You have reached your usage limit. Try again later.' });
     const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);

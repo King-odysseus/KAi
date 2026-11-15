@@ -99,7 +99,10 @@ export async function commitWorktree(directory: string, message: string): Promis
   await git(directory, ['add', '-A']);
   await git(directory, ['reset', '-q', '--', ':(glob)node_modules', ':(glob)**/node_modules']);
   const status = (await git(directory, ['status', '--porcelain'])).trim();
-  if (status) await git(directory, ['commit', '-m', message]);
+  // A scratch commit in a throwaway copy: its changes reach the project as a diff, never as this commit, so the project's
+  // commit hooks have nothing to check. Running them only made a task whose title holds a banned word fail after the
+  // whole agent run had been paid for.
+  if (status) await git(directory, ['commit', '--no-verify', '-m', message]);
   return (await git(directory, ['rev-parse', 'HEAD'])).trim();
 }
 
