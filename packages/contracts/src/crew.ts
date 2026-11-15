@@ -302,6 +302,10 @@ export type CrewMessageInput = z.infer<typeof crewMessageInputSchema>;
 
 export const crewKeepGoingInputSchema = z.object({ runId: z.string().min(1), keepGoing: z.boolean() }).strict();
 
+/** New roles, agents, models or limits for a crew that already exists, applied from its next task on. */
+export const crewUpdateConfigInputSchema = z.object({ runId: z.string().min(1), config: crewConfigSchema }).strict();
+export type CrewUpdateConfigInput = z.infer<typeof crewUpdateConfigInputSchema>;
+
 /** More work for a crew that has finished: the Lead plans it onto the same board, with the same roles and context. */
 export const crewFollowUpInputSchema = z.object({ runId: z.string().min(1), prompt: z.string().trim().min(1).max(2_000) }).strict();
 export type CrewFollowUpInput = z.infer<typeof crewFollowUpInputSchema>;

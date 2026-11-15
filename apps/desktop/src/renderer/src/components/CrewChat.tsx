@@ -1,5 +1,5 @@
 import { Textarea } from 'flowbite-react';
-import { ExternalLink, Loader2, Send } from 'lucide-react';
+import { ExternalLink, Loader2, Pause, Play, Send, Square } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { CrewChatEntry, CrewFeedEntry, CrewRun } from '@kai/contracts';
 import { collapseFeed } from '../crew-feed';
@@ -10,7 +10,7 @@ type Kind = 'ask' | 'steer' | 'work';
 
 const KINDS: ReadonlyArray<{ id: Kind; label: string; help: string; placeholder: string }> = [
   { id: 'ask', label: 'Ask', help: 'A question about what is done, what is blocking it, or what it cost. Changes nothing.', placeholder: 'For example: what is finished, and what is stopping Phase 1?' },
-  { id: 'steer', label: 'Steer', help: 'Change what the crew does from its next task on.', placeholder: 'For example: use the existing login, and skip the settings screen.' },
+  { id: 'steer', label: 'Steer', help: 'Change what the crew does from its next task on. On a finished crew, it becomes what the crew plans next.', placeholder: 'For example: use the existing login, and skip the settings screen.' },
   { id: 'work', label: 'Add work', help: 'Plan more onto the board once the crew has finished.', placeholder: 'For example: start the next phase, or install it and run the tests.' },
 ];
 
@@ -24,8 +24,13 @@ const FIRST_PAGE = 40;
  * The crew's own conversation: what the person said, what the Lead answered, and a running log of what the crew did,
  * with a box underneath to ask, steer or add work. The board shows state; this is where it is talked to.
  */
-export function CrewChat({ run, activity, onSend, onKeepGoing, onOpenConversation }: {
+export function CrewChat({ run, activity, working, onSend, onKeepGoing, onPause, onResume, onStop, onOpenConversation }: {
   run: CrewRun;
+  /** Whether a run control is already being applied, so it is not pressed twice. */
+  working: boolean;
+  onPause: () => void;
+  onResume: () => void;
+  onStop: () => void;
   /** The live "what is each role doing now" strip, shown while the crew works. */
   activity: ReactNode;
   onSend: (kind: Kind, text: string) => Promise<void>;
@@ -50,8 +55,9 @@ export function CrewChat({ run, activity, onSend, onKeepGoing, onOpenConversatio
 
   useEffect(() => { end.current?.scrollIntoView({ block: 'end' }); }, [run.chat.length, run.feed.length, run.status]);
 
-  // A kind that does not fit the crew's state (adding work to one that is still building) falls back to a question.
-  const usable = (id: Kind): boolean => (id === 'work' ? finished : id === 'steer' ? !finished : true);
+  // Adding work needs a finished board; asking and steering fit every state, so the box is never a dead end.
+  const usable = (id: Kind): boolean => (id === 'work' ? finished : true);
+  const live = run.status === 'running' || run.status === 'planning';
   const active = KINDS.find((item) => item.id === kind && usable(item.id)) ?? KINDS[0]!;
 
   async function send(): Promise<void> {
@@ -141,6 +147,12 @@ export function CrewChat({ run, activity, onSend, onKeepGoing, onOpenConversatio
             {sending ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Send to the Lead
           </UiButton>
           <small className="crew-empty">Ctrl+Enter to send</small>
+          {/* Run controls beside the box, so a crew can be paused or stopped without leaving the conversation. */}
+          <span className="crew-chat-controls">
+            {live && <UiButton type="button" className="secondary-button" disabled={working} onClick={onPause} title="Stop the agent that is running and pause the crew where it is"><Pause size={14} /> Pause</UiButton>}
+            {run.status === 'paused' && <UiButton type="button" className="secondary-button" disabled={working} onClick={onResume} title="Pick the crew back up where it stopped"><Play size={14} /> Resume</UiButton>}
+            {!finished && <UiButton type="button" className="danger-button" disabled={working} onClick={onStop} title="End the run and keep what is accepted"><Square size={14} /> Stop</UiButton>}
+          </span>
         </div>
         {error && <p className="studio-notice error" role="alert">{error}</p>}
       </div>

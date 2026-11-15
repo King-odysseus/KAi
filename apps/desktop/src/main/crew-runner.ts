@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { classifyWork, crewRunSchema } from '@kai/contracts';
+import { classifyWork, crewConfigSchema, crewRunSchema } from '@kai/contracts';
 import type { AgentRunRequest, AgentRunResult, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
 import {
   addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, mergeChat, answerAsk, enforceLimits, failBuild, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
@@ -160,12 +160,34 @@ export class DesktopCrewRunner {
       if (!finished) throw new Error('More work can be added once the crew has finished or been stopped. Use Steer to change what it is doing now.');
       return this.resumeWith(run, ownerWindowId, startFollowUp(addChat(run, { from: 'you', kind: 'work', text: body }, at), body, at));
     }
-    if (finished) throw new Error('This crew has finished. Use Add work to give it more to do.');
+    // A finished crew has no next task to steer, so the note becomes what it plans next.
+    if (finished) return this.resumeWith(run, ownerWindowId, startFollowUp(addChat(run, { from: 'you', kind: 'steer', text: body }, at), body, at));
     const steered = addChat(addChat(guideCrewRun(run, body, at), { from: 'you', kind: 'steer', text: body }, at), { from: 'lead', kind: 'note', text: 'Noted. The Lead will follow this from the next task on.' }, at);
     const active = this.active.get(runId);
     if (active) { await this.commit(active, steered); return active.run; }
     await this.ports.save(steered);
     return steered;
+  }
+
+  /**
+   * New roles, agents, models or limits for a crew that already exists, for when an agent's subscription runs out or a
+   * role needs a stronger model. They apply from the next task on, so the crew cannot be changed while it is working;
+   * and a role that an unfinished task still uses cannot be taken away.
+   */
+  async updateConfig(runId: string, config: CrewConfig): Promise<CrewRun> {
+    const run = await this.require(runId);
+    if (run.status === 'running' || run.status === 'planning') throw new Error('Pause the crew first. A team change applies from its next task, not in the middle of one.');
+    const parsed = crewConfigSchema.safeParse(config);
+    if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Check the crew settings.');
+    const ids = new Set(parsed.data.roles.map((role) => role.id));
+    const stranded = run.tasks.find((task) => !task.proposed && task.status !== 'accepted' && task.status !== 'skipped' && !ids.has(task.role));
+    if (stranded) throw new Error(`"${stranded.title}" still needs the ${stranded.role} role, so it cannot be removed yet.`);
+    const at = this.now().toISOString();
+    const next = addChat({ ...run, config: parsed.data }, { from: 'lead', kind: 'note', text: 'The team was changed. The new roles apply from the next task.' }, at);
+    const active = this.active.get(runId);
+    if (active) { await this.commit(active, next); return active.run; }
+    await this.ports.save(next);
+    return next;
   }
 
   /** Turns "keep going through every phase" on or off. Turning it on for a finished crew with work left starts the next phase. */

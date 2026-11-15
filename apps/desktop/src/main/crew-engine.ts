@@ -455,6 +455,19 @@ export function addSpend(run: CrewRun, taskId: string, costUsd: number, at: stri
  */
 export function failBuild(run: CrewRun, taskId: string, error: string, at: string): CrewRun {
   const task = taskOf(run, taskId);
+  // An agent that has run out of subscription or credit fails the same way every time, so retrying only wastes the
+  // retries. The crew asks once, in words that say what to change, and does not hand it to the Lead to decide.
+  if (isUsageLimit(error)) {
+    const role = task.assignedTo ? roleOf(run.config, task.assignedTo) : undefined;
+    const who = role ? `${role.label} (${role.agent})` : 'The agent';
+    const note = `Usage limit: ${shorten(error, 200)}`;
+    const ask: CrewAsk = {
+      reason: 'noProgress',
+      message: `${who} has run out of usage and could not build "${task.title}". Change that role's agent or model in the Crew tab, save, then press Continue. (${shorten(error, 120)})`,
+      taskId,
+    };
+    return feed({ ...patchTask(run, taskId, (item) => ({ ...item, status: 'needsYou', note }), at), status: 'needsYou', ask }, { who: 'crew', kind: 'needsYou', text: ask.message, taskId }, at);
+  }
   const failures = task.note.startsWith('Build failed') ? Number(task.note.match(/\((\d+)\)/)?.[1] ?? 1) + 1 : 1;
   const stuck = failures > run.config.limits.maxSendBacks;
   const note = `Build failed (${failures}): ${shorten(error, 200)}`;
@@ -463,6 +476,11 @@ export function failBuild(run: CrewRun, taskId: string, error: string, at: strin
   }
   const ask: CrewAsk = { reason: 'noProgress', message: `"${task.title}" failed to build ${failures} times: ${shorten(error)}`, taskId };
   return feed({ ...patchTask(run, taskId, (item) => ({ ...item, status: 'needsYou', note }), at), status: 'needsYou', ask }, { who: 'crew', kind: 'needsYou', text: ask.message, taskId }, at);
+}
+
+/** Whether an agent's failure says its usage, credit or subscription is spent, rather than that the work went wrong. */
+export function isUsageLimit(error: string): boolean {
+  return /usage limit|rate limit|quota|out of (credits|usage)|credit balance|limit (has been |was )?reached|too many requests|(?:http|status|error|code)[ :]*429|plan limit|insufficient (credit|balance|quota)|subscription (limit|expired)|reached your .{0,24}limit/i.test(error);
 }
 
 /** The project's own check failed after every task was accepted: one more task, for a builder, to make it pass. */

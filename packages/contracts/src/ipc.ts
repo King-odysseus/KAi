@@ -374,7 +374,7 @@ import {
 } from './terminal';
 import { planSchema, type Plan } from './plan';
 import { conventionsGetInputSchema, conventionsMuteInputSchema, conventionsReferenceInputSchema, conventionsRuleAddInputSchema, conventionsRuleRemoveInputSchema, type ConventionsState } from './conventions';
-import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewFollowUpInputSchema, crewKeepGoingInputSchema, crewMessageInputSchema, crewStartInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
+import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewFollowUpInputSchema, crewKeepGoingInputSchema, crewMessageInputSchema, crewStartInputSchema, crewUpdateConfigInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
 import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitBlameInputSchema, type GitBlameResult, type GitChangesResult, todoScanInputSchema, type TodoScanResult, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, gitTeamBranchInputSchema, gitTeamCloneInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
 import { importAddCardsInputSchema, importScanInputSchema, type ImportReport } from './import';
 import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
@@ -565,6 +565,7 @@ export const ipcChannels = [
   'crew:follow-up',
   'crew:message',
   'crew:keep-going',
+  'crew:update-config',
   'crew:pause',
   'crew:resume',
   'crew:stop',
@@ -992,6 +993,7 @@ export const ipcInputSchemas = {
   'crew:follow-up': crewFollowUpInputSchema,
   'crew:message': crewMessageInputSchema,
   'crew:keep-going': crewKeepGoingInputSchema,
+  'crew:update-config': crewUpdateConfigInputSchema,
   'crew:pause': crewControlInputSchema,
   'crew:resume': crewControlInputSchema,
   'crew:stop': crewControlInputSchema,
@@ -1814,6 +1816,8 @@ export interface KaiDesktopBridge {
   messageCrew(runId: string, kind: 'ask' | 'steer' | 'work', text: string): Promise<IpcResponse<CrewRun>>;
   /** Tells the crew to carry on through every phase of the plan, or to stop and wait after each. */
   setCrewKeepGoing(runId: string, keepGoing: boolean): Promise<IpcResponse<CrewRun>>;
+  /** Changes the roles, agents, models or limits of a crew that is not working right now; they apply from its next task. */
+  updateCrewConfig(runId: string, config: CrewConfig): Promise<IpcResponse<CrewRun>>;
   pauseCrew(runId: string): Promise<IpcResponse<CrewRun>>;
   resumeCrew(runId: string): Promise<IpcResponse<CrewRun>>;
   stopCrew(runId: string): Promise<IpcResponse<CrewRun>>;

@@ -10,7 +10,8 @@ import {
 import { apiChoices, targetFromValue, targetValue } from './architect-settings';
 import type { PersistedEvent, RoleTarget } from '@kai/contracts';
 import type { AgentCapability, AgentId, AppSettings, AutonomyMode, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask, ProjectRecord } from '@kai/contracts';
-import { unwrap } from '../types';
+import { relativeTime, unwrap } from '../types';
+import { crewTitle } from '../crew-title';
 import { Pill, type PillTone } from './Pill';
 import { ModelField } from './ModelField';
 import { Select } from './ui/Select';
@@ -106,6 +107,8 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
 
   // A handed-over goal needs the new-crew form, so the run list loading afterwards must not pick an old run over it.
   const wantsNewRun = useRef(false);
+  /** Changes to an existing crew's team that are not saved yet, kept with the crew they belong to. */
+  const [edited, setEdited] = useState<{ runId: string; config: CrewConfig } | null>(null);
   useEffect(() => {
     if (!goalRequest) return;
     setGoal(goalRequest.goal);
@@ -114,8 +117,10 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
   }, [goalRequest?.nonce]);
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
-  const config = activeRun?.config ?? draft;
-  const readOnly = Boolean(activeRun);
+  const unsaved = activeRun && edited?.runId === activeRun.id ? edited.config : null;
+  const config = unsaved ?? activeRun?.config ?? draft;
+  // A crew can be changed whenever it is not working: its next task uses whatever is saved.
+  const readOnly = Boolean(activeRun && (activeRun.status === 'running' || activeRun.status === 'planning'));
 
   useEffect(() => {
     if (!activeRun?.briefSnapshot || !activeProject) { setBriefDiff(null); return; }
@@ -183,7 +188,7 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
   }
 
   async function saveDefault(): Promise<void> {
-    const parsed = crewConfigSchema.safeParse(draft);
+    const parsed = crewConfigSchema.safeParse(config);
     if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? 'Check the crew settings.'); return; }
     try {
       unwrap(await window.kaiDesktop.saveCrewDefaults(parsed.data, activeProject?.id));
@@ -210,7 +215,30 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
   const capabilityOf = (agent: AgentId): AgentCapability | undefined => agentCapabilities.find((item) => item.id === agent);
 
   function updateDraft(change: (current: CrewConfig) => CrewConfig): void {
+    // With a crew selected the change is to that crew, held until saved; otherwise it is to the next new crew.
+    if (activeRun) {
+      setEdited({ runId: activeRun.id, config: change(unsaved ?? activeRun.config) });
+      return;
+    }
     setDraft((current) => change(current));
+  }
+
+  /** Saves a changed team onto the crew itself. It applies from the crew's next task. */
+  async function saveTeam(): Promise<void> {
+    if (!activeRun || !unsaved) return;
+    const parsed = crewConfigSchema.safeParse(unsaved);
+    if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? 'Check the crew settings.'); return; }
+    setWorking(true);
+    setError(null);
+    try {
+      reconcile(unwrap(await window.kaiDesktop.updateCrewConfig(activeRun.id, parsed.data)));
+      setEdited(null);
+      setNotice('Saved. The new team applies from the crew’s next task.');
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setWorking(false);
+    }
   }
 
   function updateRole(id: string, patch: Partial<CrewRole>): void {
@@ -252,7 +280,8 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
   }
 
   function newCrew(): void {
-    if (activeRun) setDraft(activeRun.config);
+    if (activeRun) setDraft(unsaved ?? activeRun.config);
+    setEdited(null);
     setActiveRunId(null);
     setGoal('');
     setTab('board');
@@ -263,7 +292,7 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
       <PageHeader title="Crew" detail={<>A Lead plans the tasks, builders write the code, and every result is checked before it counts{activeProject ? ` · ${activeProject.name}` : ''}</>} actions={<>{runs.length > 0 && (
             <Select aria-label="Crew run" value={activeRunId ?? ''} onChange={(event) => { setActiveRunId(event.target.value || null); setTab('board'); }}>
               <option value="">New crew</option>
-              {runs.map((item) => <option key={item.id} value={item.id}>{item.goal.slice(0, 48)}</option>)}
+              {runs.map((item) => <option key={item.id} value={item.id}>{`${crewTitle(item.goal)} · ${RUN_STATUS[item.status].label} · ${relativeTime(item.startedAt)}`}</option>)}
             </Select>
           )}
           <UiButton type="button" className="secondary-button" onClick={newCrew} disabled={!activeRun}><Plus size={14} /><span>New crew</span></UiButton></>} />
@@ -294,6 +323,14 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
                 {activeRun.ask.taskId && <UiButton type="button" className="secondary-button" disabled={working} onClick={() => void run(async () => unwrap(await window.kaiDesktop.answerCrew(activeRun.id, 'skip', '')))}>Skip task</UiButton>}
                 <UiButton type="button" className="secondary-button" disabled={working} onClick={() => void run(async () => unwrap(await window.kaiDesktop.answerCrew(activeRun.id, 'finish', '')))}>Finish</UiButton>
               </div>
+            </div>
+          )}
+
+          {activeRun && unsaved && (
+            <div className="workbench-notice" role="status">
+              <span><strong>You changed this crew’s team.</strong> It applies from the crew’s next task.{readOnly ? ' Pause the crew to save it.' : ''}</span>
+              <UiButton type="button" className="primary-button" disabled={working || readOnly} onClick={() => void saveTeam()}>Save team</UiButton>
+              <UiButton type="button" className="secondary-button" disabled={working} onClick={() => setEdited(null)}>Discard</UiButton>
             </div>
           )}
 
@@ -336,6 +373,25 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
                 </div>
                 <small className="crew-empty">Every agent on this crew is also told how you usually build and want things to look. See and change that under C1 Brain, How you build.</small>
               </section>
+              {runs.length > 0 && (
+                <section className="ops-panel crew-previous" aria-label="Previous crews">
+                  <h3 className="crew-subheading">Previous crews</h3>
+                  <ul className="crew-previous-list">
+                    {runs.map((item) => {
+                      const board = item.tasks.filter((task) => !task.proposed);
+                      return (
+                        <li key={item.id}>
+                          <UiButton type="button" className="secondary-button" onClick={() => { setActiveRunId(item.id); setTab('board'); }}>
+                            <strong>{crewTitle(item.goal)}</strong>
+                            <Pill tone={RUN_STATUS[item.status].tone}>{RUN_STATUS[item.status].label}</Pill>
+                            <small>{board.filter((task) => task.status === 'accepted').length} of {board.length} tasks · {relativeTime(item.startedAt)}</small>
+                          </UiButton>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              )}
               <EmptyBoard />
               </>
             ))}
@@ -352,7 +408,11 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
               onSavings={(patch) => updateDraft((current) => ({ ...current, savings: { ...current.savings, ...patch } }))} />
           )}
           {tab === 'chat' && (activeRun
-            ? <CrewChat run={activeRun} activity={<LiveActivity run={activeRun} />} onSend={sendMessage} onKeepGoing={keepGoing} {...(onOpenConversation ? { onOpenConversation } : {})} />
+            ? <CrewChat run={activeRun} activity={<LiveActivity run={activeRun} />} working={working} onSend={sendMessage} onKeepGoing={keepGoing}
+                onPause={() => void run(async () => unwrap(await window.kaiDesktop.pauseCrew(activeRun.id)))}
+                onResume={() => void run(async () => unwrap(await window.kaiDesktop.resumeCrew(activeRun.id)))}
+                onStop={() => void run(async () => unwrap(await window.kaiDesktop.stopCrew(activeRun.id)))}
+                {...(onOpenConversation ? { onOpenConversation } : {})} />
             : <div className="empty-list">Start a crew to chat with its Lead.</div>)}
           {tab === 'report' && <ReportTab run={activeRun} />}
         </>
@@ -649,7 +709,7 @@ function CrewTab({ directApi, config, readOnly, capabilityOf, agentCapabilities,
   }, []);
   return (
     <section className="ops-panel">
-      <p className="tasks-tab-help">{readOnly ? 'These are the roles this crew started with. Start a new crew to change them.' : 'Every role picks its own agent and where it runs. Reviewers and the Lead can only read; builders can change files.'}</p>
+      <p className="tasks-tab-help">{readOnly ? 'The crew is working, so its team is locked. Pause it to change a role’s agent or model; the change applies from its next task.' : 'Every role picks its own agent and where it runs. Reviewers and the Lead can only read; builders can change files.'}</p>
       <div className="crew-roles">
         {config.roles.map((role) => {
           const Icon = ROLE_ICON[role.kind];

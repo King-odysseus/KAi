@@ -26,6 +26,8 @@ interface Script {
   /** The Lead's answer to a question from the Chat tab. */
   answer?: string;
   buildFails?: number;
+  /** What a failed build says went wrong. */
+  buildError?: string;
   costPerCall?: number;
 }
 
@@ -53,7 +55,7 @@ function fixture(script: Script = {}, patch: Partial<CrewConfig> = {}) {
       if (request.prompt.includes('Every task on the board is now accepted')) return reply(pick(script.coverage, coverages++, '{"complete":true}'));
       if (request.prompt.includes('is asking you a question')) return reply(script.answer ?? 'Phase 0 is finished.');
       builds += 1;
-      if (builds <= (script.buildFails ?? 0)) return reply('', 'failed', 'The agent crashed.');
+      if (builds <= (script.buildFails ?? 0)) return reply('', 'failed', script.buildError ?? 'The agent crashed.');
       return reply('Built it.');
     },
     cancelAgent: () => true,
@@ -359,11 +361,49 @@ describe('crew runner', () => {
     expect(steered.goal).toContain('Use middleware for the limit.');
     expect(steered.chat.map((entry) => entry.kind)).toEqual(['steer', 'note']);
     await expect(f.runner.message(started.id, 'work', 'Build more.', 1)).rejects.toThrow(/finished or been stopped/);
+  });
 
-    const g = fixture();
+  it('turns a steer on a finished crew into what it plans next', async () => {
+    const more = JSON.stringify({ tasks: [{ id: 'dark', title: 'Dark mode', role: 'builder', description: 'Add it', acceptance: ['Dark mode works'], dependsOn: [] }] });
+    const g = fixture({ plan: [PLAN, more] });
     const done = await g.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: g.config }, 1);
     await runToIdle(g.runner, done.id);
-    await expect(g.runner.message(done.id, 'steer', 'Change course.', 1)).rejects.toThrow(/Add work/);
+    await g.runner.message(done.id, 'steer', 'Add a dark mode.', 1);
+    const run = await runToIdle(g.runner, done.id);
+    expect(run.tasks.map((task) => task.id)).toEqual(['schema', 'ingest', 'dark']);
+    expect(run.chat[0]).toMatchObject({ from: 'you', kind: 'steer', text: 'Add a dark mode.' });
+  });
+
+  it('asks once when an agent has run out of usage, instead of retrying and wasting the retries', async () => {
+    const f = fixture({ buildFails: 99, buildError: 'You have reached your usage limit. Try again later.' });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('needsYou');
+    expect(run.ask?.message).toContain('has run out of usage');
+    expect(run.ask?.message).toContain('Crew tab');
+    expect(run.tasks.find((task) => task.id === 'schema')?.round).toBe(1);
+    // The Lead is not asked to decide: a spent subscription is not something to retry or skip around.
+    expect(f.requests.some((request) => request.prompt.includes('A task has failed or been sent back too many times'))).toBe(false);
+  });
+
+  it('lets the team be changed on a crew that is not working, and refuses it on one that is', async () => {
+    const f = fixture({ buildFails: 99, buildError: 'You have reached your usage limit.' });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const stuck = await runToIdle(f.runner, started.id);
+    expect(stuck.status).toBe('needsYou');
+    const changed = { ...stuck.config, roles: stuck.config.roles.map((role) => (role.id === 'builder' ? { ...role, agent: 'claude' as const } : role)) };
+    const saved = await f.runner.updateConfig(started.id, changed);
+    expect(saved.config.roles.find((role) => role.id === 'builder')?.agent).toBe('claude');
+    expect(saved.chat.at(-1)?.text).toContain('The team was changed');
+    expect((await f.runner.get(started.id))?.config.roles.find((role) => role.id === 'builder')?.agent).toBe('claude');
+
+    const withoutBuilder = { ...stuck.config, roles: stuck.config.roles.filter((role) => role.id !== 'builder') };
+    await expect(f.runner.updateConfig(started.id, withoutBuilder)).rejects.toThrow(/still needs the builder role/);
+
+    const slow = fixture();
+    const live = await slow.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: slow.config }, 1);
+    await expect(slow.runner.updateConfig(live.id, slow.config)).rejects.toThrow(/Pause the crew first/);
+    await runToIdle(slow.runner, live.id);
   });
 
   it('plans more work from the Chat tab onto a finished board', async () => {

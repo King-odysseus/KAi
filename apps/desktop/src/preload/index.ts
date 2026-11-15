@@ -252,6 +252,7 @@ const bridge: KaiDesktopBridge = {
   followUpCrew: (runId, prompt) => ipcRenderer.invoke('crew:follow-up', { runId, prompt }),
   messageCrew: (runId, kind, text) => ipcRenderer.invoke('crew:message', { runId, kind, text }),
   setCrewKeepGoing: (runId, keepGoing) => ipcRenderer.invoke('crew:keep-going', { runId, keepGoing }),
+  updateCrewConfig: (runId, config) => ipcRenderer.invoke('crew:update-config', { runId, config }),
   pauseCrew: (runId) => ipcRenderer.invoke('crew:pause', { runId }),
   resumeCrew: (runId) => ipcRenderer.invoke('crew:resume', { runId }),
   stopCrew: (runId) => ipcRenderer.invoke('crew:stop', { runId }),

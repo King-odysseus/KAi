@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultCrewConfig, crewConfigSchema, crewRunSchema } from '@kai/contracts';
 import type { CrewRun } from '@kai/contracts';
-import { addChat, addTasks, continueToNextPhase, mergeChat, settle } from '../apps/desktop/src/main/crew-engine';
+import { addChat, addTasks, continueToNextPhase, isUsageLimit, mergeChat, settle } from '../apps/desktop/src/main/crew-engine';
 import { askPrompt, coveragePrompt, parseCoverage, planPrompt } from '../apps/desktop/src/main/crew-prompts';
 
 const T0 = '2026-11-01T10:00:00.000Z';
@@ -54,6 +54,29 @@ describe('finishing honestly', () => {
     expect(next.followUp).toContain('Phase 2: Providers');
     expect(next.followUp).toContain('do not wait for their acceptance');
     expect(planPrompt(next.goal, next.config, '', next)).toContain('Plan only this');
+  });
+});
+
+describe('recognising an agent that has run out of usage', () => {
+  it('reads the usual ways a subscription or credit runs out', () => {
+    for (const text of [
+      'You have reached your usage limit. Try again at 3pm.',
+      'Rate limit exceeded',
+      'Error: quota exceeded for this plan',
+      'Your credit balance is too low to run this request.',
+      'HTTP 429 Too Many Requests',
+      'status 429',
+      'You have reached your 5-hour limit.',
+    ]) expect(isUsageLimit(text), text).toBe(true);
+  });
+
+  it('does not mistake an ordinary failure, or a line number, for a spent subscription', () => {
+    for (const text of [
+      'The agent crashed.',
+      'The build tool crashed.',
+      'desktop/scripts/verify-web-unchanged.mjs:429 threw a TypeError',
+      'Cannot find module "express"',
+    ]) expect(isUsageLimit(text), text).toBe(false);
   });
 });
 
