@@ -261,6 +261,8 @@ export const crewRunSchema = z
     remaining: z.array(z.string().max(300)).max(20).default([]),
     // The conversation the crew works in, so the person can open the full transcript of what it did.
     conversationId: z.string().min(1).nullable().default(null),
+    // A conversation for questions asked while the crew is working, so a question never shares the one its agents are in.
+    askConversationId: z.string().min(1).nullable().default(null),
     // The thread between the person and the Lead.
     chat: z.array(crewChatEntrySchema).max(200).default([]),
     // The design as it was when the Lead planned, so the plan and the pages it names stay comparable.

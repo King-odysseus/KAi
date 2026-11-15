@@ -23,6 +23,12 @@ describe('working out what a message to the Lead means', () => {
     expect(routeMessage("I'd like you to skip the settings screen", false)).toBe('steer');
   });
 
+  it('reads "can we begin" and "shall we start" as requests, since they ask the crew to go ahead', () => {
+    expect(routeMessage('can we begin Phase 1?', true)).toBe('work');
+    expect(routeMessage('Shall we start the next phase', true)).toBe('work');
+    expect(routeMessage('can we see the plan?', true)).toBe('ask');
+  });
+
   it('still treats a polite question as a question', () => {
     expect(routeMessage("can you tell me what's done?", true)).toBe('ask');
     expect(routeMessage('would the next phase need approval?', true)).toBe('ask');

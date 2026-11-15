@@ -33,6 +33,8 @@ import {
   type InterviewStartInput,
   type InterviewState,
   type InterviewTopicAskInput,
+  type InterviewImportanceInput,
+  type InterviewImportance,
   type InterviewDraftInput,
   type InterviewIdeaReadResult,
   type InterviewLongAnswerResult,
@@ -57,6 +59,15 @@ const NAMES = { feature: 'the Project Studio', card: 'Project Studio' };
 const INTERVIEW_CONTEXT_CHARS = 6_000;
 export const INTERVIEW_BRIEF_PATH = 'brief.md';
 
+/** How much a topic matters for this project and why: the model's list, read back into the importance record. */
+const IMPORTANCE_JSON = {
+  type: 'array',
+  items: {
+    type: 'object', additionalProperties: false, required: ['topic', 'importance', 'reason'],
+    properties: { topic: { type: 'string', enum: Object.keys(INTERVIEW_TOPICS) }, importance: { type: 'string', enum: ['must', 'worth', 'skip'] }, reason: { type: 'string' } },
+  },
+} as const;
+
 const INTERVIEW_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -65,6 +76,7 @@ const INTERVIEW_JSON_SCHEMA = {
     goal: { type: 'string' },
     assumptions: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, risk: { type: 'string', enum: ['high', 'medium', 'low'] }, status: { type: 'string', enum: ['assumed', 'confirmed', 'changed'] } }, required: ['text', 'risk', 'status'], additionalProperties: false } },
     topics: { type: 'object', properties: Object.fromEntries(Object.keys(INTERVIEW_TOPICS).map((key) => [key, { type: 'object', properties: { status: { type: 'string', enum: ['decided', 'assumed', 'open'] }, source: { type: 'string' } }, required: ['status', 'source'], additionalProperties: false }])), additionalProperties: false },
+    importance: IMPORTANCE_JSON,
     questions: {
       type: 'array',
       items: {
@@ -82,8 +94,9 @@ const INTERVIEW_JSON_SCHEMA = {
 const IDEA_READ_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['summary', 'stated', 'gaps'],
+  required: ['summary', 'stated', 'gaps', 'importance'],
   properties: {
+    importance: IMPORTANCE_JSON,
     summary: { type: 'string' },
     stated: { type: 'array', items: { type: 'string', enum: Object.keys(INTERVIEW_TOPICS) } },
     gaps: { type: 'array', items: { type: 'string', enum: Object.keys(INTERVIEW_TOPICS) } },
@@ -174,6 +187,7 @@ export class DesktopInterview {
       assumptions: [],
       assumptionDecisions: [],
       topics: {},
+      importance: {},
       rounds: [],
       extraQuestions: 0,
       status: 'asking',
@@ -212,7 +226,7 @@ export class DesktopInterview {
       const topics: InterviewState['topics'] = {};
       for (const topic of read.stated) topics[topic] = { status: 'decided', source: 'idea' };
       for (const topic of read.gaps) if (!topics[topic]) topics[topic] = { status: 'open', source: 'not stated in idea' };
-      const asked = await this.ask({ ...state, ideaSummary: read.summary, ideaStated: read.stated, ideaGaps: read.gaps, topics });
+      const asked = await this.ask({ ...state, ideaSummary: read.summary, ideaStated: read.stated, ideaGaps: read.gaps, topics, importance: read.importance });
       return this.persist({ ...asked, pending: null, pendingError: null, draftAnswers: [], updatedAt: this.ports.now() });
     } catch (caught) {
       return this.persist({ ...state, pendingError: failureText(caught), updatedAt: this.ports.now() });
@@ -379,6 +393,23 @@ export class DesktopInterview {
     return this.queueTopicQuestions(state, assumed);
   }
 
+  /**
+   * The person's own call on whether a topic matters. It is kept for the rest of the interview, whatever the model
+   * later thinks, and a topic they turn on that is still open is asked about before the interview finishes.
+   */
+  async setImportance(input: InterviewImportanceInput): Promise<InterviewState> {
+    const state = await this.ports.store.read(input.projectId);
+    if (!state) throw new Error('Project not found.');
+    const importance: InterviewImportance = { ...state.importance, [input.topic]: { level: input.level, reason: YOUR_CALL } };
+    const next = { ...state, importance, updatedAt: this.ports.now() };
+    if (next.status === 'done') {
+      const root = await this.ports.projectRoot(next.projectId, next.linkedProjectId);
+      const written = await this.ports.spec.write(root, INTERVIEW_BRIEF_PATH, briefMarkdown(next, this.ports.now()));
+      return this.persist({ ...next, briefPath: written.path });
+    }
+    return this.persist(next);
+  }
+
   /** Queues one topic selected from the visible question menu. */
   async askTopic(input: InterviewTopicAskInput): Promise<InterviewState> {
     const state = await this.ports.store.read(input.projectId);
@@ -454,6 +485,8 @@ export class DesktopInterview {
           `Topic keys and labels: ${JSON.stringify(INTERVIEW_TOPICS)}.`,
           'Mark a topic stated only when the idea gives enough information to guide implementation. Missing topics belong in gaps.',
           'Do not infer a decision from a generic project name. A one-line idea may leave most topics in gaps.',
+          'Also say how much each topic matters for THIS project, in "importance": must (a wrong guess would change what gets built, so it needs deciding), worth (useful to settle, but the agents could reasonably choose), or skip (it does not apply to this project). Give every topic a one-plain-sentence reason, written for someone who is not very technical.',
+          'Do not assume a topic is skip because the idea is short or does not mention it; only mark skip when the kind of project makes it genuinely not apply (payments for an internal tool with no billing, a visual design for a command-line tool), and say so in the reason.',
         ].join('\n'),
         user: `Project idea:\n${idea.slice(0, 4_000)}`,
       },
@@ -501,19 +534,23 @@ export class DesktopInterview {
       INTERVIEW_JSON_SCHEMA,
       parseInterviewReply,
     );
+    // What the model has learned about which topics matter replaces the earlier weighing; the person's own calls are kept.
+    const importance = mergeImportance(state.importance, reply.importance);
     const asked = new Set(state.rounds.flatMap((round) => round.questions.map(normalise)));
     const remaining = Math.max(0, interviewQuestionBudget(state) - asked.size);
     let fresh: Array<{ question: string; options: string[] }> = reply.questions
       .filter((item) => !asked.has(normalise(item.question)))
       .slice(0, Math.min(roundLimit(state.rounds.length), remaining));
-    if (state.rounds.length === 0 && state.ideaGaps.length > 0 && remaining > 0) {
-      fresh = [topicQuestion(state.ideaGaps[0]!)];
+    // The first question is about the first gap in the idea that matters here; a gap marked not needed is not asked.
+    const firstGap = state.ideaGaps.find((gap) => importance[gap]?.level !== 'skip');
+    if (state.rounds.length === 0 && firstGap && remaining > 0) {
+      fresh = [topicQuestion(firstGap)];
     }
     const hasTopicMap = Object.keys(reply.topics).length > 0;
     const topics = { ...state.topics, ...reply.topics };
     // A topic-aware reply must resolve required gaps before finishing; old replies retain the legacy guard.
     const required = fresh.length === 0
-      ? hasTopicMap ? missingOpenTopicQuestion(state.idea, reply.topics) : missingRequiredQuestion(state)
+      ? hasTopicMap ? missingOpenTopicQuestion(state.idea, reply.topics, importance) : missingRequiredQuestion(state)
       : null;
     if (required && remaining > 0) fresh.push(required);
     if (stackRecommendation) {
@@ -534,6 +571,7 @@ export class DesktopInterview {
       goal: reply.goal,
       assumptions: mergeAssumptions(reply.assumptions, state.assumptions).slice(0, STUDIO_MAX_ASSUMPTIONS),
       topics,
+      importance,
       rounds: [...state.rounds, { questions, options: fresh.map((item) => item.options), answers: [] }],
       updatedAt: this.ports.now(),
     };
@@ -589,13 +627,36 @@ function missingRequiredQuestion(state: Pick<InterviewState, 'idea' | 'rounds'>)
   return null;
 }
 
-function missingOpenTopicQuestion(idea: string, topics: InterviewState['topics']): { question: string; options: string[] } | null {
-  const isScreenApp = SCREEN_PATTERN.test(idea);
-  const required = Object.keys(INTERVIEW_TOPICS).filter((key) => key !== 'design' || isScreenApp) as Array<keyof typeof INTERVIEW_TOPICS>;
+/** The nine topics every interview used to force, which is what an interview saved before importance existed still uses. */
+const LEGACY_TOPICS = ['users', 'data', 'stack', 'hosting', 'integrations', 'auth', 'payments', 'design', 'acceptance'] as const;
+
+/**
+ * The next topic the interview must ask about before it may finish. When the model has weighed the topics for this
+ * project, that is the ones it marked "must" and still has open; a topic marked skip is never forced. An interview
+ * saved before the weighing existed falls back to the old rule (every topic, with design only for something with a screen).
+ */
+function missingOpenTopicQuestion(idea: string, topics: InterviewState['topics'], importance: InterviewImportance = {}): { question: string; options: string[] } | null {
+  const keys = Object.keys(INTERVIEW_TOPICS) as Array<keyof typeof INTERVIEW_TOPICS>;
+  const weighed = Object.keys(importance).length > 0;
+  const required = weighed
+    ? keys.filter((key) => importance[key]?.level === 'must')
+    : LEGACY_TOPICS.filter((key) => key !== 'design' || SCREEN_PATTERN.test(idea));
   const open = required.find((key) => topics[key]?.status === 'open');
   if (!open) return null;
   return topicQuestion(open);
 }
+
+/** The model's fresh weighing wins over its earlier one, except a topic the person set themselves, which stays. */
+function mergeImportance(current: InterviewImportance, fresh: InterviewImportance): InterviewImportance {
+  const merged: InterviewImportance = { ...current, ...fresh };
+  for (const [key, entry] of Object.entries(current) as Array<[keyof InterviewImportance, NonNullable<InterviewImportance[keyof InterviewImportance]>]>) {
+    if (entry.reason === YOUR_CALL) merged[key] = entry;
+  }
+  return merged;
+}
+
+/** The reason recorded when the person, not the model, decided whether a topic matters. */
+export const YOUR_CALL = 'You decided this.';
 
 function topicQuestion(topic: keyof typeof INTERVIEW_TOPICS): { question: string; options: string[] } {
   const questions: Record<keyof typeof INTERVIEW_TOPICS, string> = {
@@ -608,6 +669,11 @@ function topicQuestion(topic: keyof typeof INTERVIEW_TOPICS): { question: string
     payments: 'Will the app take or manage payments?',
     design: 'What should the visual style look like?',
     acceptance: 'How will you know the first version is working well?',
+    scope: 'What must the first version do, and what can wait for later?',
+    platform: 'Where will people use it: the web, a phone, a desktop app, or more than one?',
+    security: 'How private is the information in it, and who must never be able to see it?',
+    quality: 'How carefully should it be tested, and does it need to be fast or work offline?',
+    constraints: 'Is there a deadline, a budget, or anything it must use or avoid?',
   };
   return { question: questions[topic], options: ['I will decide', 'Not sure, you decide'] };
 }
@@ -635,7 +701,7 @@ function summaryOf(state: InterviewState): StudioProjectSummary {
  * The interview prompt. It shows everything the user has said so far, marks what they skipped, and tells the model
  * to stop asking when it can already write a specific goal.
  */
-export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal' | 'assumptions' | 'rounds'> & Partial<Pick<InterviewState, 'topics' | 'ideaSummary' | 'ideaGaps' | 'ideaStated'>> & { extraQuestions?: number; stackRecommendation?: { stack: string; projectCount: number } | null }, context: string | null, styleReference: string | null = null): { system: string; user: string } {
+export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal' | 'assumptions' | 'rounds'> & Partial<Pick<InterviewState, 'topics' | 'importance' | 'ideaSummary' | 'ideaGaps' | 'ideaStated'>> & { extraQuestions?: number; stackRecommendation?: { stack: string; projectCount: number } | null }, context: string | null, styleReference: string | null = null): { system: string; user: string } {
   const system = [
     'You are the Project Studio inside KAI, a desktop workbench where a team of coding agents builds software.',
     'The user has described a project in a paragraph. Your job is to close the gaps that would make the agents guess, before anything is written down as a requirement.',
@@ -645,6 +711,7 @@ export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal'
     '- "goal": the project restated as one clear, specific goal (what is built, for whom, and what "done" looks like).',
     `- "assumptions": objects with "text", "risk" (high, medium or low: how much a wrong guess changes what is built), and "status" (assumed). Keep them short and concrete, under ${STUDIO_MAX_ASSUMPTION_CHARS} characters, and order high risk first.`,
     '- "topics": for each project topic, return status decided, assumed or open, and a short source such as "idea", "answer 2" or "assumed: ...". Include all topic keys even when open.',
+    '- "importance": for each topic, how much it matters for THIS project given everything the user has said: must, worth or skip, with a one-plain-sentence reason. Change an earlier judgement when an answer shows it was wrong. Never mark a topic skip just because it has not come up; a topic marked skip is not asked about, and the user can see why.',
     state.stackRecommendation ? `- The user's last ${state.stackRecommendation.projectCount} projects shared ${state.stackRecommendation.stack}. Offer it first as the recommended stack option.` : '',
     `- "questions": at most ${roundLimit(state.rounds.length)} question, the single most important one only the user can answer, as an object {"question", "options"}. The whole interview may ask no more than ${interviewQuestionBudget(state)} questions; it has already asked ${state.rounds.flatMap((round) => round.questions).length}. It is shown in a chat, so write it as one short, conversational question of at most ${STUDIO_MAX_QUESTION_CHARS} characters that opens with a few words acknowledging the user's last answer (nothing, when there is none yet). Ask about the things that would change what gets built: who uses it, the data and where it lives, accounts and permissions, payments, the platform, and how the result is judged.`,
     `Give each question 2 to ${STUDIO_MAX_OPTIONS} "options": short, concrete answers fitted to THIS project and to everything the user has told you so far, so that a later question's options follow from the earlier answers (a payment question after "deposit" offers deposit styles, not generic ones). Keep every option to ${STUDIO_MAX_OPTION_CHARS} characters or fewer: they are shown as chips beside the answer box, and a longer one is cut short. Put the option you would recommend first and end its text with " (recommended)". Always make the last option "Not sure, you decide". If the user picked it, or skipped, decide yourself and add the decision to "assumptions" with a few words of reason. Use an empty options array only for a question that is truly open-ended.`,
@@ -664,6 +731,7 @@ export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal'
     `Project described by the user:\n${state.idea}`,
     state.goal ? `Goal so far:\n${state.goal}` : '',
     `Topic coverage so far:\n${JSON.stringify(state.topics ?? {})}`,
+    state.importance && Object.keys(state.importance).length > 0 ? `How much each topic matters here, so far:\n${JSON.stringify(state.importance)}` : '',
     state.ideaSummary ? `Read idea summary:\n${state.ideaSummary}` : '',
     state.ideaStated?.length ? `Already covered in the idea: ${state.ideaStated.map((topic) => INTERVIEW_TOPICS[topic]).join(', ')}` : '',
     state.ideaGaps?.length ? `Gaps in the idea (ask about these first): ${state.ideaGaps.map((topic) => INTERVIEW_TOPICS[topic]).join(', ')}` : '',
@@ -726,7 +794,7 @@ function heldQuestion(item: unknown): unknown {
 }
 
 /** Reads the model's reply, dropping duplicate questions and options. */
-export function parseInterviewReply(content: string): { goal: string; assumptions: InterviewState['assumptions']; topics: InterviewState['topics']; questions: Array<{ question: string; options: string[] }> } {
+export function parseInterviewReply(content: string): { goal: string; assumptions: InterviewState['assumptions']; topics: InterviewState['topics']; importance: InterviewImportance; questions: Array<{ question: string; options: string[] }> } {
   const raw = withinShape(parseJsonResponse(content, 'Project Studio'));
   const parsed = lenient(interviewReplySchema).safeParse(raw);
   if (!parsed.success) {
@@ -737,6 +805,7 @@ export function parseInterviewReply(content: string): { goal: string; assumption
     goal: parsed.data.goal,
     assumptions: parsed.data.assumptions.slice(0, STUDIO_MAX_ASSUMPTIONS),
     topics: parsed.data.topics,
+    importance: parsed.data.importance,
     questions: dedupeReplyQuestions(parsed.data.questions),
   };
 }
@@ -781,9 +850,11 @@ export function briefMarkdown(state: InterviewState, writtenAt: string): string 
     [...state.assumptionDecisions, ...decided].length > 0 ? [...state.assumptionDecisions, ...decided].map((item) => `**${item.question}**\n\n${item.answer}`).join('\n\n') : 'No questions were answered.',
     open.length > 0 ? `## Left to the agents\n\n${open.map((question) => `- ${question}`).join('\n')}` : '',
     '## Coverage',
-    ['| Topic | Status | Source |', '| --- | --- | --- |', ...Object.entries(INTERVIEW_TOPICS).map(([key, label]) => {
+    ['| Topic | Matters here | Status | Source |', '| --- | --- | --- | --- |', ...Object.entries(INTERVIEW_TOPICS).map(([key, label]) => {
       const topic = state.topics[key as keyof typeof INTERVIEW_TOPICS];
-      return `| ${label} | ${topic?.status ?? 'open'} | ${topic?.source ?? 'not covered'} |`;
+      const weight = state.importance[key as keyof typeof INTERVIEW_TOPICS];
+      const matters = weight ? `${weight.level === 'must' ? 'Needs deciding' : weight.level === 'worth' ? 'Worth settling' : 'Not needed'}${weight.reason ? `: ${weight.reason}` : ''}` : 'not weighed';
+      return `| ${label} | ${matters} | ${topic?.status ?? 'open'} | ${topic?.source ?? 'not covered'} |`;
     })].join('\n'),
     unanswered.length > 0 ? `## Still open\n\n${unanswered.map((question) => `- ${question}`).join('\n')}` : '',
     '## Next',

@@ -157,6 +157,12 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
     reconcile(unwrap(await window.kaiDesktop.messageCrew(activeRun.id, kind, text)));
   }
 
+  /** Stops the Lead answering a question, without touching the crew's own agents. */
+  async function stopAsk(): Promise<void> {
+    if (!activeRun) return;
+    reconcile(unwrap(await window.kaiDesktop.stopCrewAsk(activeRun.id)));
+  }
+
   async function keepGoing(on: boolean): Promise<void> {
     if (!activeRun) return;
     reconcile(unwrap(await window.kaiDesktop.setCrewKeepGoing(activeRun.id, on)));
@@ -467,7 +473,7 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
               onSavings={(patch) => updateDraft((current) => ({ ...current, savings: { ...current.savings, ...patch } }))} />
           )}
           {tab === 'chat' && (activeRun
-            ? <CrewChat run={activeRun} activity={<LiveActivity run={activeRun} />} working={working} onSend={sendMessage} onKeepGoing={keepGoing} onExplainSimply={explainSimply} onFindPhases={findPhases} onDecide={decideApproval}
+            ? <CrewChat run={activeRun} activity={<LiveActivity run={activeRun} />} working={working} onSend={sendMessage} onStopAsk={stopAsk} onKeepGoing={keepGoing} onExplainSimply={explainSimply} onFindPhases={findPhases} onDecide={decideApproval}
                 onPause={() => void run(async () => unwrap(await window.kaiDesktop.pauseCrew(activeRun.id)))}
                 onResume={() => void run(async () => unwrap(await window.kaiDesktop.resumeCrew(activeRun.id)))}
                 onStop={() => void run(async () => unwrap(await window.kaiDesktop.stopCrew(activeRun.id)))}

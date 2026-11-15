@@ -20,7 +20,7 @@ export function routeMessage(text: string, finished: boolean): CrewRoute {
   if (!flat) return 'ask';
   const bare = flat
     .replace(/^(?:hey|hi|ok|okay|so|and|then)[, ]+/i, '')
-    .replace(/^(?:can|could|would|will) you (?:please )?/i, '')
+    .replace(/^(?:can|could|would|will|shall) (?:you|we) (?:please )?/i, '')
     .replace(/^please[, ]*/i, '')
     .replace(/^(?:i want you to|i would like you to|i'd like you to|let's|lets) /i, '');
   const request: CrewRoute = finished ? 'work' : 'steer';

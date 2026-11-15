@@ -86,6 +86,8 @@ interface ActiveRun {
  */
 export class DesktopCrewRunner {
   private readonly active = new Map<string, ActiveRun>();
+  /** Questions to the Lead being answered right now, by run, so one can be stopped on its own. */
+  private readonly asking = new Map<string, { conversationId: string; cancelled: boolean }>();
   /** What a builder said about the task it just finished, for the Lead's review of it. */
   private readonly builderReply = new Map<string, string>();
   /** What the per-task project check found, for the Lead's review of the same task. */
@@ -277,15 +279,47 @@ export class DesktopCrewRunner {
   private async askLead(run: CrewRun, question: string, ownerWindowId: number): Promise<CrewRun> {
     const lead = run.config.roles.find((role) => role.kind === 'lead');
     if (!lead) throw new Error('This crew has no Lead to ask.');
+    const live = this.active.has(run.id);
     const active = await this.localActive(run, ownerWindowId);
-    // The id is saved on the run with the first line, so the next question reuses this conversation.
-    await this.commit(active, addChat(active.run, { from: 'you', kind: 'ask', text: question }, this.now().toISOString()));
-    const result = await this.call(active, lead, askPrompt(active.run, question), { fresh: true, label: `Question to the Lead: ${question}` });
-    const reply = result.status === 'completed' && result.output.trim() ? result.output.trim() : `I could not answer that just now${result.error ? `: ${result.error.slice(0, 200)}` : '.'}`;
+    // A crew that is working has its agents in its own conversation, so a question gets one of its own; an idle crew
+    // answers in the run's conversation. Either way the id is saved with the first line, so the next question reuses it.
+    const conversationId = live
+      ? (active.run.askConversationId ?? (await this.ports.createConversation(run.projectId, `Crew: ${run.goal.slice(0, 50)}`, { kind: 'crew', runId: run.id })).id)
+      : active.conversationId;
+    await this.commit(active, addChat({ ...active.run, ...(live ? { askConversationId: conversationId } : {}) }, { from: 'you', kind: 'ask', text: question }, this.now().toISOString()));
+    const entry = { conversationId, cancelled: false };
+    this.asking.set(run.id, entry);
+    let result: CallResult;
+    try {
+      result = await this.call(active, lead, askPrompt(active.run, question), { fresh: true, label: `Question to the Lead: ${question}`, conversationId });
+    } finally {
+      this.asking.delete(run.id);
+    }
+    // A steer or an approval can land while the answer is being written. An idle crew's copy of the run is this call's
+    // own, so it is brought up to date first, or saving the answer would put back what it changed.
+    if (!live) {
+      const latest = await this.get(run.id);
+      if (latest) active.run = { ...latest, chat: mergeChat(latest.chat, active.run.chat) };
+    }
     const at = this.now().toISOString();
+    if (entry.cancelled) {
+      await this.commit(active, addChat(active.run, { from: 'lead', kind: 'note', text: 'Stopped. I did not finish answering.' }, at));
+      return active.run;
+    }
+    const reply = result.status === 'completed' && result.output.trim() ? result.output.trim() : `I could not answer that just now${result.error ? `: ${result.error.slice(0, 200)}` : '.'}`;
     const paid: CrewRun = { ...active.run, spentUsd: active.run.spentUsd + (result.costUsd ?? 0) };
     await this.commit(active, addChat(paid, { from: 'lead', kind: 'answer', text: reply }, at));
     return active.run;
+  }
+
+  /** Stops the Lead answering a question. Only the answer's own conversation is cancelled, never the crew's agents. */
+  async stopAsk(runId: string): Promise<CrewRun> {
+    const entry = this.asking.get(runId);
+    if (entry) {
+      entry.cancelled = true;
+      this.ports.cancelAgent(entry.conversationId);
+    }
+    return this.require(runId);
   }
 
   /** Picks a paused or interrupted run back up. Work that was mid-build starts again; nothing accepted is redone. */

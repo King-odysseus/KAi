@@ -99,6 +99,11 @@ export const INTERVIEW_TOPICS = {
   payments: 'Payments',
   design: 'Design',
   acceptance: 'Acceptance criteria',
+  scope: 'Scope of the first version',
+  platform: 'Platform and devices',
+  security: 'Security and privacy',
+  quality: 'Testing and quality',
+  constraints: 'Deadline, budget and limits',
 } as const;
 export type InterviewTopic = keyof typeof INTERVIEW_TOPICS;
 export const interviewTopicSchema = z.object({
@@ -136,12 +141,50 @@ export const interviewTopicsSchema = z.preprocess(cleanTopics, z.object({
   payments: interviewTopicSchema.optional(),
   design: interviewTopicSchema.optional(),
   acceptance: interviewTopicSchema.optional(),
+  scope: interviewTopicSchema.optional(),
+  platform: interviewTopicSchema.optional(),
+  security: interviewTopicSchema.optional(),
+  quality: interviewTopicSchema.optional(),
+  constraints: interviewTopicSchema.optional(),
 }).strict());
 export type InterviewTopics = Partial<Record<InterviewTopic, z.infer<typeof interviewTopicSchema>>>;
+
+/**
+ * How much a topic matters for THIS project, and why. The interview used to force every topic and then skip some by a
+ * word match on the idea ("app", "page"); now the model weighs each one from the idea and from what it learns, says why
+ * in one plain sentence, and the person can change it. A topic marked skip is never asked and never hidden: it is shown
+ * with its reason, and can be turned back on.
+ */
+export const interviewImportanceLevelSchema = z.enum(['must', 'worth', 'skip']);
+export type InterviewImportanceLevel = z.infer<typeof interviewImportanceLevelSchema>;
+export const interviewImportanceEntrySchema = z.object({ level: interviewImportanceLevelSchema, reason: z.string().max(300).default('') }).strict();
+
+/** Accepts the model's list ({topic, importance, reason}) or a record keyed by topic, and keeps what is well formed. */
+function cleanImportance(value: unknown): unknown {
+  const pairs: Array<[unknown, unknown]> = Array.isArray(value)
+    ? value.map((item) => [(item as { topic?: unknown; key?: unknown } | null)?.topic ?? (item as { key?: unknown } | null)?.key, item])
+    : value && typeof value === 'object' ? Object.entries(value as Record<string, unknown>) : [];
+  const cleaned: Record<string, { level: string; reason: string }> = {};
+  for (const [key, raw] of pairs) {
+    if (typeof key !== 'string' || !(key in INTERVIEW_TOPICS) || !raw || typeof raw !== 'object') continue;
+    const entry = raw as { level?: unknown; importance?: unknown; reason?: unknown };
+    const level = entry.level ?? entry.importance;
+    if (level !== 'must' && level !== 'worth' && level !== 'skip') continue;
+    cleaned[key] = { level, reason: typeof entry.reason === 'string' ? entry.reason.trim().slice(0, 300) : '' };
+  }
+  return cleaned;
+}
+export const interviewImportanceSchema = z.preprocess(
+  cleanImportance,
+  z.object(Object.fromEntries((Object.keys(INTERVIEW_TOPICS) as InterviewTopic[]).map((key) => [key, interviewImportanceEntrySchema.optional()])) as Record<InterviewTopic, z.ZodOptional<typeof interviewImportanceEntrySchema>>).strict(),
+);
+export type InterviewImportance = Partial<Record<InterviewTopic, z.infer<typeof interviewImportanceEntrySchema>>>;
 export const interviewIdeaReadResultSchema = z.object({
   summary: z.string().trim().min(1).max(1_200),
   stated: z.array(z.enum(Object.keys(INTERVIEW_TOPICS) as [InterviewTopic, ...InterviewTopic[]])),
   gaps: z.array(z.enum(Object.keys(INTERVIEW_TOPICS) as [InterviewTopic, ...InterviewTopic[]])),
+  // How much each topic matters for this project, with the reason; absent from an older reply, which then reads as none.
+  importance: interviewImportanceSchema,
 }).strict();
 export type InterviewIdeaReadResult = z.infer<typeof interviewIdeaReadResultSchema>;
 export const interviewLongAnswerResultSchema = z.object({
@@ -177,6 +220,8 @@ export const interviewStateSchema = z
     // Changes made from the assumption controls, retained as explicit user decisions in the brief.
     assumptionDecisions: z.array(interviewAnswerSchema).default([]),
     topics: interviewTopicsSchema,
+    // How much each topic matters for this project and why, so what is asked is chosen, not assumed. Old interviews have none.
+    importance: interviewImportanceSchema,
     rounds: z.array(interviewRoundSchema).max(STUDIO_QUESTION_CEILING).default([]),
     // Questions the user asked for beyond the first ten, because they wanted to be walked through more.
     extraQuestions: z.number().int().min(0).max(STUDIO_EXTRA_QUESTIONS * STUDIO_MAX_EXTENSIONS).default(0),
@@ -212,6 +257,8 @@ export const interviewReplySchema = z
     goal: z.string().trim().min(1).max(STUDIO_MAX_GOAL_CHARS),
     assumptions: z.array(interviewAssumptionSchema).max(STUDIO_MAX_ASSUMPTIONS).default([]),
     topics: interviewTopicsSchema,
+    // What the model has learned about which topics matter, as the interview goes on.
+    importance: interviewImportanceSchema,
     // A bare string is accepted too, for models that ignore the object shape.
     questions: z
       .array(z.union([
@@ -269,6 +316,14 @@ export const interviewDraftInputSchema = z
   })
   .strict();
 export type InterviewDraftInput = z.infer<typeof interviewDraftInputSchema>;
+
+/** The person's own call on whether a topic matters, from the review screen. */
+export const interviewImportanceInputSchema = z.object({
+  projectId: z.string().min(1),
+  topic: z.enum(Object.keys(INTERVIEW_TOPICS) as [InterviewTopic, ...InterviewTopic[]]),
+  level: interviewImportanceLevelSchema,
+}).strict();
+export type InterviewImportanceInput = z.infer<typeof interviewImportanceInputSchema>;
 
 export const interviewProjectInputSchema = z.object({ projectId: z.string().min(1) }).strict();
 export type InterviewProjectInput = z.infer<typeof interviewProjectInputSchema>;

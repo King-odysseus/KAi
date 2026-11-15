@@ -9,6 +9,8 @@ import {
   interviewAssumptionInputSchema,
   interviewTopicAskInputSchema,
   interviewProjectInputSchema,
+  interviewImportanceInputSchema,
+  type InterviewImportanceInput,
   interviewDraftInputSchema,
   type InterviewDraftInput,
   interviewStartInputSchema,
@@ -567,6 +569,7 @@ export const ipcChannels = [
   'crew:keep-going',
   'crew:update-config',
   'crew:decide',
+  'crew:stop-ask',
   'crew:interview',
   'crew:explain-simply',
   'crew:find-phases',
@@ -607,6 +610,7 @@ export const ipcChannels = [
   'studio:interview-assumption',
   'studio:interview-assumed-topics',
   'studio:interview-topic-ask',
+  'studio:interview-importance',
   'studio:interview-finish',
   'studio:interview-confirm',
   'studio:interview-reopen',
@@ -999,6 +1003,7 @@ export const ipcInputSchemas = {
   'crew:keep-going': crewKeepGoingInputSchema,
   'crew:update-config': crewUpdateConfigInputSchema,
   'crew:decide': crewDecideInputSchema,
+  'crew:stop-ask': crewControlInputSchema,
   'crew:interview': crewInterviewInputSchema,
   'crew:explain-simply': crewExplainSimplyInputSchema,
   'crew:find-phases': crewControlInputSchema,
@@ -1039,6 +1044,7 @@ export const ipcInputSchemas = {
   'studio:interview-assumption': interviewAssumptionInputSchema,
   'studio:interview-assumed-topics': interviewProjectInputSchema,
   'studio:interview-topic-ask': interviewTopicAskInputSchema,
+  'studio:interview-importance': interviewImportanceInputSchema,
   'studio:interview-finish': interviewProjectInputSchema,
   'studio:interview-confirm': interviewProjectInputSchema,
   'studio:interview-reopen': interviewProjectInputSchema,
@@ -1624,6 +1630,8 @@ export interface KaiDesktopBridge {
   actOnStudioAssumption(request: InterviewAssumptionInput): Promise<IpcResponse<InterviewState>>;
   askStudioAssumedTopics(projectId: string): Promise<IpcResponse<InterviewState>>;
   askStudioTopic(request: InterviewTopicAskInput): Promise<IpcResponse<InterviewState>>;
+  /** Changes whether a topic matters for this project, from the review screen. It is never asked once it is marked not needed. */
+  setStudioTopicImportance(request: InterviewImportanceInput): Promise<IpcResponse<InterviewState>>;
   finishStudioInterview(projectId: string): Promise<IpcResponse<InterviewState>>;
   /** Writes the reviewed brief after the user confirms the summary. */
   confirmStudioInterview(projectId: string): Promise<IpcResponse<InterviewState>>;
@@ -1828,6 +1836,8 @@ export interface KaiDesktopBridge {
   updateCrewConfig(runId: string, config: CrewConfig): Promise<IpcResponse<CrewRun>>;
   /** Answers one approval card. The crew carries on once every card is answered. */
   decideCrewApproval(runId: string, approvalId: string, approve: boolean): Promise<IpcResponse<CrewRun>>;
+  /** Stops the Lead answering a question, without touching the crew's own agents. */
+  stopCrewAsk(runId: string): Promise<IpcResponse<CrewRun>>;
   /** Reads the goal (and any plan file it names) and returns the few questions worth asking before the crew plans. */
   crewInterview(projectId: string, goal: string): Promise<IpcResponse<CrewInterview>>;
   /** Turns plain-language writing on or off for the Lead's replies. */

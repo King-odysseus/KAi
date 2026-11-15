@@ -3213,3 +3213,14 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .crew-interview-left { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-left: 2px solid var(--border); }
 .crew-interview-left li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
 .crew-ask-first { display: inline-flex; align-items: center; gap: 8px; margin-left: 8px; color: var(--text-muted); font-size: 12px; }
+
+.crew-run-as-work { align-self: flex-start; margin-top: 4px; }
+
+/* Notice bars on the Crew screen keep their buttons beside the message, not at the far edge of the window. */
+.crew-view .workbench-notice { justify-content: flex-start; flex-wrap: wrap; gap: 8px 14px; }
+.crew-view .workbench-notice > span { flex: 0 1 auto; }
+
+.crew-queued { opacity: 0.85; }
+
+.studio-importance-reason { color: var(--text-dim); }
+.studio-importance-actions { display: inline-flex; gap: 4px; margin-left: 8px; }

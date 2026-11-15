@@ -419,6 +419,35 @@ describe('crew runner', () => {
     expect(after.chat[1]?.text).toContain('Phase 1 has not started');
   });
 
+  it('stops an answer in progress, cancels only that answer\'s conversation, and keeps the question', async () => {
+    const f = fixture();
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const finished = await runToIdle(f.runner, started.id);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const original = f.ports.runAgent;
+    f.ports.runAgent = async (request, owner, options) => {
+      if (request.prompt.includes('is asking you a question')) {
+        await gate;
+        return { conversation: {} as never, status: 'completed', output: 'A late answer.', costUsd: 0 };
+      }
+      return original(request, owner, options);
+    };
+    const cancelled: string[] = [];
+    f.ports.cancelAgent = (id) => { cancelled.push(id); release(); return true; };
+
+    const pending = f.runner.message(started.id, 'ask', 'What is done?', 1);
+    // The question is on the thread before the answer is waited for; wait until it is, then stop.
+    for (let tries = 0; tries < 100 && ((await f.runner.get(started.id))?.chat.length ?? 0) < 1; tries += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    await f.runner.stopAsk(started.id);
+    const after = await pending;
+
+    expect(cancelled).toEqual([finished.conversationId]);
+    expect(after.chat.map((entry) => entry.kind)).toEqual(['ask', 'note']);
+    expect(after.chat.at(-1)?.text).toContain('Stopped');
+    expect(after.chat.some((entry) => entry.text.includes('A late answer.'))).toBe(false);
+  });
+
   it('keeps a steer for a working crew, and refuses it on a finished one', async () => {
     const f = fixture({ lead: ['{"verdict":"sendBack","feedback":"No rate limit."}'] });
     const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);

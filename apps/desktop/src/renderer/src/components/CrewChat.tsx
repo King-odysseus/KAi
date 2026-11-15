@@ -1,4 +1,5 @@
-import { CircleHelp, ExternalLink, Search } from 'lucide-react';
+import { CircleHelp, ExternalLink, Play, Search, X } from 'lucide-react';
+import { Markdown } from './Markdown';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { CrewChatEntry, CrewFeedEntry, CrewRun } from '@kai/contracts';
 import { collapseFeed } from '../crew-feed';
@@ -16,6 +17,12 @@ type Item =
   | { at: string; type: 'chat'; entry: CrewChatEntry }
   | { at: string; type: 'log'; entry: CrewFeedEntry; count: number };
 
+/** A question typed while the Lead is still answering another, waiting its turn. */
+interface QueuedMessage {
+  id: string;
+  text: string;
+}
+
 const FIRST_PAGE = 40;
 const MAX_PHASE_BUTTONS = 8;
 
@@ -26,13 +33,15 @@ const TAG: Record<CrewChatEntry['kind'], string> = { ask: 'Question', steer: 'St
  * Underneath is the same message box as the Workspace. The person never has to say whether a message is a question, a
  * change of direction or more work: the box works it out and says which it chose, and a small picker overrides it.
  */
-export function CrewChat({ run, activity, working, onSend, onKeepGoing, onExplainSimply, onFindPhases, onDecide, onPause, onResume, onStop, onOpenConversation }: {
+export function CrewChat({ run, activity, working, onSend, onStopAsk, onKeepGoing, onExplainSimply, onFindPhases, onDecide, onPause, onResume, onStop, onOpenConversation }: {
   run: CrewRun;
   /** The live "what is each role doing now" strip, shown while the crew works. */
   activity: ReactNode;
   /** Whether a run control is already being applied, so it is not pressed twice. */
   working: boolean;
   onSend: (kind: CrewRoute, text: string) => Promise<void>;
+  /** Stops the Lead answering, without touching the crew's own agents. */
+  onStopAsk: () => Promise<void>;
   onKeepGoing: (on: boolean) => Promise<void>;
   onExplainSimply: (on: boolean) => Promise<void>;
   onFindPhases: () => Promise<void>;
@@ -47,6 +56,10 @@ export function CrewChat({ run, activity, working, onSend, onKeepGoing, onExplai
   const [mode, setMode] = useState<Mode>('auto');
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [queue, setQueue] = useState<QueuedMessage[]>([]);
+  // Refs as well as state, because a message is queued or sent from inside an async function that outlives a render.
+  const askBusy = useRef(false);
+  const queueRef = useRef<QueuedMessage[]>([]);
   const [finding, setFinding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [shown, setShown] = useState(FIRST_PAGE);
@@ -64,7 +77,13 @@ export function CrewChat({ run, activity, working, onSend, onKeepGoing, onExplai
 
   // "Add work" only means something once the board has finished; a forced choice that does not fit falls back to Auto.
   const forced: CrewRoute | null = mode === 'auto' || (mode === 'work' && !finished) ? null : mode;
-  const route: CrewRoute = forced ?? routeMessage(text, finished);
+  // While the Lead is answering, a message that is not forced to something else is the next thing for it to take up.
+  const route: CrewRoute = forced ?? (sending ? 'ask' : routeMessage(text, finished));
+
+  function setQueued(next: QueuedMessage[]): void {
+    queueRef.current = next;
+    setQueue(next);
+  }
 
   async function guarded(action: () => Promise<void>): Promise<void> {
     setError(null);
@@ -77,13 +96,36 @@ export function CrewChat({ run, activity, working, onSend, onKeepGoing, onExplai
 
   async function send(kind: CrewRoute, body: string): Promise<void> {
     const value = body.trim();
-    if (!value || sending) return;
-    setSending(true);
+    if (!value) return;
+    setText('');
+    // A question asked while the Lead is still answering waits its turn and goes when that answer lands, the way a
+    // message typed during a run in the Workspace does. Steers and added work do not need the Lead, so they go at once.
+    if (kind === 'ask' && askBusy.current) {
+      setQueued([...queueRef.current, { id: `queued-${Date.now()}-${queueRef.current.length}`, text: value }]);
+      return;
+    }
+    if (kind === 'ask') {
+      askBusy.current = true;
+      setSending(true);
+    }
+    let failed = false;
     await guarded(async () => {
-      await onSend(kind, value);
-      setText('');
+      try {
+        await onSend(kind, value);
+      } catch (caught) {
+        failed = true;
+        throw caught;
+      }
     });
-    setSending(false);
+    // A message that did not go is put back in the box, not lost.
+    if (failed) setText((current) => current || value);
+    if (kind === 'ask') {
+      askBusy.current = false;
+      setSending(false);
+      const [next, ...rest] = queueRef.current;
+      setQueued(rest);
+      if (next) void send('ask', next.text);
+    }
   }
 
   async function findPhases(): Promise<void> {
@@ -130,10 +172,10 @@ export function CrewChat({ run, activity, working, onSend, onKeepGoing, onExplai
             <div className="command-chip-row">
               {phases.map((phase) => (
                 <span key={phase} className="crew-phase">
-                  <UiButton type="button" className="secondary-button" disabled={sending || run.approvals.some((item) => item.status === 'pending')} onClick={() => void send(phaseRoute, `Continue the plan with: ${phase}.`)} title={`Start: ${phase}`}>
+                  <UiButton type="button" className="secondary-button" disabled={run.approvals.some((item) => item.status === 'pending')} onClick={() => void send(phaseRoute, `Continue the plan with: ${phase}.`)} title={`Start: ${phase}`}>
                     {phase}
                   </UiButton>
-                  <UiButton type="button" className="composer-text-button" disabled={sending} aria-label={`What does "${phase}" mean?`} title="Explain this in plain words" onClick={() => void send('ask', `Explain in plain words what "${phase}" involves, what it will change, and whether I need to decide anything before it starts.`)}>
+                  <UiButton type="button" className="composer-text-button" aria-label={`What does "${phase}" mean?`} title="Explain this in plain words" onClick={() => void send('ask', `Explain in plain words what "${phase}" involves, what it will change, and whether I need to decide anything before it starts.`)}>
                     <CircleHelp size={13} />
                   </UiButton>
                 </span>
@@ -156,7 +198,14 @@ export function CrewChat({ run, activity, working, onSend, onKeepGoing, onExplai
           ? (
             <div key={item.entry.id} className={`studio-bubble ${item.entry.from === 'you' ? 'user' : 'ai'}`}>
               {item.entry.from === 'you' && TAG[item.entry.kind] && <small className="crew-chat-tag">{TAG[item.entry.kind]}</small>}
-              <span className="crew-chat-text">{item.entry.text}</span>
+              {/* The Lead writes in markdown (bold, lists, code); the person's own words are shown as typed. */}
+              {item.entry.from === 'lead' ? <Markdown text={item.entry.text} /> : <span className="crew-chat-text">{item.entry.text}</span>}
+              {/* A message that was taken as a question can be sent again as work, which is what the Lead points to. */}
+              {item.entry.from === 'you' && item.entry.kind === 'ask' && (
+                <UiButton type="button" className="composer-text-button crew-run-as-work" disabled={working} onClick={() => void send(phaseRoute, item.entry.text)} title="Send this same message again as work for the crew">
+                  <Play size={12} /> Run this as work
+                </UiButton>
+              )}
             </div>
           )
           : (
@@ -165,18 +214,24 @@ export function CrewChat({ run, activity, working, onSend, onKeepGoing, onExplai
               <small>{item.entry.who} · {new Date(item.entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
             </div>
           ))}
+        {queue.map((item) => (
+          <div key={item.id} className="studio-bubble user crew-queued">
+            <small className="crew-chat-tag">Queued: the Lead takes it up after the answer it is giving</small>
+            <span className="crew-chat-text">{item.text}</span>
+            <UiButton type="button" className="composer-text-button" aria-label="Remove this queued message" onClick={() => setQueued(queueRef.current.filter((queued) => queued.id !== item.id))}><X size={12} /> Remove</UiButton>
+          </div>
+        ))}
         {sending && <div className="studio-bubble ai">The Lead is working on it…</div>}
         <div ref={end} />
       </div>
 
       <Composer
-        status={text.trim() ? <span>Sent as {ROUTE_LABEL[route]}{forced ? '' : '. Change it with the picker if that is not what you meant.'}</span> : undefined}
+        status={text.trim() ? <span>{sending && route === 'ask' ? 'Queued: the Lead takes this up after its current answer.' : `Sent as ${ROUTE_LABEL[route]}${forced ? '' : '. Change it with the picker if that is not what you meant.'}`}</span> : undefined}
       >
         <ComposerInput
           value={text}
           rows={2}
           maxLength={2000}
-          disabled={sending}
           aria-label="Message to the Lead"
           placeholder="Message the Lead: ask about progress, change direction, or give it more to do"
           onChange={(event) => setText(event.target.value)}
@@ -201,8 +256,10 @@ export function CrewChat({ run, activity, working, onSend, onKeepGoing, onExplai
             <>
               {live && <ComposerPause paused={false} onPause={onPause} onResume={onResume} />}
               {run.status === 'paused' && <ComposerPause paused onPause={onPause} onResume={onResume} />}
+              {/* While the Lead is answering, the one control that matters is the one that stops it. */}
+              {sending && <ComposerStop onClick={() => { setQueued([]); void guarded(onStopAsk); }} label="Stop answering" />}
               {!finished && <ComposerStop onClick={onStop} label="Stop the crew" />}
-              <ComposerSend label="Send to the Lead" onClick={() => void send(route, text)} disabled={sending || working || !text.trim()} sending={sending} />
+              <ComposerSend label="Send to the Lead" onClick={() => void send(route, text)} disabled={working || !text.trim()} sending={false} />
             </>
           )}
         />

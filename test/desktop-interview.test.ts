@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewGivenAnswers, interviewOpenQuestions, interviewRecap, interviewStateSchema, INTERVIEW_TOPICS, projectTitleFrom, stackRecommendationFromHistory, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, studioBriefChangeDiff, studioCrewGoal, type InterviewState } from '../packages/contracts/src';
-import { briefMarkdown, buildInterviewPrompt, DesktopInterview, parseInterviewIdeaRead, parseInterviewLongAnswer, parseInterviewReply, type InterviewPorts } from '../apps/desktop/src/main/interview';
+import { briefMarkdown, buildInterviewPrompt, DesktopInterview, YOUR_CALL, parseInterviewIdeaRead, parseInterviewLongAnswer, parseInterviewReply, type InterviewPorts } from '../apps/desktop/src/main/interview';
 import { SpecStore, specHistoryPath } from '../apps/desktop/src/main/spec-store';
 
 const NOW = '2026-09-28T12:00:00.000Z';
@@ -112,7 +112,7 @@ describe('topic coverage', () => {
     expect(reviewed.status).toBe('reviewing');
     const brief = briefMarkdown(reviewed, NOW);
     expect(brief).toContain('## Coverage');
-    expect(brief).toContain('| Design | assumed | assumed: simplest fit |');
+    expect(brief).toContain('| Design | not weighed | assumed | assumed: simplest fit |');
   });
 
   it('queues assumed topics only up to the remaining question budget', async () => {
@@ -131,6 +131,69 @@ describe('topic coverage', () => {
     expect(queued.rounds).toHaveLength(1);
     expect(queued.rounds[0]?.questions).toEqual(['Who books?', 'What should the visual style look like?']);
     expect(queued.rounds[0]?.options).toHaveLength(2);
+  });
+});
+
+describe('which topics matter for this project', () => {
+  const idea = (importance: unknown[], gaps: string[] = ['payments']) => JSON.stringify({ summary: 'An internal tool.', stated: [], gaps, importance });
+  const reply = (topics: Record<string, unknown>, extra: Record<string, unknown> = {}) => JSON.stringify({ goal: 'Build an internal tool.', assumptions: [], topics, questions: [], ...extra });
+  const assumed = (patch: Record<string, unknown> = {}) => ({
+    ...Object.fromEntries(Object.keys(INTERVIEW_TOPICS).map((key) => [key, { status: 'assumed', source: 'assumed: simplest fit' }])),
+    ...patch,
+  });
+
+  it('reads how each topic was weighed from the idea, keeping only real topics, levels and reasons', () => {
+    const read = parseInterviewIdeaRead(idea([
+      { topic: 'payments', importance: 'skip', reason: 'An internal tool with no billing.' },
+      { topic: 'nonsense', importance: 'must', reason: 'Not a topic.' },
+      { topic: 'users', importance: 'sometimes', reason: 'Not a level.' },
+    ]));
+    expect(read.importance).toEqual({ payments: { level: 'skip', reason: 'An internal tool with no billing.' } });
+  });
+
+  it('neither asks about a gap marked not needed nor forces an open topic marked not needed', async () => {
+    const interview = new DesktopInterview(ports({}, [reply(assumed({ payments: { status: 'open', source: 'not discussed' } }))], idea([{ topic: 'payments', importance: 'skip', reason: 'No billing.' }])));
+    const started = await interview.start({ projectId: 'p1', idea: 'An internal tool.' });
+    expect(started.status).toBe('reviewing');
+    expect(started.rounds[0]?.questions ?? []).toEqual([]);
+    expect(started.importance.payments).toMatchObject({ level: 'skip', reason: 'No billing.' });
+  });
+
+  it('forces an open topic the model marked as needing a decision, including a newer topic', async () => {
+    const interview = new DesktopInterview(ports({}, [reply(assumed({ security: { status: 'open', source: 'not discussed' } }))], idea([{ topic: 'security', importance: 'must', reason: 'It holds customer records.' }], [])));
+    const started = await interview.start({ projectId: 'p1', idea: 'A records app.' });
+    expect(started.status).toBe('asking');
+    expect(started.rounds[0]?.questions[0]).toContain('How private');
+  });
+
+  it('does not force the newer topics for an interview that was never weighed', async () => {
+    const interview = new DesktopInterview(ports({}, [reply(assumed({ security: { status: 'open', source: 'not discussed' } }))], idea([], [])));
+    const started = await interview.start({ projectId: 'p1', idea: 'A records app.' });
+    expect(started.status).toBe('reviewing');
+  });
+
+  it('learns as it goes, and keeps the person\'s own call over a later change of mind', async () => {
+    const first = reply(assumed(), { importance: [{ topic: 'security', importance: 'worth', reason: 'Some records.' }], questions: [{ question: 'Who uses it?', options: [] }] });
+    const second = reply(assumed(), { importance: [{ topic: 'security', importance: 'must', reason: 'Customer records.' }, { topic: 'quality', importance: 'must', reason: 'It runs payroll.' }] });
+    const store = memoryStore();
+    const interview = new DesktopInterview(ports({ store }, [first, second], idea([], [])));
+    const started = await interview.start({ projectId: 'p1', idea: 'A records app.' });
+    expect(started.importance.security).toMatchObject({ level: 'worth' });
+
+    await interview.setImportance({ projectId: 'p1', topic: 'security', level: 'skip' });
+    const next = await interview.answer({ projectId: 'p1', answers: [{ question: 'Who uses it?', answer: 'Staff.' }] });
+    expect(next.importance.security).toEqual({ level: 'skip', reason: YOUR_CALL });
+    expect(next.importance.quality).toMatchObject({ level: 'must', reason: 'It runs payroll.' });
+  });
+
+  it('writes how each topic was weighed into the brief, and rewrites it when the person changes one', async () => {
+    const done = state({ status: 'done', briefPath: 'brief.md', importance: { security: { level: 'must', reason: 'Customer records.' } } });
+    const interview = new DesktopInterview(ports({ store: memoryStore(done) }));
+    const changed = await interview.setImportance({ projectId: 'p1', topic: 'security', level: 'skip' });
+    expect(changed.importance.security).toEqual({ level: 'skip', reason: YOUR_CALL });
+    expect(changed.briefPath).not.toBeNull();
+    expect(briefMarkdown(changed, NOW)).toContain(`| Security and privacy | Not needed: ${YOUR_CALL} |`);
+    expect(briefMarkdown(done, NOW)).toContain('| Security and privacy | Needs deciding: Customer records. |');
   });
 });
 

@@ -629,6 +629,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'crew:message', async ({ runId, kind, text }, request) => context.crew.message(runId, kind, text, request.ownerWindowId));
   handle(context, 'crew:keep-going', async ({ runId, keepGoing }, request) => context.crew.setKeepGoing(runId, keepGoing, request.ownerWindowId));
   handle(context, 'crew:update-config', async ({ runId, config }) => context.crew.updateConfig(runId, config));
+  handle(context, 'crew:stop-ask', async ({ runId }) => context.crew.stopAsk(runId));
   handle(context, 'crew:decide', async ({ runId, approvalId, approve }, request) => context.crew.decide(runId, approvalId, approve, request.ownerWindowId));
   handle(context, 'crew:explain-simply', async ({ runId, explainSimply }) => context.crew.setExplainSimply(runId, explainSimply));
   handle(context, 'crew:find-phases', async ({ runId }, request) => context.crew.findPhases(runId, request.ownerWindowId));
@@ -682,6 +683,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'studio:interview-assumption', async (input) => context.interview.assumption(input));
   handle(context, 'studio:interview-assumed-topics', async ({ projectId }) => context.interview.askAssumedTopics({ projectId }));
   handle(context, 'studio:interview-topic-ask', async (input) => context.interview.askTopic(input));
+  handle(context, 'studio:interview-importance', async (input) => context.interview.setImportance(input));
   handle(context, 'studio:interview-finish', async ({ projectId }) => context.interview.finish({ projectId }));
   handle(context, 'studio:interview-confirm', async ({ projectId }) => context.interview.confirm({ projectId }));
   handle(context, 'studio:interview-reopen', async ({ projectId }) => context.interview.reopen({ projectId }));

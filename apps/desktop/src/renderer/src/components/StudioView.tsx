@@ -127,6 +127,9 @@ function restoredDraft(interview: InterviewState | null): { answers: string[]; s
   return { answers, step };
 }
 
+/** What each importance level is called on the screen. */
+const IMPORTANCE_LABEL: Record<'must' | 'worth' | 'skip', string> = { must: 'Needs deciding', worth: 'Worth settling', skip: 'Not needed' };
+
 /**
  * The Project Studio. The first part of it is the interview: one paragraph in, a short set of skippable questions,
  * and `.kai/spec/brief.md` out. The artifacts, the board and the design layer all read that brief, so this screen
@@ -1466,15 +1469,46 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     }
   }
 
+  /** How the interview weighed each topic for this project, with its reason, and the person's own say over it. */
   function topicCoverage(current: InterviewState): ReactNode {
     return (
-      <table className="studio-topic-coverage"><thead><tr><th>Topic</th><th>Status</th><th>Source</th></tr></thead><tbody>
-        {Object.entries(INTERVIEW_TOPICS).map(([key, label]) => {
-          const topic = current.topics[key as keyof typeof INTERVIEW_TOPICS];
-          return <tr key={key}><th scope="row">{label}</th><td>{topic?.status ?? 'open'}</td><td>{topic?.source ?? 'Not covered'}</td></tr>;
+      <table className="studio-topic-coverage"><thead><tr><th>Topic</th><th>Matters here</th><th>Status</th><th>Source</th></tr></thead><tbody>
+        {(Object.entries(INTERVIEW_TOPICS) as Array<[InterviewTopic, string]>).map(([key, label]) => {
+          const topic = current.topics[key];
+          const weight = current.importance[key];
+          return (
+            <tr key={key}>
+              <th scope="row">{label}</th>
+              <td>
+                <strong>{weight ? IMPORTANCE_LABEL[weight.level] : 'Not weighed'}</strong>
+                {weight?.reason && <small className="studio-importance-reason"> {weight.reason}</small>}
+                <span className="studio-importance-actions">
+                  <UiButton type="button" className="composer-text-button" aria-pressed={weight?.level === 'must'} disabled={busy !== null || weight?.level === 'must'} onClick={() => void setTopicImportance(key, 'must')}>Needs deciding</UiButton>
+                  <UiButton type="button" className="composer-text-button" aria-pressed={weight?.level === 'skip'} disabled={busy !== null || weight?.level === 'skip'} onClick={() => void setTopicImportance(key, 'skip')}>Not needed</UiButton>
+                </span>
+              </td>
+              <td>{topic?.status ?? 'open'}</td>
+              <td>{topic?.source ?? 'Not covered'}</td>
+            </tr>
+          );
         })}
       </tbody></table>
     );
+  }
+
+  /** The person's own call on whether a topic matters. It is kept for the rest of the interview. */
+  async function setTopicImportance(topic: InterviewTopic, level: 'must' | 'worth' | 'skip'): Promise<void> {
+    if (!projectId || busy !== null) return;
+    setBusy('answer');
+    setError(null);
+    try {
+      setState(unwrap(await window.kaiDesktop.setStudioTopicImportance({ projectId, topic, level })));
+      setProjectsVersion((current) => current + 1);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
   }
 
   function askAssumedTopicsButton(current: InterviewState): ReactNode {
@@ -2973,6 +3007,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
           {asking && state && (
             <>
               <p className="studio-note">I read your idea. It already covers {state.ideaStated.length ? state.ideaStated.map((topic) => INTERVIEW_TOPICS[topic]).join(', ') : 'no complete topics yet'}. I’ll ask about {state.ideaGaps.length ? state.ideaGaps.map((topic) => INTERVIEW_TOPICS[topic]).join(', ') : 'only any remaining details'}.</p>
+              {(Object.entries(state.importance) as Array<[InterviewTopic, { level: string; reason: string }]>).some(([, weight]) => weight.level === 'skip') && (
+                <p className="studio-note">Not needed here: {(Object.entries(state.importance) as Array<[InterviewTopic, { level: string; reason: string }]>).filter(([, weight]) => weight.level === 'skip').map(([key, weight]) => `${INTERVIEW_TOPICS[key]}${weight.reason ? ` (${weight.reason})` : ''}`).join('; ')}. You can turn any of them back on when you review.</p>
+              )}
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <AgentOrb state={busy === 'answer' || busy === 'finish' ? 'thinking' : 'idle'} />
                 <p className="studio-note">Question {Math.min(state.rounds.flatMap((round) => round.questions).length, interviewQuestionBudget(state))} of {interviewQuestionBudget(state)}. Skip anything you would rather leave to the agents, or pick "Not sure, you decide".</p>
