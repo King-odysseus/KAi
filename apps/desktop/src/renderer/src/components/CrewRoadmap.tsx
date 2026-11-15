@@ -27,12 +27,13 @@ function shortName(name: string): string {
  * ones not started, and the buttons that matter at each point. A finished phase waits for the person's OK (the plan
  * asks for it), given here by a button that is recorded, with a choice to start the next phase in the same click.
  */
-export function CrewRoadmap({ run, busy, onStart, onExplain, onAccept }: {
+export function CrewRoadmap({ run, busy, onStart, onExplain, onAccept, onPauseAfter }: {
   run: CrewRun;
   busy: boolean;
   onStart: (phase: string) => void;
   onExplain: (phase: string) => void;
   onAccept: (phase: string, thenStart?: string) => void;
+  onPauseAfter: (phase: string, on: boolean) => void;
 }): ReactNode {
   const rows = useMemo(() => buildRoadmap(run), [run]);
   if (rows.length === 0) return null;
@@ -65,6 +66,11 @@ export function CrewRoadmap({ run, busy, onStart, onExplain, onAccept }: {
                       <UiButton type="button" className="secondary-button" disabled={busy || waitingOnOk} onClick={() => onAccept(row.name, next.name)} title={`Accept ${shortName(row.name)} and start ${next.name}`}>Accept and start {shortName(next.name)}</UiButton>
                     )}
                   </>
+                )}
+                {row.status !== 'accepted' && (
+                  <label className="crew-stop-after" title="Even with keep going on, stop once this phase is finished so you can look before the next one starts">
+                    <input type="checkbox" checked={run.pauseAfter.includes(row.key)} disabled={busy} onChange={(event) => onPauseAfter(row.name, event.target.checked)} /> Stop after
+                  </label>
                 )}
                 <UiButton type="button" className="composer-text-button" disabled={busy} aria-label={`What does "${row.name}" mean?`} title="Explain this phase in plain words" onClick={() => onExplain(row.name)}><CircleHelp size={13} /></UiButton>
               </span>

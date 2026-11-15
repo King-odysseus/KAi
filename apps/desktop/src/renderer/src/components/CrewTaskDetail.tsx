@@ -1,6 +1,7 @@
 import { History, X } from 'lucide-react';
-import { useMemo, type ReactNode } from 'react';
-import type { CrewRun, CrewTask } from '@kai/contracts';
+import { useMemo, useState, type ReactNode } from 'react';
+import type { CrewRun, CrewTask, CrewTaskDiff } from '@kai/contracts';
+import { unwrap } from '../types';
 import { UiButton } from './UiButton';
 
 const VERDICT: Record<string, string> = { accept: 'accepted it', sendBack: 'sent it back', needsYou: 'needs you' };
@@ -34,6 +35,21 @@ export function CrewTaskDetail({ run, task, busy, onClose, onRevert }: {
   const roleLabel = (id: string): string => run.config.roles.find((role) => role.id === id)?.label ?? id;
   const live = run.status === 'running' || run.status === 'planning';
   const repeats = useMemo(() => repeatedReasons(task), [task]);
+  const [diff, setDiff] = useState<{ taskId: string; value: CrewTaskDiff } | null>(null);
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const showDiff = async (): Promise<void> => {
+    setLoading(true);
+    setDiffError(null);
+    try {
+      setDiff({ taskId: task.id, value: unwrap(await window.kaiDesktop.crewTaskDiff(run.id, task.id)) });
+    } catch (error) {
+      setDiffError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  };
+  const shown = diff && diff.taskId === task.id ? diff.value : null;
   return (
     <section className="ops-panel crew-task-detail" aria-label={`Details of ${task.title}`}>
       <div className="crew-task-detail-head">
@@ -67,6 +83,24 @@ export function CrewTaskDetail({ run, task, busy, onClose, onRevert }: {
           <summary>{task.files.length} {task.files.length === 1 ? 'file' : 'files'} changed</summary>
           <ul className="crew-list">{task.files.slice(0, 60).map((file) => <li key={file}><code>{file}</code></li>)}{task.files.length > 60 && <li>and {task.files.length - 60} more</li>}</ul>
         </details>
+      )}
+
+      {task.checkpoint && task.status !== 'backlog' && (
+        <div className="crew-diff">
+          <UiButton type="button" className="secondary-button" disabled={loading} onClick={() => void showDiff()} title="Show the lines this task changed, compared with before it started">{loading ? 'Loading…' : shown ? 'Refresh the changes' : 'Show what changed'}</UiButton>
+          {diffError && <p className="crew-feedback" role="alert">{diffError}</p>}
+          {shown && (shown.files.length === 0 ? <small className="crew-empty">Nothing differs from before the task started.</small> : (
+            <>
+              {shown.files.map((file) => (
+                <details key={file.path}>
+                  <summary><code>{file.path}</code></summary>
+                  <pre className="crew-diff-body">{file.diff.trim() || 'No text changes to show (a new, deleted or binary file).'}</pre>
+                </details>
+              ))}
+              {shown.more > 0 && <small className="crew-empty">and {shown.more} more {shown.more === 1 ? 'file' : 'files'} not shown.</small>}
+            </>
+          ))}
+        </div>
       )}
 
       {task.checkpoint && !live && task.status !== 'backlog' && (

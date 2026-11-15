@@ -2,11 +2,11 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildRoadmap, createDefaultCrewConfig, crewConfigSchema, crewRunSchema, phaseKey } from '@kai/contracts';
+import { buildDecisions, buildRoadmap, createDefaultCrewConfig, crewConfigSchema, crewRunSchema, crewStatusLine, phaseKey, phaseReportMarkdown } from '@kai/contracts';
 import type { CrewRun } from '@kai/contracts';
 import { NodeFileSystem } from '../packages/runtime/src';
 import {
-  acceptPhase, addTasks, openTasks, phaseFromFollowUp, reopenOpenTasks, resetForRevert, setTaskCheckpoint, taskBrief, tasksToRebuild, teachBlockers,
+  acceptPhase, addNotes, addTasks, clearNotes, enforceLimits, openTasks, parseReview, phaseBudgetAsk, phaseToPauseAfter, setPauseAfter, phaseFromFollowUp, reopenOpenTasks, resetForRevert, setTaskCheckpoint, taskBrief, tasksToRebuild, teachBlockers,
 } from '../apps/desktop/src/main/crew-engine';
 import { parsePlan, planPrompt } from '../apps/desktop/src/main/crew-prompts';
 import { withCrewException } from '../apps/desktop/src/main/execution-rules';
@@ -188,5 +188,49 @@ describe('carrying on with what is already on the board', () => {
     expect(next.tasks.find((task) => task.id === 'c')?.status).toBe('backlog');
     expect(next.tasks.find((task) => task.id === 'a')?.status).toBe('accepted');
     expect(next.chat.at(-1)?.text).toBe('Carrying on.');
+  });
+});
+
+describe('second round: notes, stop-after, phase spend, status, report', () => {
+  it('keeps reviewer notes once each without blocking, and lets them be cleared', () => {
+    const parsed = parseReview('{"verdict":"accept","notes":["Electron is old.","  ", 5]}');
+    expect(parsed).toEqual({ verdict: 'accept', feedback: '', notes: ['Electron is old.'] });
+    let run = addNotes(phased(), 'security', 'a', parsed!.notes, T1);
+    run = addNotes(run, 'security', 'a', parsed!.notes, T1);
+    expect(run.notes).toHaveLength(1);
+    expect(clearNotes(run, T1).notes).toEqual([]);
+  });
+
+  it('stops after a phase the person chose, and only once it is finished', () => {
+    let run = setPauseAfter(phased(), 'Phase 0: Spike', true, T1);
+    expect(run.pauseAfter).toEqual(['phase 0']);
+    expect(phaseToPauseAfter(run)).toBe('Phase 0: Spike');
+    expect(phaseToPauseAfter(phased())).toBeNull();
+    run = setPauseAfter(run, 'Phase 0', false, T1);
+    expect(run.pauseAfter).toEqual([]);
+  });
+
+  it('asks, never stops, when a phase passes the amount set, and asks once', () => {
+    const run = { ...phased(), config: { ...phased().config, phaseBudgetUsd: 1 } };
+    expect(phaseBudgetAsk(run)?.reason).toBe('phaseSpend');
+    expect(phaseBudgetAsk({ ...run, phaseSpendOk: ['phase 0'] })).toBeNull();
+    expect(phaseBudgetAsk(phased())).toBeNull();
+    const asked = enforceLimits({ ...run, acceptedPhases: [] }, new Date(T1));
+    expect(asked.status).toBe('needsYou');
+    expect(asked.ask?.phase).toBe('phase 0');
+  });
+
+  it('says in plain words what the crew is doing', () => {
+    expect(crewStatusLine({ ...phased(), spentUsd: 13.79 }).text).toContain('$13.79 so far');
+    expect(crewStatusLine({ ...phased(), ask: { reason: 'spend', message: 'Over the limit.' } })).toMatchObject({ tone: 'waiting' });
+    expect(crewStatusLine({ ...phased(), status: 'paused' }).tone).toBe('paused');
+  });
+
+  it('writes a phase report and lists the decisions made', () => {
+    const report = phaseReportMarkdown(addNotes(phased(), 'security', 'a', ['Upgrade later.'], T1), 'Phase 0: Spike', T1);
+    expect(report).toContain('# Phase 0');
+    expect(report).toContain('Spike');
+    expect(report).toContain('Upgrade later.');
+    expect(buildDecisions(acceptPhase(phased(), 'Phase 0: Spike', T1)).map((item) => item.text)).toContain('Accepted: Phase 0: Spike');
   });
 });

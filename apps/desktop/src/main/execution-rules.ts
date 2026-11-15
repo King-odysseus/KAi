@@ -120,6 +120,21 @@ export const CREW_EXCEPTION = [
   'This run belongs to a Crew whose builders do not commit. For this run the Commit & Push rules and the end-of-session commit and push step do not apply: do not run git add, git commit or git push. Leave your changes in the working tree. The person reviews them and commits from the Crew screen when a phase is finished.',
 ].join('\n');
 
+/**
+ * What a read-only Crew role (the Lead, a planner, a reviewer) is told about the session tools in the standing rules.
+ * The rules ask agents to open sessions and record plans through Cognitive1; a read-only run cannot get the approval
+ * those calls need, so they only fail and clutter the answer. It lives in the rules for the same reason as the others.
+ */
+export const CREW_READONLY_EXCEPTION = [
+  '## Exception for read-only Crew roles',
+  '',
+  'This is a read-only Crew role. Do not call Cognitive1 or other session, memory or plan-recording tools: they need an approval nobody can give in this run and only fail. Read the project as needed and answer directly in the form asked for.',
+].join('\n');
+
+export function withCrewReadOnlyException(markdown: string): string {
+  return `${markdown.trim()}\n\n${CREW_READONLY_EXCEPTION}\n`;
+}
+
 /** The rule set as a crew run receives it when builders are not to commit. */
 export function withCrewException(markdown: string): string {
   return `${markdown.trim()}\n\n${CREW_EXCEPTION}\n`;

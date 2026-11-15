@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { classifyWork, crewConfigSchema, crewRunSchema } from '@kai/contracts';
-import type { AgentRunRequest, AgentRunResult, ConversationOrigin, CrewRevertPreview, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
+import { classifyWork, crewConfigSchema, crewRunSchema, phaseReportMarkdown } from '@kai/contracts';
+import type { AgentRunRequest, AgentRunResult, ConversationOrigin, CrewRevertPreview, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask, CrewTaskDiff } from '@kai/contracts';
 import {
-  acceptPhase, openTasks, reopenOpenTasks, addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, isBareContinue, mergeChat, phaseFromFollowUp, requestApprovals, resetForRevert, ruleBlock, setTaskCheckpoint, tasksToRebuild, teachBlockers, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
+  acceptPhase, addNotes, clearNotes, phaseToPauseAfter, setPauseAfter, openTasks, reopenOpenTasks, addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, isBareContinue, mergeChat, phaseFromFollowUp, requestApprovals, resetForRevert, ruleBlock, setTaskCheckpoint, tasksToRebuild, teachBlockers, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
   reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun,
 } from './crew-engine';
 import { askPrompt, coveragePrompt, parseCoverage, parsePlanFull, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
@@ -41,6 +41,12 @@ export interface CrewRunnerPorts {
   restore?(projectId: string, checkpoint: { ref: string; untracked: string[]; createdAt: string }): Promise<{ restored: string[]; deleted: string[] }>;
   /** Marks a conversation made before the crew marker existed as the crew's, so the Workspace treats it as one. */
   adoptConversation?(conversationId: string, origin: ConversationOrigin): Promise<void>;
+  /** What a task changed, as one unified diff per file, against the checkpoint taken before it started. */
+  fileDiffs?(projectId: string, checkpoint: { ref: string; untracked: string[]; createdAt: string }, limit: number): Promise<CrewTaskDiff>;
+  /** Writes a file into the project (a path relative to its root), for the phase reports. Returns the path it wrote. */
+  writeReport?(projectId: string, relativePath: string, content: string): Promise<string>;
+  /** Tries the project's commit rules without committing. A problem comes back as something the crew should know up front. */
+  preflight?(projectId: string, goal: string): Promise<{ key: string; note: string } | null>;
   /** What earlier crews on a project learned about getting past a blocker, so a new crew starts knowing it. */
   blockers?: {
     load(projectId: string): Promise<Array<{ key: string; note: string }>>;
@@ -118,16 +124,31 @@ export class DesktopCrewRunner {
     const conversation = await this.ports.createConversation(input.projectId, `Crew: ${input.goal.slice(0, 50)}`, { kind: 'crew', runId });
     const briefSnapshot = await this.ports.readBrief?.(input.projectId).catch(() => null) ?? null;
     const learned = (await this.ports.blockers?.load(input.projectId).catch(() => [])) ?? [];
+    // Try the commit rules before any money is spent: a blocker found now is taught to every role at the start.
+    const early = await this.ports.preflight?.(input.projectId, input.goal).catch(() => null);
+    if (early && !learned.some((item) => item.key === early.key)) {
+      learned.push(early);
+      await this.ports.blockers?.save(input.projectId, early).catch(() => undefined);
+    }
+    const others = (await this.ports.list(input.projectId).catch(() => [] as CrewRun[])).filter((other) => other.status !== 'completed' && other.status !== 'stopped');
     const base = crewRunSchema.parse({
       schemaVersion: 1, id: runId, projectId: input.projectId, goal: input.goal, briefSnapshot, status: 'planning', conversationId: conversation.id,
       ...(input.keepGoing !== undefined ? { keepGoing: input.keepGoing } : {}), ...(input.explainSimply !== undefined ? { explainSimply: input.explainSimply } : {}),
       config: input.config, tasks: [], feed: [], startedAt: at, updatedAt: at,
     });
-    const run = teachBlockers(base, learned);
+    let run = teachBlockers(base, learned);
+    if (early) run = this.info(run, `Checked the project's commit rules before starting: ${early.note}`);
+    if (others.length > 0) run = this.info(run, `${others.length === 1 ? 'Another crew on this project is' : `${others.length} other crews on this project are`} not finished. Two crews changing the same files can undo each other, so finish or stop one first.`);
     const active = this.attach(run, ownerWindowId, conversation.id);
     await this.commit(active, run);
     active.done = this.drive(active);
     return active.run;
+  }
+
+  /** A plain line on the live feed. */
+  private info(run: CrewRun, text: string): CrewRun {
+    const at = this.now().toISOString();
+    return { ...run, feed: [...run.feed, { id: `feed_${randomUUID()}`, at, who: 'crew' as const, kind: 'info' as const, text }].slice(-400), updatedAt: at };
   }
 
   async list(projectId?: string): Promise<CrewRun[]> {
@@ -224,8 +245,42 @@ export class DesktopCrewRunner {
   /** Records the person's acceptance of a finished phase. */
   async acceptPhase(runId: string, phase: string): Promise<CrewRun> {
     const run = await this.require(runId);
-    const next = acceptPhase(run, phase, this.now().toISOString());
+    const at = this.now().toISOString();
+    let next = acceptPhase(run, phase, at);
+    // A record of the phase goes into the project, so there is something to read and keep. Failing to write it never blocks accepting.
+    if (this.ports.writeReport && next !== run) {
+      const slug = phase.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'phase';
+      const written = await this.ports.writeReport(run.projectId, `.kai/crew/reports/${slug}.md`, phaseReportMarkdown(next, phase, at)).catch(() => null);
+      if (written) next = this.info(next, `Wrote the report for ${phase} to ${written}.`);
+    }
     const active = this.active.get(runId);
+    if (active) { await this.commit(active, next); return active.run; }
+    await this.ports.save(next);
+    return next;
+  }
+
+  /** What a task changed, file by file. */
+  async taskDiff(runId: string, taskId: string): Promise<CrewTaskDiff> {
+    const run = await this.require(runId);
+    const task = run.tasks.find((item) => item.id === taskId);
+    if (!task?.checkpoint) throw new Error('This task has no saved starting point, so its changes cannot be shown. Tasks built in a separate copy of the project have none.');
+    if (!this.ports.fileDiffs) throw new Error('Showing changes is not available in this build.');
+    return this.ports.fileDiffs(run.projectId, task.checkpoint, 12);
+  }
+
+  /** Chooses whether the crew stops after a phase even when it is set to keep going. */
+  async setPauseAfter(runId: string, phase: string, on: boolean): Promise<CrewRun> {
+    const run = await this.require(runId);
+    return this.change(run, setPauseAfter(run, phase, on, this.now().toISOString()));
+  }
+
+  async clearNotes(runId: string): Promise<CrewRun> {
+    const run = await this.require(runId);
+    return this.change(run, clearNotes(run, this.now().toISOString()));
+  }
+
+  private async change(run: CrewRun, next: CrewRun): Promise<CrewRun> {
+    const active = this.active.get(run.id);
     if (active) { await this.commit(active, next); return active.run; }
     await this.ports.save(next);
     return next;
@@ -770,6 +825,12 @@ export class DesktopCrewRunner {
       if (active.cancelled) return true;
       const remaining = answer.value?.remaining ?? [];
       const paid: CrewRun = { ...active.run, remaining, spentUsd: active.run.spentUsd + answer.costUsd, updatedAt: this.now().toISOString() };
+      const stopAfter = remaining.length > 0 ? phaseToPauseAfter(paid) : null;
+      if (stopAfter) {
+        const note = `Stopped after ${stopAfter}, as you asked. Resume when you are ready for the next phase.`;
+        await this.commit(active, addChat({ ...this.info(paid, note), status: 'paused' }, { from: 'lead', kind: 'note', text: note }, this.now().toISOString()));
+        return true;
+      }
       if (remaining.length > 0 && active.run.keepGoing && active.autoPhases < MAX_AUTO_PHASES) {
         active.autoPhases += 1;
         await this.commit(active, continueToNextPhase(paid, remaining, this.now().toISOString()));
@@ -868,6 +929,7 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
         const answer = await this.askJson(active, reviewer, reviewRolePrompt(kind, active.run, task()), 'review', parseReview);
         if (active.cancelled) return;
         let run = addSpend(active.run, taskId, answer.costUsd, at());
+        if (answer.value?.notes.length) run = addNotes(run, reviewer.id, taskId, answer.value.notes, at());
         if (answer.value && answer.value.verdict === 'accept') {
           run = { ...run, tasks: run.tasks.map((item) => (item.id === taskId ? { ...item, reviews: [...item.reviews, { round: item.round, verdict: 'accept' as const, feedback: '', reviewer: reviewer.id, at: at() }] } : item)) };
           await this.commit(active, run);
@@ -882,7 +944,8 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
     const lead = roles.find((role) => role.kind === 'lead')!;
     const answer = await this.askJson(active, lead, reviewPrompt(active.run, task(), this.builderReply.get(taskId) ?? '', this.checkNote.get(taskId)), 'review', parseReview);
     if (active.cancelled) return;
-    const run = addSpend(active.run, taskId, answer.costUsd, at());
+    let run = addSpend(active.run, taskId, answer.costUsd, at());
+    if (answer.value?.notes.length) run = addNotes(run, lead.id, taskId, answer.value.notes, at());
     const verdict = answer.value ?? { verdict: 'needsYou' as const, feedback: 'The Lead gave an answer that could not be read, so the work was not accepted without a check.' };
     // The reviewer passes stay in the task's reviews; the Lead's verdict is the one that decides the task.
     await this.commit(active, reviewTask(run, taskId, { ...verdict, reviewer: lead.id }, at()));

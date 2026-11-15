@@ -395,8 +395,8 @@ describe('crew briefs, reports and verdicts', () => {
   });
 
   it('reads a verdict only from a complete JSON object, and wants a reason with any send-back', () => {
-    expect(parseReview('Looks fine. {"verdict":"accept"}')).toEqual({ verdict: 'accept', feedback: '' });
-    expect(parseReview('```json\n{"verdict":"sendBack","feedback":"No rate limit (AC-4)."}\n```')).toEqual({ verdict: 'sendBack', feedback: 'No rate limit (AC-4).' });
+    expect(parseReview('Looks fine. {"verdict":"accept"}')).toEqual({ verdict: 'accept', feedback: '', notes: [] });
+    expect(parseReview('```json\n{"verdict":"sendBack","feedback":"No rate limit (AC-4)."}\n```')).toEqual({ verdict: 'sendBack', feedback: 'No rate limit (AC-4).', notes: [] });
     expect(parseReview('{"verdict":"sendBack"}')).toBeNull();
     expect(parseReview('{"verdict":"ship it"}')).toBeNull();
     expect(parseReview('I think this is good.')).toBeNull();

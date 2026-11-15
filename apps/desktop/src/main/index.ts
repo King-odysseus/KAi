@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, protocol, screen, session, shell } from 'electron';
 import { MOCKUP_CSP, MOCKUP_SCHEME, serveMockup } from './mockup-server';
 import { DIRECT_PROVIDER_ORDER, cliApiKeyCredentialId, KAI_TERMINAL_CREDENTIAL_ID, KAI_WINDOW_CREDENTIAL_ID, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, PLAYWRIGHT_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationOrigin, type ConversationRecord, type PersistedEvent, type PlaywrightViewportStatus, type RemoteWindowSummary } from '@kai/contracts';
@@ -72,7 +72,8 @@ import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { DesktopWorkflowRunner } from './workflow-runner';
 import { DesktopCrewRunner } from './crew-runner';
 import { CrewBlockerStore } from './crew-blockers';
-import { createProjectCheckpoint, diffFromCheckpoint, restoreCheckpoint } from './checkpoints';
+import { createProjectCheckpoint, diffFromCheckpoint, git as runGit, restoreCheckpoint, textDiffFileFromCheckpoint } from './checkpoints';
+import { ruleBlock } from './crew-engine';
 import { DesktopCrewInterview } from './crew-interview';
 import { CrewRunStore } from './crew-store';
 import { CrewSupport } from './crew-support';
@@ -1118,6 +1119,41 @@ async function startApplication(): Promise<void> {
     checkpoint: async (projectId) => createProjectCheckpoint(await projectRootFor(projectId)),
     diffSince: async (projectId, checkpoint) => (await diffFromCheckpoint(await projectRootFor(projectId), checkpoint)).map((change) => ({ path: change.path, added: change.added ?? 0, removed: change.removed ?? 0 })),
     restore: async (projectId, checkpoint) => restoreCheckpoint(await projectRootFor(projectId), checkpoint),
+    // What a task changed, as a diff per file against the checkpoint taken before it started.
+    fileDiffs: async (projectId, checkpoint, limit) => {
+      const root = await projectRootFor(projectId);
+      const changes = await diffFromCheckpoint(root, checkpoint);
+      const files = await Promise.all(changes.slice(0, limit).map(async (change) => ({ path: change.path, diff: await textDiffFileFromCheckpoint(root, checkpoint, change.path, 20_000).catch(() => '') })));
+      return { files, more: Math.max(0, changes.length - limit) };
+    },
+    // A phase report is written inside the project; the path may not leave it.
+    writeReport: async (projectId, relativePath, content) => {
+      const root = await projectRootFor(projectId);
+      const target = path.resolve(root, relativePath);
+      if (!target.startsWith(path.resolve(root) + path.sep)) throw new Error('The report path leaves the project.');
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, content, 'utf8');
+      return relativePath;
+    },
+    // The project's commit rules, tried with a sample message and nothing committed, so a blocker is known before any money is spent.
+    preflight: async (projectId, goal) => {
+      const root = await projectRootFor(projectId);
+      const messageFile = path.join(app.getPath('temp'), `kai-preflight-${Date.now()}.txt`);
+      await writeFile(messageFile, `Start work on ${goal.replace(/\s+/g, ' ').slice(0, 60)}\n\nSample message used to check the commit rules. Nothing is committed.\n`, 'utf8');
+      try {
+        await runGit(root, ['hook', 'run', '--ignore-missing', 'commit-msg', '--', messageFile]);
+        return null;
+      } catch (error) {
+        const text = error instanceof Error ? `${(error as { stderr?: string }).stderr ?? ''} ${error.message}` : String(error);
+        // Git older than 2.36 has no "hook run"; that is not a blocker.
+        if (/is not a git command|unknown option|usage: git hook/i.test(text)) return null;
+        const known = ruleBlock(text);
+        if (known) return { key: known.key, note: known.note };
+        return { key: 'hook:commit-msg', note: `The project's commit-message check rejected a plain sample message: ${text.replace(/\s+/g, ' ').trim().slice(0, 240)}. Word commit messages to satisfy it.` };
+      } finally {
+        await rm(messageFile, { force: true }).catch(() => undefined);
+      }
+    },
     // A crew conversation made before the crew marker existed is marked now, so the Workspace keeps it out of its tabs.
     adoptConversation: async (conversationId, origin) => {
       const existing = await conversations.get(conversationId);

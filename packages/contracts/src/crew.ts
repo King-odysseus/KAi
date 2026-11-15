@@ -110,6 +110,8 @@ export const crewConfigSchema = z
     // Whether builders commit their own work. Off, they leave changes uncommitted for the person to review and commit
     // when a phase ends, which is also how a commit hook that rejects a message can never stall a build.
     commitWork: z.boolean().default(false),
+    // The spend, in dollars, at which a phase asks whether to carry on. Zero never asks. It only asks; it never stops anything.
+    phaseBudgetUsd: z.number().min(0).max(100_000).default(0),
   })
   .strict()
   .superRefine((config, ctx) => {
@@ -192,9 +194,11 @@ export type CrewFeedEntry = z.infer<typeof crewFeedEntrySchema>;
 /** Why a run stopped to ask. The user answers Continue or Finish; nothing is killed. */
 export const crewAskSchema = z
   .object({
-    reason: z.enum(['spend', 'time', 'sendBacks', 'sameFailure', 'securityBlock', 'designApproval', 'noProgress', 'approval']),
+    reason: z.enum(['spend', 'time', 'sendBacks', 'sameFailure', 'securityBlock', 'designApproval', 'noProgress', 'approval', 'phaseSpend']),
     message: z.string().max(500),
     taskId: z.string().max(60).optional(),
+    // The phase a phase-spend question is about, so answering it can be remembered for that phase.
+    phase: z.string().max(200).optional(),
   })
   .strict();
 export type CrewAsk = z.infer<typeof crewAskSchema>;
@@ -231,6 +235,18 @@ export const crewApprovalSchema = z
   .strict();
 export type CrewApproval = z.infer<typeof crewApprovalSchema>;
 
+/** Something a reviewer noticed that is not a reason to stop the task, kept for the person to read. */
+export const crewNoteSchema = z
+  .object({
+    id: z.string().min(1).max(60),
+    at: z.string().min(1),
+    role: z.string().max(60),
+    taskId: z.string().max(60),
+    text: z.string().min(1).max(600),
+  })
+  .strict();
+export type CrewNote = z.infer<typeof crewNoteSchema>;
+
 /** One message in the crew's own conversation with the person: what they said, and what the Lead said back. */
 export const crewChatEntrySchema = z
   .object({
@@ -265,6 +281,12 @@ export const crewRunSchema = z
     keepGoing: z.boolean().default(false),
     // Phases the person has accepted, by key, so the plan's wait for acceptance is a recorded yes and not a typed sentence.
     acceptedPhases: z.array(z.string().max(200)).max(40).default([]),
+    // Phases the person wants the crew to stop after, even with keep going on.
+    pauseAfter: z.array(z.string().max(200)).max(40).default([]),
+    // Phases whose spend question the person has already answered, so it is asked once.
+    phaseSpendOk: z.array(z.string().max(200)).max(40).default([]),
+    // What reviewers noticed that was not worth stopping a task for.
+    notes: z.array(crewNoteSchema).max(60).default([]),
     // Blockers the crew has already worked out a way past (a commit hook rejecting a word, say), so the same one is
     // not met again as if it were new and its workaround is not repeated.
     knownBlockers: z.array(z.string().max(120)).max(20).default([]),
@@ -333,6 +355,13 @@ export const crewStartInputSchema = z
 export type CrewStartInput = z.infer<typeof crewStartInputSchema>;
 
 export const crewAcceptPhaseInputSchema = z.object({ runId: z.string().min(1), phase: z.string().min(1).max(200) }).strict();
+export const crewPauseAfterInputSchema = z.object({ runId: z.string().min(1), phase: z.string().min(1).max(200), on: z.boolean() }).strict();
+/** What a task changed, file by file, as a unified diff against the project as it was before the task started. */
+export interface CrewTaskDiff {
+  files: Array<{ path: string; diff: string }>;
+  /** Files the task changed that are not shown, because the list is capped. */
+  more: number;
+}
 export const crewRevertInputSchema = z.object({ runId: z.string().min(1), taskId: z.string().min(1) }).strict();
 /** What undoing a task would change, listed before the person is asked to agree. */
 export interface CrewRevertPreview {
@@ -533,6 +562,93 @@ export function buildRoadmap(run: Pick<CrewRun, 'tasks' | 'remaining' | 'accepte
   const paid = rows.filter((row) => (row.status === 'done' || row.status === 'accepted') && row.costUsd > 0);
   const average = paid.length > 0 ? Math.round((paid.reduce((sum, row) => sum + row.costUsd, 0) / paid.length) * 100) / 100 : null;
   return rows.map((row) => (row.status === 'notStarted' ? { ...row, estimateUsd: average } : row));
+}
+
+export interface CrewStatusLine {
+  tone: 'working' | 'waiting' | 'paused' | 'done' | 'problem';
+  text: string;
+}
+
+/**
+ * One line, in plain words, of what the crew is doing and whether anything is in its way, so nobody has to read the
+ * feed to find out. Anything waiting on the person comes first.
+ */
+export function crewStatusLine(run: CrewRun): CrewStatusLine {
+  const board = run.tasks.filter((task) => !task.proposed);
+  const count = (statuses: Array<CrewTask['status']>): number => board.filter((task) => statuses.includes(task.status)).length;
+  const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+  const spent = `$${run.spentUsd.toFixed(2)} so far`;
+  const open = board.filter((task) => task.status !== 'accepted' && task.status !== 'skipped').length;
+  if (run.ask) return { tone: 'waiting', text: `Waiting on you: ${run.ask.message.slice(0, 180)}` };
+  switch (run.status) {
+    case 'planning':
+      return { tone: 'working', text: 'The Lead is reading the project and planning the tasks.' };
+    case 'awaitingApproval':
+      return { tone: 'waiting', text: 'Waiting on you: the plan is ready for your OK.' };
+    case 'needsYou':
+      return { tone: 'waiting', text: `Waiting on you: ${plural(count(['needsYou']), 'task needs', 'tasks need')} a decision.` };
+    case 'paused':
+      return { tone: 'paused', text: `Paused. ${plural(open, 'task', 'tasks')} unfinished. ${spent}.` };
+    case 'stopped':
+      return { tone: 'paused', text: `Stopped with ${plural(open, 'task', 'tasks')} unfinished. ${spent}.` };
+    case 'completed':
+      return { tone: 'done', text: `Finished: ${count(['accepted'])} of ${board.length} tasks accepted${run.remaining.length > 0 ? `. Not finished: ${run.remaining[0]}` : ''}. ${spent}.` };
+    default: {
+      const building = count(['building']);
+      const checking = count(['review']);
+      const doing = building > 0 ? `Building ${plural(building, 'task', 'tasks')}` : checking > 0 ? `Checking ${plural(checking, 'task', 'tasks')}` : 'Choosing the next task';
+      const stuck = count(['needsYou']);
+      return { tone: stuck > 0 ? 'problem' : 'working', text: `${doing}, ${stuck > 0 ? `${stuck} blocked` : 'nothing blocked'}, ${count(['backlog', 'sentBack'])} waiting. ${spent}.` };
+    }
+  }
+}
+
+/**
+ * The report for one phase: what was built, how it was checked, the files, what reviewers noticed, and the cost. It is
+ * written when the person accepts the phase, so there is a record to read and keep.
+ */
+export function phaseReportMarkdown(run: CrewRun, phase: string, at: string): string {
+  const key = phaseKey(phase);
+  const row = buildRoadmap(run).find((item) => item.key === key);
+  const tasks = run.tasks.filter((task) => !task.proposed && task.phase !== null && phaseKey(task.phase) === key);
+  const files = [...new Set(tasks.flatMap((task) => task.files))];
+  const roleLabel = (id: string): string => run.config.roles.find((role) => role.id === id)?.label ?? id;
+  const notes = run.notes.filter((note) => tasks.some((task) => task.id === note.taskId));
+  const line = (task: CrewTask): string => {
+    const sentBack = task.reviews.filter((review) => review.verdict === 'sendBack').length;
+    return `- ${task.title}: ${task.status}${task.round > 1 ? `, ${task.round} rounds` : ''}${sentBack > 0 ? `, sent back ${sentBack} ${sentBack === 1 ? 'time' : 'times'}` : ''}${task.costUsd > 0 ? `, $${task.costUsd.toFixed(2)}` : ''}`;
+  };
+  return [
+    `# ${row?.name ?? phase}`,
+    `_Report written by the KAI Crew on ${at.slice(0, 10)}._`,
+    '## What was built',
+    tasks.length > 0 ? tasks.map(line).join('\n') : '- Nothing recorded.',
+    '## How it was checked',
+    tasks.flatMap((task) => task.reviews.filter((review) => review.verdict === 'accept').map((review) => `- ${task.title}: ${roleLabel(review.reviewer)} accepted it in round ${review.round}.`)).join('\n') || '- No reviews recorded.',
+    `## Files changed (${files.length})`,
+    files.length > 0 ? files.slice(0, 80).map((file) => `- \`${file}\``).join('\n') + (files.length > 80 ? `\n- and ${files.length - 80} more` : '') : '- None recorded.',
+    '## Notes from the reviewers',
+    notes.length > 0 ? notes.map((note) => `- ${roleLabel(note.role)}: ${note.text}`).join('\n') : '- None.',
+    '## Cost',
+    `$${(row?.costUsd ?? 0).toFixed(2)} across ${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}.`,
+  ].join('\n\n') + '\n';
+}
+
+export interface CrewDecision {
+  at: string;
+  text: string;
+  kind: 'you' | 'learned';
+}
+
+/** What was decided on this crew, in order: the person's own approvals, steers, acceptances and requests, and what the crew learned. */
+export function buildDecisions(run: Pick<CrewRun, 'chat' | 'feed'>): CrewDecision[] {
+  const fromYou: CrewDecision[] = run.chat
+    .filter((entry) => entry.from === 'you' && entry.kind !== 'ask')
+    .map((entry) => ({ at: entry.at, kind: 'you' as const, text: entry.kind === 'steer' ? `Told the crew: ${entry.text}` : entry.kind === 'work' ? `Asked for more: ${entry.text}` : entry.text }));
+  const learned: CrewDecision[] = run.feed
+    .filter((entry) => entry.who === 'crew' && entry.text.includes('has been told'))
+    .map((entry) => ({ at: entry.at, kind: 'learned' as const, text: entry.text }));
+  return [...fromYou, ...learned].sort((a, b) => a.at.localeCompare(b.at));
 }
 
 /** A saved starting point for new crews: one for every project, and optionally one for a single project. */

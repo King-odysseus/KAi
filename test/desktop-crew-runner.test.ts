@@ -909,3 +909,49 @@ describe('crew plan parsing', () => {
     expect(parsePlan('{"tasks":[{"title":"x"}]}')).toBeNull();
   });
 });
+
+describe('crew runner, second round', () => {
+  const phasedPlan = JSON.stringify({ tasks: [
+    { id: 'spike', title: 'Spike', role: 'builder', description: 'Prove it', acceptance: ['Works'], dependsOn: [], phase: 'Phase 0: Spike' },
+  ] });
+
+  it('keeps a reviewer note without sending the task back', async () => {
+    const f = fixture({ security: ['{"verdict":"accept","notes":["Electron is past end of support."]}'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('completed');
+    expect(run.notes[0]?.text).toContain('Electron');
+    expect((await f.runner.clearNotes(started.id)).notes).toEqual([]);
+  });
+
+  it('stops after a phase the person chose even when keeping going', async () => {
+    const f = fixture({ plan: [phasedPlan], coverage: ['{"complete":false,"remaining":["Phase 1: Shell"]}'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config, keepGoing: true }, 1);
+    await f.runner.setPauseAfter(started.id, 'Phase 0: Spike', true);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('paused');
+    expect(run.feed.some((entry) => entry.text.includes('Stopped after Phase 0: Spike'))).toBe(true);
+  });
+
+  it('writes a report when a phase is accepted, and checks the commit rules before starting', async () => {
+    const f = fixture({ plan: [phasedPlan], coverage: ['{"complete":false,"remaining":["Phase 1: Shell"]}'] });
+    const written: Array<{ path: string; content: string }> = [];
+    f.ports.writeReport = async (_project, relativePath, content) => { written.push({ path: relativePath, content }); return relativePath; };
+    f.ports.preflight = async () => ({ key: 'hook:commit-msg', note: 'The commit hook rejects the word copilot.' });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    expect(started.goal).toContain('rejects the word copilot');
+    await runToIdle(f.runner, started.id);
+    await f.runner.acceptPhase(started.id, 'Phase 0: Spike');
+    expect(written[0]?.path).toBe('.kai/crew/reports/phase-0-spike.md');
+    expect(written[0]?.content).toContain('# Phase 0: Spike');
+  });
+
+  it('warns when another crew on the project is not finished', async () => {
+    const f = fixture();
+    const first = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const second = await f.runner.start({ projectId: 'p1', goal: 'Another thing', config: f.config }, 1);
+    expect(second.feed.some((entry) => entry.text.includes('Another crew on this project'))).toBe(true);
+    await runToIdle(f.runner, first.id);
+    await runToIdle(f.runner, second.id);
+  });
+});

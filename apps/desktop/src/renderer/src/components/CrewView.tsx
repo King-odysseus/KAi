@@ -9,6 +9,7 @@ import {
 } from '@kai/contracts';
 import { apiChoices, targetFromValue, targetValue } from './architect-settings';
 import type { PersistedEvent, RoleTarget } from '@kai/contracts';
+import { crewStatusLine } from '@kai/contracts';
 import type { AgentCapability, AgentId, AppSettings, AutonomyMode, CrewConfig, CrewInterview, CrewDesign, CrewRole, CrewRun, CrewTask, ProjectRecord } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
 import { crewTitle } from '../crew-title';
@@ -25,6 +26,7 @@ import { CrewApprovals } from './CrewApprovals';
 import { CrewChat } from './CrewChat';
 import { CrewDone } from './CrewDone';
 import { CrewRoadmap } from './CrewRoadmap';
+import { CrewNotes } from './CrewNotes';
 import { CrewTaskDetail } from './CrewTaskDetail';
 import { confirmDialog } from './AppDialog';
 import { CrewInterviewPanel } from './CrewInterviewPanel';
@@ -462,7 +464,8 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
                 {(activeRun.status === 'completed' || activeRun.status === 'stopped') && (
                   <CrewDone run={activeRun} project={activeProject} onFollowUp={followUp} onOpenGit={onOpenGit} onPreview={onOpenPreview} onReport={() => setTab('report')} onKeepGoing={keepGoing} onChat={() => setTab('chat')} {...(onRunCommand ? { onRunCommand } : {})} />
                 )}
-                <CrewRoadmap run={activeRun} busy={working} onStart={(name) => void guardedAction(() => startPhase(name))} onExplain={(name) => void guardedAction(() => explainPhase(name))} onAccept={(name, then) => void guardedAction(() => acceptPhase(name, then))} />
+                <CrewRoadmap run={activeRun} busy={working} onStart={(name) => void guardedAction(() => startPhase(name))} onExplain={(name) => void guardedAction(() => explainPhase(name))} onAccept={(name, then) => void guardedAction(() => acceptPhase(name, then))} onPauseAfter={(name, on) => void run(async () => unwrap(await window.kaiDesktop.setCrewPauseAfter(activeRun.id, name, on)))} />
+                <CrewNotes run={activeRun} busy={working} onClear={() => void run(async () => unwrap(await window.kaiDesktop.clearCrewNotes(activeRun.id)))} />
                 {selectedTask && <CrewTaskDetail run={activeRun} task={selectedTask} busy={working} onClose={() => setSelectedTaskId(null)} onRevert={(id) => void guardedAction(() => revertTask(id))} />}
                 <Board run={activeRun} onSelect={setSelectedTaskId} />
               </>
@@ -532,6 +535,7 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
           {tab === 'cost' && (
             <CostTab config={config} readOnly={readOnly} run={activeRun}
               onLimits={(patch) => updateDraft((current) => ({ ...current, limits: { ...current.limits, ...patch } }))}
+              onPhaseBudget={(value) => updateDraft((current) => ({ ...current, phaseBudgetUsd: value }))}
               onSavings={(patch) => updateDraft((current) => ({ ...current, savings: { ...current.savings, ...patch } }))} />
           )}
           {tab === 'chat' && (activeRun
@@ -554,6 +558,7 @@ function RunBar({ run, working, onPause, onResume, onStop, onApprove }: { run: C
   const status = RUN_STATUS[run.status];
   const live = run.status === 'running' || run.status === 'planning';
   const { maxUsd } = run.config.limits;
+  const line = crewStatusLine(run);
   return (
     <section className="crew-runbar" aria-label="Run overview">
       <div className="crew-runbar-title">
@@ -565,11 +570,12 @@ function RunBar({ run, working, onPause, onResume, onStop, onApprove }: { run: C
         <div><dt>Spent</dt><dd>{money(run.spentUsd)}{maxUsd > 0 ? ` of ${money(maxUsd)}` : ''}</dd></div>
         <div><dt>Roles</dt><dd>{run.config.roles.length}</dd></div>
       </dl>
+      <p className={`crew-status-line tone-${line.tone}`} role="status">{line.text}</p>
       <small className="basis-full text-[var(--text-dim)]">{crewLimitPolicy(run.config.limits)}</small>
       <div className="crew-runbar-actions">
         {run.status === 'awaitingApproval' && <UiButton type="button" className="primary-button" disabled={working} onClick={onApprove}><Play size={14} /><span>Approve plan</span></UiButton>}
         {live && <UiButton type="button" className="secondary-button" disabled={working} onClick={onPause}><Pause size={14} /><span>Pause</span></UiButton>}
-        {run.status === 'paused' && <UiButton type="button" className="primary-button" disabled={working} onClick={onResume}><Play size={14} /><span>Resume</span></UiButton>}
+        {run.status === 'paused' && <UiButton type="button" className="primary-button" disabled={working} onClick={onResume}><Play size={14} /><span>Resume where it stopped</span></UiButton>}
         {run.status !== 'completed' && run.status !== 'stopped' && <UiButton type="button" className="danger-button" disabled={working} onClick={onStop}><Square size={14} /><span>Stop</span></UiButton>}
       </div>
     </section>
@@ -949,11 +955,12 @@ function CrewTab({ directApi, config, readOnly, capabilityOf, agentCapabilities,
   );
 }
 
-function CostTab({ config, readOnly, run, onLimits, onSavings }: {
+function CostTab({ config, readOnly, run, onLimits, onPhaseBudget, onSavings }: {
   config: CrewConfig;
   readOnly: boolean;
   run: CrewRun | null;
   onLimits: (patch: Partial<CrewConfig['limits']>) => void;
+  onPhaseBudget: (value: number) => void;
   onSavings: (patch: Partial<CrewConfig['savings']>) => void;
 }): ReactNode {
   const spendByRole = useMemo(() => {
@@ -972,6 +979,7 @@ function CostTab({ config, readOnly, run, onLimits, onSavings }: {
       <p className="tasks-tab-help">Limits are checked between tasks. Ask mode offers Continue or Finish; Finish mode stops with accepted work. No task is cut off halfway. Zero means no limit.</p>
       <div className="crew-limits">
         <label className="workflow-field"><span>Spend limit (USD)</span><UiTextInput type="number" min={0} step={1} disabled={readOnly} value={config.limits.maxUsd} onChange={(event) => onLimits({ maxUsd: Math.max(0, Number(event.target.value) || 0) })} /></label>
+        <label className="workflow-field"><span>Ask me when a phase passes (USD)</span><UiTextInput type="number" min={0} step={1} disabled={readOnly} value={config.phaseBudgetUsd} onChange={(event) => onPhaseBudget(Math.max(0, Number(event.target.value) || 0))} title="A phase that spends this much asks whether to carry on. It never stops by itself. Zero never asks." /></label>
         <label className="workflow-field"><span>Time limit (minutes)</span><UiTextInput type="number" min={0} disabled={readOnly} value={config.limits.maxMinutes} onChange={(event) => onLimits({ maxMinutes: clampInt(event.target.value, 0, 1440) })} /></label>
         <label className="workflow-field"><span>Send-backs per task</span><UiTextInput type="number" min={1} max={10} disabled={readOnly} value={config.limits.maxSendBacks} onChange={(event) => onLimits({ maxSendBacks: clampInt(event.target.value, 1, 10) })} /></label>
         <label className="workflow-field"><span>When a limit is reached</span>

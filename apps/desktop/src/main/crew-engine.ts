@@ -145,6 +145,55 @@ export function isBareContinue(text: string): boolean {
   return /^(?:ok(?:ay)?[, ]+)?(?:please )?(?:continue|go on|go ahead|carry on|keep going|proceed|resume|move on|do it|yes|yes please|go|next|next phase|next part|next step|start (?:the )?next(?: phase| part)?)(?: please)?$/.test(flat);
 }
 
+/**
+ * A question, not a stop: a phase that has spent the amount the person set for one asks whether to carry on, once.
+ * Nothing is cut off. With no amount set it never asks.
+ */
+export function phaseBudgetAsk(run: CrewRun): CrewAsk | null {
+  const limit = run.config.phaseBudgetUsd;
+  if (!(limit > 0)) return null;
+  for (const row of buildRoadmap(run)) {
+    if (row.status === 'accepted' || run.phaseSpendOk.includes(row.key)) continue;
+    if (row.costUsd >= limit) {
+      return { reason: 'phaseSpend', phase: row.key, message: `${row.name} has spent $${row.costUsd.toFixed(2)}, past the $${limit.toFixed(2)} you set for a phase. Carry on?` };
+    }
+  }
+  return null;
+}
+
+function askAboutPhaseSpend(run: CrewRun, now: Date): CrewRun {
+  const ask = phaseBudgetAsk(run);
+  if (!ask) return run;
+  const at = now.toISOString();
+  return feed({ ...run, status: 'needsYou', ask }, { who: 'crew', kind: 'limit', text: ask.message }, at);
+}
+
+/** The phase the crew just finished when the person asked it to stop after that phase, or null when it should carry on. */
+export function phaseToPauseAfter(run: Pick<CrewRun, 'tasks' | 'remaining' | 'acceptedPhases' | 'pauseAfter'>): string | null {
+  const finished = buildRoadmap(run).filter((row) => row.status === 'done' || row.status === 'accepted');
+  const last = finished[finished.length - 1];
+  return last && run.pauseAfter.includes(last.key) ? last.name : null;
+}
+
+/** Turns "stop after this phase" on or off for one phase. */
+export function setPauseAfter(run: CrewRun, phase: string, on: boolean, at: string): CrewRun {
+  const key = phaseKey(phase);
+  const without = run.pauseAfter.filter((item) => item !== key);
+  return { ...run, pauseAfter: on ? [...without, key].slice(-40) : without, updatedAt: at };
+}
+
+/** Keeps what reviewers noticed that was not worth stopping a task for, once each, newest 60. */
+export function addNotes(run: CrewRun, role: string, taskId: string, notes: readonly string[], at: string): CrewRun {
+  const fresh = notes.filter((text) => !run.notes.some((note) => note.taskId === taskId && note.text === text));
+  if (fresh.length === 0) return run;
+  const added = fresh.map((text, index) => ({ id: `note-${run.notes.length + index + 1}-${taskId}`, at, role, taskId, text: text.slice(0, 600) }));
+  return { ...run, notes: [...run.notes, ...added].slice(-60), updatedAt: at };
+}
+
+export function clearNotes(run: CrewRun, at: string): CrewRun {
+  return run.notes.length === 0 ? run : { ...run, notes: [], updatedAt: at };
+}
+
 /** Tasks on the board that are not accepted or skipped: work that is planned and still to be done. */
 export function openTasks(run: Pick<CrewRun, 'tasks'>): CrewTask[] {
   return run.tasks.filter((task) => !task.proposed && task.status !== 'accepted' && task.status !== 'skipped');
@@ -422,7 +471,9 @@ export function answerAsk(run: CrewRun, answer: 'continue' | 'skip' | 'finish', 
     const limits = { ...next.config.limits };
     if (ask.reason === 'spend' && limits.maxUsd > 0) limits.maxUsd = Math.max(limits.maxUsd * 2, next.spentUsd + limits.maxUsd);
     if (ask.reason === 'time' && limits.maxMinutes > 0) limits.maxMinutes *= 2;
-    next = feed({ ...next, config: { ...next.config, limits } }, { who: 'you', kind: 'info', text: 'Continued past the limit.' }, at);
+    // A phase's spend question is asked once: the answer is remembered for that phase.
+    const phaseSpendOk = ask.reason === 'phaseSpend' && ask.phase ? [...next.phaseSpendOk, ask.phase].slice(-40) : next.phaseSpendOk;
+    next = feed({ ...next, phaseSpendOk, config: { ...next.config, limits } }, { who: 'you', kind: 'info', text: ask.reason === 'phaseSpend' ? 'Carried on past the phase budget.' : 'Continued past the limit.' }, at);
   }
   return { ...next, status: 'running' };
 }
@@ -485,7 +536,7 @@ export function limitReached(run: CrewRun, now: Date): CrewAsk | null {
 export function enforceLimits(run: CrewRun, now: Date): CrewRun {
   if (run.status !== 'running' || run.ask) return run;
   const ask = limitReached(run, now);
-  if (!ask) return run;
+  if (!ask) return askAboutPhaseSpend(run, now);
   const at = now.toISOString();
   if (run.config.limits.onLimit === 'finish') {
     return feed({ ...run, status: 'stopped', completedAt: at }, { who: 'crew', kind: 'limit', text: `${ask.message} Finished with the accepted work.` }, at);
@@ -707,17 +758,21 @@ ${output.slice(-3_000)}`,
  * Reads the Lead's verdict out of its reply. The Lead is asked for one JSON object; anything else (prose, a fence,
  * a missing field) reads as "no verdict" and the caller asks again, because guessing would accept unchecked work.
  */
-export function parseReview(text: string): { verdict: CrewReview['verdict']; feedback: string } | null {
+export function parseReview(text: string): { verdict: CrewReview['verdict']; feedback: string; notes: string[] } | null {
   const candidates = [...text.matchAll(/\{[^{}]*"verdict"[^{}]*\}/g)].map((match) => match[0]);
   for (const candidate of candidates.reverse()) {
     try {
-      const value = JSON.parse(candidate) as { verdict?: unknown; feedback?: unknown };
+      const value = JSON.parse(candidate) as { verdict?: unknown; feedback?: unknown; notes?: unknown };
       const verdict = value.verdict === 'accept' || value.verdict === 'sendBack' || value.verdict === 'needsYou' ? value.verdict : null;
       if (!verdict) continue;
       const feedback = typeof value.feedback === 'string' ? value.feedback : '';
       // Sending work back with no reason gives the builder nothing to fix, so that is not a usable verdict either.
       if (verdict !== 'accept' && feedback.trim().length === 0) continue;
-      return { verdict, feedback };
+      // Things a reviewer noticed that are not a reason to stop the task; kept for the person, not acted on.
+      const notes = Array.isArray(value.notes)
+        ? value.notes.filter((note): note is string => typeof note === 'string' && note.trim().length > 0).map((note) => note.trim().slice(0, 300)).slice(0, 6)
+        : [];
+      return { verdict, feedback, notes };
     } catch {
       continue;
     }

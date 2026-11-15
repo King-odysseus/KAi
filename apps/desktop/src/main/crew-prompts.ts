@@ -76,6 +76,10 @@ export function planPrompt(goal: string, config: CrewConfig, conventions: string
 }
 
 export function reviewPrompt(run: CrewRun, task: CrewTask, builderReply: string, checkNote?: string): string {
+  return `${reviewPromptBase(run, task, builderReply, checkNote)}\n\n${REVIEW_SCOPE_RULE}`;
+}
+
+function reviewPromptBase(run: CrewRun, task: CrewTask, builderReply: string, checkNote?: string): string {
   return [
     'You are the Lead. Check this finished task against its acceptance criteria by reading the changed code and, where it helps, running a command. Do not change any files.',
     '',
@@ -181,7 +185,17 @@ export function reviewerPrompt(run: CrewRun, task: CrewTask): string {
 }
 
 /** The prompt for a reviewer kind. The caller appends the role's own instructions. */
+/**
+ * What a reviewer may stop a task for. A crew that sent tasks back for concerns outside them (an upgrade, a risk for a
+ * later phase) spent money going round in circles, so only a broken criterion or something unsafe to ship blocks.
+ */
+export const REVIEW_SCOPE_RULE = 'Scope: send the task back, or block it, only for something that breaks one of its acceptance criteria or is unsafe to ship. Anything else you notice (an upgrade, style, a risk outside this task, something for a later phase) goes in an optional "notes" list of short plain sentences, and does not stop the task being accepted. For example {"verdict":"accept","notes":["The Electron version is past end of support; worth upgrading in a later phase."]}.';
+
 export function reviewRolePrompt(kind: 'security' | 'tester' | 'auditor' | 'license' | 'compliance' | 'reviewer', run: CrewRun, task: CrewTask): string {
+  return `${reviewRoleBase(kind, run, task)}\n\n${REVIEW_SCOPE_RULE}`;
+}
+
+function reviewRoleBase(kind: 'security' | 'tester' | 'auditor' | 'license' | 'compliance' | 'reviewer', run: CrewRun, task: CrewTask): string {
   switch (kind) {
     case 'security':
       return securityPrompt(run, task);

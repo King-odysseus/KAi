@@ -376,7 +376,7 @@ import {
 } from './terminal';
 import { planSchema, type Plan } from './plan';
 import { conventionsGetInputSchema, conventionsMuteInputSchema, conventionsReferenceInputSchema, conventionsRuleAddInputSchema, conventionsRuleRemoveInputSchema, type ConventionsState } from './conventions';
-import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewFollowUpInputSchema, crewAcceptPhaseInputSchema, crewRevertInputSchema, type CrewRevertPreview, crewDecideInputSchema, crewExplainSimplyInputSchema, crewInterviewInputSchema, type CrewInterview, crewKeepGoingInputSchema, crewMessageInputSchema, crewStartInputSchema, crewUpdateConfigInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
+import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewFollowUpInputSchema, crewAcceptPhaseInputSchema, crewPauseAfterInputSchema, crewRevertInputSchema, type CrewRevertPreview, type CrewTaskDiff, crewDecideInputSchema, crewExplainSimplyInputSchema, crewInterviewInputSchema, type CrewInterview, crewKeepGoingInputSchema, crewMessageInputSchema, crewStartInputSchema, crewUpdateConfigInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
 import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitBlameInputSchema, type GitBlameResult, type GitChangesResult, todoScanInputSchema, type TodoScanResult, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, gitTeamBranchInputSchema, gitTeamCloneInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
 import { importAddCardsInputSchema, importScanInputSchema, type ImportReport } from './import';
 import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
@@ -570,6 +570,9 @@ export const ipcChannels = [
   'crew:update-config',
   'crew:decide',
   'crew:accept-phase',
+  'crew:task-diff',
+  'crew:pause-after',
+  'crew:clear-notes',
   'crew:revert-preview',
   'crew:revert',
   'crew:stop-ask',
@@ -1007,6 +1010,9 @@ export const ipcInputSchemas = {
   'crew:update-config': crewUpdateConfigInputSchema,
   'crew:decide': crewDecideInputSchema,
   'crew:accept-phase': crewAcceptPhaseInputSchema,
+  'crew:task-diff': crewRevertInputSchema,
+  'crew:pause-after': crewPauseAfterInputSchema,
+  'crew:clear-notes': crewControlInputSchema,
   'crew:revert-preview': crewRevertInputSchema,
   'crew:revert': crewRevertInputSchema,
   'crew:stop-ask': crewControlInputSchema,
@@ -1844,6 +1850,12 @@ export interface KaiDesktopBridge {
   decideCrewApproval(runId: string, approvalId: string, approve: boolean): Promise<IpcResponse<CrewRun>>;
   /** Records the person's acceptance of a finished phase, which is what the plan's wait for acceptance means. */
   acceptCrewPhase(runId: string, phase: string): Promise<IpcResponse<CrewRun>>;
+  /** What a task changed, file by file, as a diff against the project before it started. */
+  crewTaskDiff(runId: string, taskId: string): Promise<IpcResponse<CrewTaskDiff>>;
+  /** Chooses whether the crew stops after a phase even when it is set to keep going. */
+  setCrewPauseAfter(runId: string, phase: string, on: boolean): Promise<IpcResponse<CrewRun>>;
+  /** Clears the reviewers' notes once they have been read. */
+  clearCrewNotes(runId: string): Promise<IpcResponse<CrewRun>>;
   /** What undoing a task would change, to show before asking. */
   previewCrewRevert(runId: string, taskId: string): Promise<IpcResponse<CrewRevertPreview>>;
   /** Puts the project back as it was before a task started, and has it and every later task built again. */

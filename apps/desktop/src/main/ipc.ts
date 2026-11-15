@@ -95,7 +95,7 @@ import { attachmentText } from './attachment-text';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort, DirectApiApprovalRequest } from './direct-provider-runtime';
 import { awaitsTheUser } from './direct-provider-runtime';
-import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, injectRulesIntoProjects, plainDashes, RULES_MARKER, shouldCarryRules, withAutopilotException, withCrewException } from './execution-rules';
+import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, injectRulesIntoProjects, plainDashes, RULES_MARKER, shouldCarryRules, withAutopilotException, withCrewException, withCrewReadOnlyException } from './execution-rules';
 import type { DesktopExecutionRules } from './execution-rules';
 import type { DesktopMcpRuntime } from './mcp-runtime';
 import type { Cognitive1Client } from './cognitive1-client';
@@ -630,6 +630,9 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'crew:keep-going', async ({ runId, keepGoing }, request) => context.crew.setKeepGoing(runId, keepGoing, request.ownerWindowId));
   handle(context, 'crew:update-config', async ({ runId, config }) => context.crew.updateConfig(runId, config));
   handle(context, 'crew:stop-ask', async ({ runId }) => context.crew.stopAsk(runId));
+  handle(context, 'crew:task-diff', async ({ runId, taskId }) => context.crew.taskDiff(runId, taskId));
+  handle(context, 'crew:pause-after', async ({ runId, phase, on }) => context.crew.setPauseAfter(runId, phase, on));
+  handle(context, 'crew:clear-notes', async ({ runId }) => context.crew.clearNotes(runId));
   handle(context, 'crew:accept-phase', async ({ runId, phase }) => context.crew.acceptPhase(runId, phase));
   handle(context, 'crew:revert-preview', async ({ runId, taskId }) => context.crew.previewRevert(runId, taskId));
   handle(context, 'crew:revert', async ({ runId, taskId }) => context.crew.revertTask(runId, taskId));
@@ -1907,6 +1910,8 @@ export async function runConversationAgent(
   if (conversation.origin?.kind === 'crew') {
     const crewRun = await context.crew.get(conversation.origin.runId).catch(() => null);
     if (crewRun && !crewRun.config.commitWork) authoritativeRules = withCrewException(authoritativeRules);
+    // The Lead, planners and reviewers only read; the session tools the rules ask for need an approval they cannot get.
+    if (crewRun && request.autonomy === 'plan') authoritativeRules = withCrewReadOnlyException(authoritativeRules);
   }
   const rulesBriefing = buildExecutionRulesBriefing(authoritativeRules);
 
