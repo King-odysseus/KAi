@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { classifyWork, crewConfigSchema, crewRunSchema } from '@kai/contracts';
 import type { AgentRunRequest, AgentRunResult, ConversationOrigin, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
 import {
-  addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, mergeChat, requestApprovals, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
+  addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, isBareContinue, mergeChat, requestApprovals, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
   reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun,
 } from './crew-engine';
 import { askPrompt, coveragePrompt, parseCoverage, parsePlanFull, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
@@ -174,10 +174,10 @@ export class DesktopCrewRunner {
     if (kind === 'ask') return this.askLead(run, body, ownerWindowId);
     if (kind === 'work') {
       if (!finished) throw new Error('More work can be added once the crew has finished or been stopped. Use Steer to change what it is doing now.');
-      return this.resumeWith(run, ownerWindowId, startFollowUp(addChat(run, { from: 'you', kind: 'work', text: body }, at), body, at));
+      return this.followUpFrom(run, 'work', body, ownerWindowId, at);
     }
     // A finished crew has no next task to steer, so the note becomes what it plans next.
-    if (finished) return this.resumeWith(run, ownerWindowId, startFollowUp(addChat(run, { from: 'you', kind: 'steer', text: body }, at), body, at));
+    if (finished) return this.followUpFrom(run, 'steer', body, ownerWindowId, at);
     const steered = addChat(addChat(guideCrewRun(run, body, at), { from: 'you', kind: 'steer', text: body }, at), { from: 'lead', kind: 'note', text: 'Noted. The Lead will follow this from the next task on.' }, at);
     const active = this.active.get(runId);
     if (active) { await this.commit(active, steered); return active.run; }
@@ -263,6 +263,26 @@ export class DesktopCrewRunner {
     if (keepGoing && finished && run.remaining.length > 0) return this.resumeWith(run, ownerWindowId, continueToNextPhase(next, run.remaining, at));
     await this.ports.save(next);
     return next;
+  }
+
+  /**
+   * Gives a finished crew the person's request. A bare "continue" is not handed to the Lead as one word: the crew first
+   * finds what is left in the plan, and the request becomes "continue with" the next part, so the Lead is told what
+   * to plan instead of having to guess it. The person's own words stay on the thread as they typed them.
+   */
+  private async followUpFrom(run: CrewRun, kind: 'work' | 'steer', body: string, ownerWindowId: number, at: string): Promise<CrewRun> {
+    const withMessage = addChat(run, { from: 'you', kind, text: body }, at);
+    await this.ports.save(withMessage);
+    let request = body;
+    if (isBareContinue(body)) {
+      // The check saves its own note to the thread; with nothing left, that note is the answer and nothing is planned.
+      const checked = withMessage.remaining.length > 0 ? withMessage : await this.findPhases(run.id, ownerWindowId);
+      if (checked.remaining.length === 0) return checked;
+      const next = checked.remaining[0]!;
+      request = `Continue the plan with: ${next}.${checked.remaining.length > 1 ? ` Still to do after it: ${checked.remaining.slice(1, 6).join('; ')}.` : ''}`;
+    }
+    const latest = (await this.get(run.id)) ?? withMessage;
+    return this.resumeWith(latest, ownerWindowId, startFollowUp(latest, request, at));
   }
 
   /** The crew's running state when it is working, otherwise one that borrows (or opens) its conversation for a call to the Lead. */
@@ -457,7 +477,16 @@ export class DesktopCrewRunner {
     let run = active.run;
     if (answer.value === null && current.followUp) {
       // The finished work is still finished: a follow-up the Lead could not plan puts the run back as it was.
-      const message = 'The Lead could not plan that follow-up. The finished work is unchanged; try asking again in other words.';
+      // What the Lead actually said is shown, so a reply that was not a plan can be understood and answered.
+      const said = answer.raw.replace(/\s+/g, ' ').trim().slice(0, 240);
+      const message = said
+        ? `The Lead answered, but not with tasks: "${said}". Press one of the phase buttons, or say which part to do.`
+        : 'The Lead did not reply with a plan. The finished work is unchanged; press a phase button or say which part to do.';
+      await this.commit(active, { ...run, status: 'completed', followUp: null, completedAt: at, spentUsd: run.spentUsd + answer.costUsd, updatedAt: at, feed: [...run.feed, { id: `feed_${randomUUID()}`, at, who: planner.id, kind: 'info' as const, text: message }] });
+      return;
+    }
+    if (answer.value && answer.value.tasks.length === 0 && current.followUp) {
+      const message = `The Lead read the plan and found nothing new to build${answer.value.note ? `: ${answer.value.note}` : '.'}`;
       await this.commit(active, { ...run, status: 'completed', followUp: null, completedAt: at, spentUsd: run.spentUsd + answer.costUsd, updatedAt: at, feed: [...run.feed, { id: `feed_${randomUUID()}`, at, who: planner.id, kind: 'info' as const, text: message }] });
       return;
     }
@@ -814,16 +843,16 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
   }
 
   /** Asks a role for a reply that must parse; if it does not, asks once more with a stricter request. */
-  private async askJson<T>(active: ActiveRun, role: CrewRole, prompt: string, kind: 'plan' | 'review' | 'stuck' | 'coverage', parse: (text: string) => T | null): Promise<{ value: T | null; costUsd: number }> {
+  private async askJson<T>(active: ActiveRun, role: CrewRole, prompt: string, kind: 'plan' | 'review' | 'stuck' | 'coverage', parse: (text: string) => T | null): Promise<{ value: T | null; costUsd: number; raw: string }> {
     let costUsd = 0;
     const first = await this.call(active, role, prompt, { fresh: true, label: ASK_LABEL[kind] });
     costUsd += first.costUsd ?? 0;
-    if (active.cancelled) return { value: null, costUsd };
+    if (active.cancelled) return { value: null, costUsd, raw: '' };
     const value = first.status === 'completed' ? parse(first.output) : null;
-    if (value !== null || first.status === 'failed') return { value, costUsd };
+    if (value !== null || first.status === 'failed') return { value, costUsd, raw: first.output };
     const second = await this.call(active, role, retryPrompt(kind), { fresh: false, label: `${ASK_LABEL[kind]} (asked again)` });
     costUsd += second.costUsd ?? 0;
-    return { value: second.status === 'completed' ? parse(second.output) : null, costUsd };
+    return { value: second.status === 'completed' ? parse(second.output) : null, costUsd, raw: first.output || second.output };
   }
 
   private async call(active: ActiveRun, role: CrewRole, prompt: string, options: { fresh: boolean; effortFrom?: string; cwd?: string; conversationId?: string; label?: string }): Promise<CallResult> {

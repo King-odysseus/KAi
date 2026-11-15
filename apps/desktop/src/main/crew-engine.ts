@@ -135,6 +135,16 @@ export function uniqueTaskIds<T extends { id: string; dependsOn?: readonly strin
   }));
 }
 
+/**
+ * Whether a message is only "carry on" ("continue", "next phase", "keep going", "yes"). On a finished crew that means
+ * the next unfinished part of the plan, which the crew can find out for itself instead of asking the Lead to guess it
+ * from one word.
+ */
+export function isBareContinue(text: string): boolean {
+  const flat = text.trim().toLowerCase().replace(/[.!?,]+$/g, '').replace(/\s+/g, ' ');
+  return /^(?:ok(?:ay)?[, ]+)?(?:please )?(?:continue|go on|go ahead|carry on|keep going|proceed|resume|move on|do it|yes|yes please|go|next|next phase|next part|next step|start (?:the )?next(?: phase| part)?)(?: please)?$/.test(flat);
+}
+
 /** Adds a line to the thread between the person and the Lead. The newest 200 are kept. */
 export function addChat(run: CrewRun, entry: { from: 'you' | 'lead'; kind: CrewChatEntry['kind']; text: string }, at: string): CrewRun {
   const next: CrewChatEntry = { id: `chat_${randomUUID()}`, at, from: entry.from, kind: entry.kind, text: entry.text.slice(0, 6_000) };

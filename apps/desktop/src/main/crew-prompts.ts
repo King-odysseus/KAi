@@ -58,7 +58,7 @@ export function planPrompt(goal: string, config: CrewConfig, conventions: string
     ...(conventions.trim() ? ['', 'How this developer usually builds things (follow these unless the goal says otherwise):', conventions.trim()] : []),
     ...designPlanLines(config, design),
     ...(existing.tasks.length > 0 ? ['', 'The board already has these tasks; add only what is missing:', boardSummary(existing)] : []),
-    ...(existing.followUp ? ['', 'The earlier work is finished and accepted:', ...done.slice(0, 30).map((title) => `- ${title}`), '', `The user has now asked for more. Plan only this, building on what is done: ${existing.followUp}`, 'Do not repeat tasks that are already accepted. Prefer 1 to 6 tasks. Anything that runs, builds, installs or commits the project is a task for a role that writes code.'] : []),
+    ...(existing.followUp ? ['', 'The earlier work is finished and accepted:', ...done.slice(0, 30).map((title) => `- ${title}`), '', `The user has now asked for more. Plan only this, building on what is done: ${existing.followUp}`, 'Do not repeat tasks that are already accepted. Prefer 1 to 6 tasks. Anything that runs, builds, installs or commits the project is a task for a role that writes code.', 'How to plan it: first read any plan file the goal names and find which parts of it the accepted tasks above already cover; then plan the next unfinished part, and only that. A request such as "continue" or "next phase" means exactly that.', 'If the plan truly has nothing left to build, reply {"tasks":[],"note":"one plain sentence saying why"} instead of inventing work.'] : []),
     '',
     'Rules for the tasks:',
     '- Small enough for one agent to finish in one sitting. Prefer 5 to 14 tasks.',
@@ -369,9 +369,21 @@ export interface PlanApproval {
 }
 
 /** The plan's tasks and the approvals it asks for. A reply with no usable tasks is still no plan at all. */
-export function parsePlanFull(text: string): { tasks: PlannedTask[]; approvals: PlanApproval[] } | null {
+export function parsePlanFull(text: string): { tasks: PlannedTask[]; approvals: PlanApproval[]; note?: string } | null {
   const tasks = parsePlan(text);
-  if (!tasks) return null;
+  if (!tasks) {
+    // An empty list on purpose, with a reason, is the Lead saying there is nothing left to build; that is an answer, not a failure.
+    const open = text.indexOf('{');
+    const close = text.lastIndexOf('}');
+    if (open < 0 || close <= open) return null;
+    try {
+      const value = JSON.parse(text.slice(open, close + 1)) as { tasks?: unknown; note?: unknown };
+      if (Array.isArray(value.tasks) && value.tasks.length === 0) return { tasks: [], approvals: [], ...(typeof value.note === 'string' && value.note.trim() ? { note: value.note.trim().slice(0, 300) } : {}) };
+    } catch {
+      return null;
+    }
+    return null;
+  }
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   let list: unknown;

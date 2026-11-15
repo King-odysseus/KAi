@@ -540,6 +540,57 @@ describe('crew runner', () => {
     expect(run.chat[0]).toMatchObject({ from: 'you', kind: 'work', text: 'Now install it.' });
   });
 
+  it('turns a bare "continue" into the next unfinished part of the plan, found by the crew, not guessed from one word', async () => {
+    const next = JSON.stringify({ tasks: [{ id: 'shell', title: 'Build the shell', role: 'builder', description: 'Phase 1', acceptance: ['The shell opens'], dependsOn: [] }] });
+    const f = fixture({ plan: [PLAN, next], coverage: ['{"complete":true}', '{"complete":false,"remaining":["Phase 1: Shell","Phase 2: Providers"]}'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const finished = await runToIdle(f.runner, started.id);
+    expect(finished.remaining).toEqual([]);
+
+    await f.runner.message(started.id, 'work', 'continue', 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('completed');
+    expect(run.tasks.map((task) => task.id)).toEqual(['schema', 'ingest', 'shell']);
+    const plan = f.requests.find((request) => request.prompt.includes('Plan only this'));
+    expect(plan?.prompt).toContain('Continue the plan with: Phase 1: Shell.');
+    expect(plan?.prompt).toContain('Still to do after it: Phase 2: Providers.');
+    // The thread keeps the person's own word, once.
+    expect(run.chat.filter((entry) => entry.from === 'you').map((entry) => entry.text)).toEqual(['continue']);
+  });
+
+  it('says there is nothing left, and plans nothing, when "continue" is said and the plan is finished', async () => {
+    const f = fixture({ coverage: ['{"complete":true}', '{"complete":true}'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const before = await runToIdle(f.runner, started.id);
+    const after = await f.runner.message(started.id, 'work', 'Keep going', 1);
+    expect(after.status).toBe('completed');
+    expect(after.tasks).toEqual(before.tasks);
+    expect(after.chat.at(-1)?.text).toContain('nothing left undone');
+    expect(f.requests.some((request) => request.prompt.includes('Plan only this'))).toBe(false);
+  });
+
+  it('treats an empty plan with a reason as the Lead finding nothing to build, not as a failure', async () => {
+    const empty = JSON.stringify({ tasks: [], note: 'Every part of the plan is already built.' });
+    const f = fixture({ plan: [PLAN, empty] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    await runToIdle(f.runner, started.id);
+    await f.runner.message(started.id, 'work', 'Add more features.', 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('completed');
+    expect(run.feed.at(-1)?.text).toContain('found nothing new to build: Every part of the plan is already built.');
+  });
+
+  it('shows what the Lead said when its reply was not a plan, so it can be understood', async () => {
+    const f = fixture({ plan: [PLAN, 'I think Phase 1 is the next part, but it needs a decision first.'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    await runToIdle(f.runner, started.id);
+    await f.runner.message(started.id, 'work', 'Do the next bit.', 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('completed');
+    expect(run.feed.at(-1)?.text).toContain('I think Phase 1 is the next part');
+    expect(run.feed.at(-1)?.text).toContain('phase buttons');
+  });
+
   it('plans a follow-up onto the same board after the crew has finished', async () => {
     const followPlan = JSON.stringify({ tasks: [{ id: 'schema', title: 'Install the app', role: 'builder', description: 'Build and install', acceptance: ['The app is installed'], dependsOn: [] }] });
     const f = fixture({ plan: [PLAN, followPlan] });
@@ -567,7 +618,7 @@ describe('crew runner', () => {
     expect(run.status).toBe('completed');
     expect(run.followUp).toBeNull();
     expect(run.tasks).toHaveLength(2);
-    expect(run.feed.some((entry) => entry.text.includes('could not plan that follow-up'))).toBe(true);
+    expect(run.feed.some((entry) => entry.text.includes('not with tasks') && entry.text.includes('not a plan'))).toBe(true);
   });
 
   it('never accepts work when the Lead\'s reply cannot be read', async () => {

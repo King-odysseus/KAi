@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultCrewConfig, crewConfigSchema, crewRunSchema } from '@kai/contracts';
 import type { CrewRun } from '@kai/contracts';
-import { addChat, addTasks, continueToNextPhase, isUsageLimit, mergeChat, settle } from '../apps/desktop/src/main/crew-engine';
-import { askPrompt, coveragePrompt, parseCoverage, planPrompt } from '../apps/desktop/src/main/crew-prompts';
+import { addChat, addTasks, continueToNextPhase, isBareContinue, isUsageLimit, mergeChat, settle } from '../apps/desktop/src/main/crew-engine';
+import { askPrompt, coveragePrompt, parseCoverage, parsePlanFull, planPrompt } from '../apps/desktop/src/main/crew-prompts';
 
 const T0 = '2026-11-01T10:00:00.000Z';
 const T1 = '2026-11-01T10:05:00.000Z';
@@ -54,6 +54,26 @@ describe('finishing honestly', () => {
     expect(next.followUp).toContain('Phase 2: Providers');
     expect(next.followUp).toContain('do not wait for their acceptance');
     expect(planPrompt(next.goal, next.config, '', next)).toContain('Plan only this');
+  });
+});
+
+describe('a bare "continue" on a finished crew', () => {
+  it('recognises the ways of saying carry on, and nothing more specific', () => {
+    for (const text of ['continue', 'Continue.', 'go on', 'Keep going!', 'next phase', 'yes please', 'ok continue', 'Start the next phase', 'proceed']) expect(isBareContinue(text), text).toBe(true);
+    for (const text of ['continue with Phase 2', 'Start Phase 1', 'continue the login work', 'what is next?', 'next, add dark mode']) expect(isBareContinue(text), text).toBe(false);
+  });
+
+  it('reads an empty plan with a reason as an answer, and still reads no plan at all as none', () => {
+    expect(parsePlanFull('{"tasks":[],"note":"All built."}')).toEqual({ tasks: [], approvals: [], note: 'All built.' });
+    expect(parsePlanFull('{"tasks":[]}')).toEqual({ tasks: [], approvals: [] });
+    expect(parsePlanFull('Phase 1 is next.')).toBeNull();
+  });
+
+  it('tells the planner how to find the next part, and that a bare continue means exactly that', () => {
+    const run = { ...accepted(), followUp: 'Continue the plan with: Phase 1.' };
+    const prompt = planPrompt(run.goal, run.config, '', run);
+    expect(prompt).toContain('How to plan it');
+    expect(prompt).toContain('nothing left to build');
   });
 });
 
