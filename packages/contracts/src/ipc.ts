@@ -374,7 +374,7 @@ import {
 } from './terminal';
 import { planSchema, type Plan } from './plan';
 import { conventionsGetInputSchema, conventionsMuteInputSchema, conventionsReferenceInputSchema, conventionsRuleAddInputSchema, conventionsRuleRemoveInputSchema, type ConventionsState } from './conventions';
-import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewFollowUpInputSchema, crewDecideInputSchema, crewExplainSimplyInputSchema, crewKeepGoingInputSchema, crewMessageInputSchema, crewStartInputSchema, crewUpdateConfigInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
+import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewFollowUpInputSchema, crewDecideInputSchema, crewExplainSimplyInputSchema, crewInterviewInputSchema, type CrewInterview, crewKeepGoingInputSchema, crewMessageInputSchema, crewStartInputSchema, crewUpdateConfigInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
 import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitBlameInputSchema, type GitBlameResult, type GitChangesResult, todoScanInputSchema, type TodoScanResult, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, gitTeamBranchInputSchema, gitTeamCloneInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
 import { importAddCardsInputSchema, importScanInputSchema, type ImportReport } from './import';
 import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
@@ -567,6 +567,7 @@ export const ipcChannels = [
   'crew:keep-going',
   'crew:update-config',
   'crew:decide',
+  'crew:interview',
   'crew:explain-simply',
   'crew:find-phases',
   'crew:pause',
@@ -998,6 +999,7 @@ export const ipcInputSchemas = {
   'crew:keep-going': crewKeepGoingInputSchema,
   'crew:update-config': crewUpdateConfigInputSchema,
   'crew:decide': crewDecideInputSchema,
+  'crew:interview': crewInterviewInputSchema,
   'crew:explain-simply': crewExplainSimplyInputSchema,
   'crew:find-phases': crewControlInputSchema,
   'crew:pause': crewControlInputSchema,
@@ -1826,6 +1828,8 @@ export interface KaiDesktopBridge {
   updateCrewConfig(runId: string, config: CrewConfig): Promise<IpcResponse<CrewRun>>;
   /** Answers one approval card. The crew carries on once every card is answered. */
   decideCrewApproval(runId: string, approvalId: string, approve: boolean): Promise<IpcResponse<CrewRun>>;
+  /** Reads the goal (and any plan file it names) and returns the few questions worth asking before the crew plans. */
+  crewInterview(projectId: string, goal: string): Promise<IpcResponse<CrewInterview>>;
   /** Turns plain-language writing on or off for the Lead's replies. */
   setCrewExplainSimply(runId: string, explainSimply: boolean): Promise<IpcResponse<CrewRun>>;
   /** Asks the Lead what is still undone in the plan, for a crew that finished before it was checked. */

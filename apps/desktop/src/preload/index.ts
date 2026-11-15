@@ -254,6 +254,7 @@ const bridge: KaiDesktopBridge = {
   setCrewKeepGoing: (runId, keepGoing) => ipcRenderer.invoke('crew:keep-going', { runId, keepGoing }),
   updateCrewConfig: (runId, config) => ipcRenderer.invoke('crew:update-config', { runId, config }),
   decideCrewApproval: (runId, approvalId, approve) => ipcRenderer.invoke('crew:decide', { runId, approvalId, approve }),
+  crewInterview: (projectId, goal) => ipcRenderer.invoke('crew:interview', { projectId, goal }),
   setCrewExplainSimply: (runId, explainSimply) => ipcRenderer.invoke('crew:explain-simply', { runId, explainSimply }),
   findCrewPhases: (runId) => ipcRenderer.invoke('crew:find-phases', { runId }),
   pauseCrew: (runId) => ipcRenderer.invoke('crew:pause', { runId }),

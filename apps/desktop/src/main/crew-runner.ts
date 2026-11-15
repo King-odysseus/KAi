@@ -43,6 +43,10 @@ export interface CrewStartInput {
   projectId: string;
   goal: string;
   config: CrewConfig;
+  /** From the start interview: carry on through every phase. */
+  keepGoing?: boolean;
+  /** From the start interview: write for a developer who is not very technical. */
+  explainSimply?: boolean;
 }
 
 /** The reviewer id the per-task project check is recorded under; it is not a role. */
@@ -100,6 +104,7 @@ export class DesktopCrewRunner {
     const briefSnapshot = await this.ports.readBrief?.(input.projectId).catch(() => null) ?? null;
     const run = crewRunSchema.parse({
       schemaVersion: 1, id: runId, projectId: input.projectId, goal: input.goal, briefSnapshot, status: 'planning', conversationId: conversation.id,
+      ...(input.keepGoing !== undefined ? { keepGoing: input.keepGoing } : {}), ...(input.explainSimply !== undefined ? { explainSimply: input.explainSimply } : {}),
       config: input.config, tasks: [], feed: [], startedAt: at, updatedAt: at,
     });
     const active = this.attach(run, ownerWindowId, conversation.id);

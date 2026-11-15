@@ -9,7 +9,7 @@ import {
 } from '@kai/contracts';
 import { apiChoices, targetFromValue, targetValue } from './architect-settings';
 import type { PersistedEvent, RoleTarget } from '@kai/contracts';
-import type { AgentCapability, AgentId, AppSettings, AutonomyMode, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask, ProjectRecord } from '@kai/contracts';
+import type { AgentCapability, AgentId, AppSettings, AutonomyMode, CrewConfig, CrewInterview, CrewDesign, CrewRole, CrewRun, CrewTask, ProjectRecord } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
 import { crewTitle } from '../crew-title';
 import { Pill, type PillTone } from './Pill';
@@ -24,6 +24,8 @@ import { collapseFeed } from '../crew-feed';
 import { CrewApprovals } from './CrewApprovals';
 import { CrewChat } from './CrewChat';
 import { CrewDone } from './CrewDone';
+import { CrewInterviewPanel } from './CrewInterviewPanel';
+import { compileBrief, keepGoingFrom, type InterviewAnswer } from '../crew-brief';
 
 type Tab = 'board' | 'chat' | 'crew' | 'design' | 'cost' | 'report';
 const TABS: ReadonlyArray<{ id: Tab; label: string; icon: typeof Kanban }> = [
@@ -100,6 +102,9 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
   const [goal, setGoal] = useState('');
   const [tab, setTab] = usePersistentChoice<Tab>('kai.tab.crew', 'board', TABS.map((item) => item.id));
   const [guidance, setGuidance] = useState('');
+  /** The start interview: null when not in use, 'loading' while the Lead reads the goal, then its questions. */
+  const [interview, setInterview] = useState<CrewInterview | 'loading' | null>(null);
+  const [askFirst, setAskFirst] = usePersistentChoice<'on' | 'off'>('kai.crew.askFirst', 'on', ['on', 'off']);
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -288,12 +293,44 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
     }
   }
 
-  async function start(): Promise<void> {
+  /** Starts the crew on a goal, with what the start interview settled if it was used. */
+  async function begin(finalGoal: string, keepGoingChoice?: boolean): Promise<void> {
     if (!activeProject) return;
     const parsed = crewConfigSchema.safeParse(draft);
     if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? 'Check the crew settings.'); return; }
-    await run(async () => unwrap(await window.kaiDesktop.startCrew({ projectId: activeProject.id, goal: goal.trim(), config: parsed.data })));
+    await run(async () => unwrap(await window.kaiDesktop.startCrew({
+      projectId: activeProject.id, goal: finalGoal, config: parsed.data,
+      ...(keepGoingChoice !== undefined ? { keepGoing: keepGoingChoice } : {}),
+    })));
+    setInterview(null);
     setTab('board');
+  }
+
+  /**
+   * Press Start: with "ask me first" on, the Lead reads the goal (and any plan file it names) and brings back the few
+   * questions it could not answer itself. A goal that needs none, or a Lead that cannot answer, starts straight away.
+   */
+  async function start(): Promise<void> {
+    if (!activeProject) return;
+    const text = goal.trim();
+    if (askFirst !== 'on') { await begin(text); return; }
+    setInterview('loading');
+    try {
+      const read = unwrap(await window.kaiDesktop.crewInterview(activeProject.id, text));
+      if (read.items.length === 0) {
+        if (read.note) setNotice(read.note);
+        await begin(text);
+        return;
+      }
+      setInterview(read);
+    } catch (caught) {
+      setNotice(`Could not ask questions first (${messageOf(caught)}). Planning now.`);
+      await begin(text);
+    }
+  }
+
+  async function startWithAnswers(answers: InterviewAnswer[]): Promise<void> {
+    await begin(compileBrief(goal.trim(), answers), keepGoingFrom(answers));
   }
 
   function newCrew(): void {
@@ -371,7 +408,10 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
             )
             : (
               <>
-              <section className="ops-panel crew-start">
+              {typeof interview === 'object' && interview !== null && (
+                <CrewInterviewPanel interview={interview} busy={working} onStart={(answers) => void startWithAnswers(answers)} onSkip={() => void begin(goal.trim())} onBack={() => setInterview(null)} />
+              )}
+              <section className="ops-panel crew-start" hidden={typeof interview === 'object' && interview !== null}>
                 <label className="workflow-field" htmlFor="crew-goal"><span>What should the crew build?</span></label>
                 <Textarea id="crew-goal" rows={4} value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="For example: build the Zuri log viewer with search, saved filters and sign-in." />
                 <div className="crew-start-row">
@@ -386,7 +426,8 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
                   <UiTextInput id="crew-check" value={draft.checkCommand} onChange={(event) => updateDraft((current) => ({ ...current, checkCommand: event.target.value }))} placeholder="For example: npm test. The project is not done until it passes." />
                 </label>
                 <div className="ops-actions">
-                  <UiButton type="button" className="primary-button" disabled={working || goal.trim().length === 0} onClick={() => void start()}><Play size={14} /><span>Start crew</span></UiButton>
+                  <UiButton type="button" className="primary-button" disabled={working || interview === 'loading' || goal.trim().length === 0} onClick={() => void start()}><Play size={14} /><span>{interview === 'loading' ? 'Reading your goal…' : 'Start crew'}</span></UiButton>
+                  <label className="crew-ask-first" title="The Lead reads your goal, and any plan file it names, and asks a few questions before it plans"><Switch checked={askFirst === 'on'} onChange={(event) => setAskFirst(event.target.checked ? 'on' : 'off')} /><span>Ask me a few questions first</span></label>
                   <small>{draft.roles.length} roles · up to {draft.limits.maxSubAgents} sub-agents at once · {draft.limits.maxUsd > 0 ? `asks at ${money(draft.limits.maxUsd)}` : 'no spend limit'}</small>
                 </div>
                 <small className="crew-empty">Every agent on this crew is also told how you usually build and want things to look. See and change that under C1 Brain, How you build.</small>

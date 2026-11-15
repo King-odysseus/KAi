@@ -308,6 +308,9 @@ export const crewStartInputSchema = z
     goal: z.string().trim().min(1).max(4_000),
     // Left out, the crew starts with the default roles and limits.
     config: crewConfigSchema.optional(),
+    // What the start interview settled, when it was used: carry on through every phase, and write simply.
+    keepGoing: z.boolean().optional(),
+    explainSimply: z.boolean().optional(),
   })
   .strict();
 export type CrewStartInput = z.infer<typeof crewStartInputSchema>;
@@ -325,6 +328,59 @@ export type CrewDecideInput = z.infer<typeof crewDecideInputSchema>;
 export const crewExplainSimplyInputSchema = z.object({ runId: z.string().min(1), explainSimply: z.boolean() }).strict();
 
 export const crewKeepGoingInputSchema = z.object({ runId: z.string().min(1), keepGoing: z.boolean() }).strict();
+
+/**
+ * The short interview before a crew plans: what the Lead understood, and the few things it could not tell from the
+ * goal. Nothing is assumed: what it leaves out is listed with the reason, and the person can ask for it back.
+ */
+export const CREW_INTERVIEW_TOPICS = {
+  scope: 'How much to do',
+  done: 'What counts as finished',
+  run: 'How to run or install it',
+  autonomy: 'How far to go without checking in',
+} as const;
+export type CrewInterviewTopic = keyof typeof CREW_INTERVIEW_TOPICS;
+export const crewInterviewTopicSchema = z.enum(['scope', 'done', 'run', 'autonomy']);
+
+export const crewInterviewItemSchema = z
+  .object({
+    id: z.string().min(1).max(40),
+    topic: crewInterviewTopicSchema,
+    question: z.string().min(1).max(400),
+    // Why it is being asked, in plain words.
+    why: z.string().max(400).default(''),
+    options: z.array(z.string().min(1).max(160)).max(6).default([]),
+  })
+  .strict();
+export type CrewInterviewItem = z.infer<typeof crewInterviewItemSchema>;
+
+export const crewInterviewSchema = z
+  .object({
+    // What the Lead understood the goal to be, in plain words.
+    summary: z.string().max(1_200).default(''),
+    // The parts the goal or its plan is split into, when it is split (for example the plan's phases).
+    phases: z.array(z.string().min(1).max(200)).max(20).default([]),
+    items: z.array(crewInterviewItemSchema).max(6).default([]),
+    // Topics it chose not to ask about, each with the reason, so nothing is skipped without being said.
+    left: z.array(z.object({ topic: crewInterviewTopicSchema, reason: z.string().max(300).default('') }).strict()).max(6).default([]),
+    // Files it read to understand the goal.
+    usedFiles: z.array(z.string().max(400)).max(6).default([]),
+    // Why there are no questions, when the interview could not run (the model is off, or it did not answer).
+    note: z.string().max(400).default(''),
+  })
+  .strict();
+export type CrewInterview = z.infer<typeof crewInterviewSchema>;
+
+/** The question for a topic the Lead left out, for when the person asks for it back. Worded here, not by the model. */
+export const CREW_INTERVIEW_TEMPLATES: Record<CrewInterviewTopic, { question: string; why: string; options: string[] }> = {
+  scope: { question: 'How much should the crew do now?', why: 'A big goal is easier to check in pieces.', options: ['Just the first part', 'The first few parts', 'All of it'] },
+  done: { question: 'What counts as finished?', why: 'It tells the crew when to stop and the reviewers what to check.', options: ['The tests pass', 'I will review it myself', 'Both'] },
+  run: { question: 'How do you run or install it?', why: 'So the crew can try it and tell you how to use it.', options: ['It runs from the project folder', 'It needs installing', 'Not sure, you decide'] },
+  autonomy: { question: 'How far should the crew go before it checks in with you?', why: 'You can have it stop after each phase, or carry on.', options: ['Stop after each phase and ask me', 'Keep going through every phase'] },
+};
+
+export const crewInterviewInputSchema = z.object({ projectId: z.string().min(1), goal: z.string().trim().min(1).max(4_000) }).strict();
+export type CrewInterviewInput = z.infer<typeof crewInterviewInputSchema>;
 
 /** New roles, agents, models or limits for a crew that already exists, applied from its next task on. */
 export const crewUpdateConfigInputSchema = z.object({ runId: z.string().min(1), config: crewConfigSchema }).strict();

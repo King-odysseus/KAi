@@ -71,6 +71,7 @@ import { EditorSessionManager } from './editor-sessions';
 import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { DesktopWorkflowRunner } from './workflow-runner';
 import { DesktopCrewRunner } from './crew-runner';
+import { DesktopCrewInterview } from './crew-interview';
 import { CrewRunStore } from './crew-store';
 import { CrewSupport } from './crew-support';
 import { ConventionService } from './conventions-service';
@@ -893,6 +894,21 @@ async function startApplication(): Promise<void> {
     spec: specStore,
     vision: learningTutor,
   });
+  // Reads a plan file the goal names (text only, and not a huge one) so the questions come from what is really in it.
+  const crewInterview = new DesktopCrewInterview({
+    settings: () => settings.load(),
+    requester: learningTutor,
+    projectRoot: async (projectId) => projectRootFor(projectId),
+    readText: async (absolutePath) => {
+      const info = await stat(absolutePath).catch(() => null);
+      if (!info?.isFile() || info.size > 400_000) return null;
+      return readFile(absolutePath, 'utf8').catch(() => null);
+    },
+    readBrief: async (projectId) => {
+      const project = (await ipcContext!.projects.list()).find((candidate) => candidate.id === projectId);
+      return project ? readFile(path.join(project.path, '.kai', 'spec', 'brief.md'), 'utf8').catch(() => null) : null;
+    },
+  });
   ipcContext = {
     appName: 'KAI',
     version: app.getVersion(),
@@ -944,6 +960,7 @@ async function startApplication(): Promise<void> {
     learningBudget,
     workflows: workflowRunner,
     crew: crewRunner,
+    crewInterview,
     crewSupport,
     conventions: conventionService,
     teamPlanner,

@@ -158,6 +158,7 @@ import { suggestMemoryImprovements } from './experience-suggestions';
 import type { DesktopScheduler, ScheduledRunOutcome } from './scheduler';
 import type { DesktopWorkflowRunner } from './workflow-runner';
 import type { DesktopCrewRunner } from './crew-runner';
+import type { DesktopCrewInterview } from './crew-interview';
 import type { CrewSupport } from './crew-support';
 import type { ConventionService } from './conventions-service';
 import type { DesktopTeamPlanner } from './team-planner';
@@ -273,6 +274,8 @@ export interface IpcContext {
   learningBudget: LearningBudgetGuard;
   workflows: DesktopWorkflowRunner;
   crew: DesktopCrewRunner;
+  /** The short interview before a crew plans. */
+  crewInterview: DesktopCrewInterview;
   crewSupport: CrewSupport;
   conventions: ConventionService;
   teamPlanner: DesktopTeamPlanner;
@@ -616,7 +619,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'workflows:save-template', async (template) => context.workflowTemplates.save(template));
   handle(context, 'workflows:delete-template', async ({ id }) => context.workflowTemplates.delete(id));
   handle(context, 'crew:list', async ({ projectId }) => context.crew.list(projectId));
-  handle(context, 'crew:start', async ({ projectId, goal, config }, request) => context.crew.start({ projectId, goal, config: config ?? createDefaultCrewConfig((await context.settings.load()).defaultAgent) }, request.ownerWindowId));
+  handle(context, 'crew:start', async ({ projectId, goal, config, keepGoing, explainSimply }, request) => context.crew.start({ projectId, goal, config: config ?? createDefaultCrewConfig((await context.settings.load()).defaultAgent), ...(keepGoing !== undefined ? { keepGoing } : {}), ...(explainSimply !== undefined ? { explainSimply } : {}) }, request.ownerWindowId));
+  handle(context, 'crew:interview', async ({ projectId, goal }) => context.crewInterview.run({ projectId, goal }));
   handle(context, 'crew:approve', async ({ runId }, request) => context.crew.approve(runId, request.ownerWindowId));
   handle(context, 'crew:answer', async ({ runId, answer, guidance }, request) => context.crew.answer(runId, answer, guidance, request.ownerWindowId));
   handle(context, 'crew:pause', async ({ runId }) => context.crew.pause(runId));
