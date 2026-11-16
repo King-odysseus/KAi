@@ -538,7 +538,8 @@ export const AWAY_MAX_PER_RUN = 10;
  */
 export function awayEligible(run: CrewRun): CrewTask | null {
   const ask = run.ask;
-  if (!run.away.enabled || run.status !== 'needsYou' || !ask?.taskId) return null;
+  // A parked question (the crew carries on with other tasks meanwhile) leaves the run running, and still counts.
+  if (!run.away.enabled || (run.status !== 'needsYou' && run.status !== 'running') || !ask?.taskId) return null;
   if (ask.reason !== 'sendBacks' && ask.reason !== 'sameFailure' && ask.reason !== 'noProgress') return null;
   const task = run.tasks.find((item) => item.id === ask.taskId);
   if (!task || task.status !== 'needsYou' || task.note.startsWith('Usage limit')) return null;
@@ -546,12 +547,97 @@ export function awayEligible(run: CrewRun): CrewTask | null {
   return task;
 }
 
-/** Turns away mode on or off. What was chosen so far is kept, so the ceilings hold across switches. */
+/**
+ * Turns away mode on or off. What was chosen so far is kept, so the ceilings hold across switches. Turning it off after
+ * a stretch away posts a short summary of that stretch, written from the run's own records.
+ */
 export function setAway(run: CrewRun, enabled: boolean, minutes: number, at: string): CrewRun {
+  const wasOn = run.away.enabled;
+  const since = enabled ? (wasOn ? run.away.since ?? at : at) : null;
   const text = enabled
     ? (minutes > 0 ? `Away mode is on. If a stuck task waits ${minutes} minutes for you, the Lead takes the safest of its own options.` : 'Away mode is on. The Lead takes the safest of its own options as soon as a task is stuck.')
     : 'Away mode is off. The crew waits for you on every question.';
-  return addChat({ ...run, away: { ...run.away, enabled, minutes }, updatedAt: at }, { from: 'lead', kind: 'note', text }, at);
+  const next = addChat({ ...run, away: { ...run.away, enabled, minutes, since }, updatedAt: at }, { from: 'lead', kind: 'note', text }, at);
+  return !enabled && wasOn && run.away.since ? addChat(next, { from: 'lead', kind: 'note', text: awaySummary(run, run.away.since) }, at) : next;
+}
+
+/** What happened while the person was away, from the feed and the decisions, never from a model: nothing in it can be made up. */
+export function awaySummary(run: CrewRun, since: string): string {
+  const after = (at: string): boolean => at >= since;
+  const accepted = run.feed.filter((entry) => entry.kind === 'accepted' && after(entry.at)).map((entry) => entry.text.replace(/^Accepted /, '').replace(/\.$/, ''));
+  const decided = (run.away.decisions ?? []).filter((item) => after(item.at));
+  const waiting = [run.ask, ...run.queuedAsks].filter((ask): ask is CrewAsk => Boolean(ask));
+  const lines = [
+    `While you were away: ${accepted.length} ${accepted.length === 1 ? 'task' : 'tasks'} accepted${accepted.length > 0 ? ` (${shorten(accepted.join(', '), 400)})` : ''}.`,
+    ...(decided.length > 0 ? [`The Lead decided ${decided.length} ${decided.length === 1 ? 'question' : 'questions'} for you. Check these:`, ...decided.map((item) => `- "${item.task}": ${shorten(item.choice, 200)}${item.check ? ` Check: ${shorten(item.check, 200)}` : ''}`)] : ['The Lead did not decide anything for you.']),
+    ...(waiting.length > 0 ? [`Still waiting on you: ${waiting.length} ${waiting.length === 1 ? 'question' : 'questions'}.`, ...waiting.map((ask) => `- ${shorten(ask.message, 200)}`)] : ['Nothing is waiting on you.']),
+  ];
+  return lines.join('\n');
+}
+
+/** A question about one task can wait while the crew works on the others; limits and approvals hold the whole run. */
+export function parkableAsk(ask: CrewAsk | null | undefined): boolean {
+  return Boolean(ask?.taskId) && ask!.reason !== 'approval' && ask!.reason !== 'spend' && ask!.reason !== 'time' && ask!.reason !== 'phaseSpend';
+}
+
+/**
+ * The crew stopped on a question about one task, but other tasks can still be built: the question stays open for the
+ * person and the run carries on with the rest, instead of standing idle until they answer. Returns null when nothing
+ * else can go ahead (every other task is done or depends on the waiting one).
+ */
+export function parkAsk(run: CrewRun, at: string): CrewRun | null {
+  if (run.status !== 'needsYou' || !parkableAsk(run.ask)) return null;
+  const others = readyTasks(run).length + run.tasks.filter((task) => task.status === 'review').length;
+  if (others === 0) return null;
+  const title = run.tasks.find((task) => task.id === run.ask!.taskId)?.title ?? 'One task';
+  return feed({ ...run, status: 'running', updatedAt: at }, { who: 'crew', kind: 'info', text: `"${title}" waits for your answer. The crew carries on with the other tasks meanwhile; anything that depends on it waits too.`, taskId: run.ask!.taskId }, at);
+}
+
+/**
+ * Keeps every open question: a new question about another task, raised while one was parked, puts the older one in a
+ * queue instead of over it; once the current question is answered, the next one still open comes up.
+ */
+export function queueAsks(previous: CrewRun, next: CrewRun): CrewRun {
+  let run = next;
+  const old = previous.ask;
+  const stillWaiting = (ask: CrewAsk): boolean => run.tasks.find((task) => task.id === ask.taskId)?.status === 'needsYou';
+  if (old?.taskId && run.ask && run.ask.taskId !== old.taskId && stillWaiting(old) && !run.queuedAsks.some((ask) => ask.taskId === old.taskId)) {
+    run = { ...run, queuedAsks: [...run.queuedAsks, old].slice(-20) };
+  }
+  if (!run.ask && run.queuedAsks.length > 0 && run.status !== 'stopped' && run.status !== 'completed') {
+    const open = run.queuedAsks.filter(stillWaiting);
+    const [first, ...rest] = open;
+    run = first ? { ...run, ask: first, queuedAsks: rest, status: run.status === 'running' ? 'needsYou' : run.status } : { ...run, queuedAsks: [] };
+  }
+  return run;
+}
+
+/**
+ * The most one task may cost before the crew stops and asks: three times a usual accepted task, and at least a dollar,
+ * once three tasks give a usual cost to go by. Each time it was already asked about, the ceiling moves out again.
+ */
+export function taskBudget(run: CrewRun, task: CrewTask): number | null {
+  const paid = run.tasks.filter((item) => !item.proposed && item.status === 'accepted' && item.costUsd > 0);
+  if (paid.length < 3) return null;
+  const usual = paid.reduce((sum, item) => sum + item.costUsd, 0) / paid.length;
+  const asked = run.spendAsked.filter((id) => id === task.id).length;
+  return Math.max(1, usual * 3) * (asked + 1);
+}
+
+/** Stops one task that has cost far more than usual, with a question; the rest of the crew can carry on meanwhile. */
+export function askTaskSpend(run: CrewRun, taskId: string, at: string): CrewRun | null {
+  const task = run.tasks.find((item) => item.id === taskId);
+  const budget = task ? taskBudget(run, task) : null;
+  if (!task || budget === null || task.costUsd <= budget) return null;
+  const paid = run.tasks.filter((item) => !item.proposed && item.status === 'accepted' && item.costUsd > 0);
+  const usual = paid.reduce((sum, item) => sum + item.costUsd, 0) / paid.length;
+  const ask: CrewAsk = {
+    reason: 'taskSpend',
+    message: `"${task.title}" has cost $${task.costUsd.toFixed(2)} over ${task.round} ${task.round === 1 ? 'round' : 'rounds'}, more than three times a usual task ($${usual.toFixed(2)}). Continue gives it another round, your words steer it, Skip task drops it.`,
+    taskId,
+  };
+  const stopped = patchTask({ ...run, spendAsked: [...run.spendAsked, taskId].slice(-200) }, taskId, (item) => ({ ...item, status: 'needsYou' }), at);
+  return feed({ ...stopped, status: 'needsYou', ask }, { who: 'crew', kind: 'needsYou', text: ask.message, taskId }, at);
 }
 
 /**
@@ -732,6 +818,15 @@ export function failBuild(run: CrewRun, taskId: string, error: string, at: strin
     };
     return feed({ ...patchTask(run, taskId, (item) => ({ ...item, status: 'needsYou', note }), at), status: 'needsYou', ask }, { who: 'crew', kind: 'needsYou', text: ask.message, taskId }, at);
   }
+  // The connection to the agent's provider was cut ("terminated"): nothing about the work went wrong, so it is retried
+  // without counting as a failed attempt, up to three times in a row.
+  if (isConnectionDrop(error)) {
+    const drops = task.note.startsWith('Connection dropped') ? Number(task.note.match(/\((\d+)\)/)?.[1] ?? 1) + 1 : 1;
+    if (drops <= MAX_CONNECTION_DROPS) {
+      const note = `Connection dropped (${drops}): ${shorten(error, 200)}`;
+      return feed(patchTask(run, taskId, (item) => ({ ...item, status: 'backlog', note }), at), { who: task.assignedTo ?? 'builder', kind: 'info', text: `The connection to the agent was cut while it built "${task.title}" (${shorten(cleanError(error), 80)}). That is the provider or the network, not the work, so it is tried again without counting as a failure (${drops} of ${MAX_CONNECTION_DROPS}).`, taskId }, at);
+    }
+  }
   const failures = task.note.startsWith('Build failed') ? Number(task.note.match(/\((\d+)\)/)?.[1] ?? 1) + 1 : 1;
   const stuck = failures > run.config.limits.maxSendBacks;
   const note = `Build failed (${failures}): ${shorten(error, 200)}`;
@@ -740,6 +835,14 @@ export function failBuild(run: CrewRun, taskId: string, error: string, at: strin
   }
   const ask: CrewAsk = { reason: 'noProgress', message: `"${task.title}" failed to build ${failures} times: ${shorten(error)}`, taskId };
   return feed({ ...patchTask(run, taskId, (item) => ({ ...item, status: 'needsYou', note }), at), status: 'needsYou', ask }, { who: 'crew', kind: 'needsYou', text: ask.message, taskId }, at);
+}
+
+/** Dropped connections in a row that are retried for free before they count as failures. */
+export const MAX_CONNECTION_DROPS = 3;
+
+/** Whether an agent's failure is its connection being cut (a stream ended early), rather than the work going wrong. */
+export function isConnectionDrop(error: string): boolean {
+  return /^\s*(?:TypeError:\s*)?terminated\s*$|ECONNRESET|socket hang up|other side closed|UND_ERR_SOCKET|fetch failed|network connection was lost|stream (?:was )?(?:closed|ended) (?:unexpectedly|early)/i.test(cleanError(error));
 }
 
 /** Whether an agent's failure says its usage, credit or subscription is spent, rather than that the work went wrong. */

@@ -118,6 +118,9 @@ export interface RefusalMemory {
 
 const MAX_REMEMBERED_REFUSALS = 5_000;
 
+/** Stored in place of a fingerprint when a refusal holds for every wording under a title. */
+export const ANY_WORDING = '*';
+
 /** Refusals kept in a small file in the app's data folder, so they survive a restart. */
 export class FileRefusalMemory implements RefusalMemory {
   private known = new Map<string, { fingerprint: string; reason: string; at: string }>();
@@ -142,7 +145,8 @@ export class FileRefusalMemory implements RefusalMemory {
   }
 
   has(key: string, fingerprint: string): boolean {
-    return this.known.get(key)?.fingerprint === fingerprint;
+    const known = this.known.get(key)?.fingerprint;
+    return known === fingerprint || known === ANY_WORDING;
   }
 
   add(key: string, fingerprint: string, reason: string): void {
@@ -293,7 +297,10 @@ export async function syncBrainToMirror(options: MirrorBrainOptions): Promise<Mi
         const reason = payload?.reason || (payload?.duplicate === true ? 'already there' : 'the mirror refused it');
         options.onRejected?.(entry, reason);
         // Only a refusal is remembered. "Already there" resolves itself once the mirror lists the entry.
-        if (payload?.duplicate !== true) options.refusals?.add(entryKey(entry.type, entry.title), entryFingerprint(entry), reason);
+        // "Too similar" is about the title, not the wording: many entries share one title, each with a different body,
+        // and remembering only the latest body re-sent all the others every pass (dozens of refusals a minute). Such a
+        // refusal covers every wording under that title.
+        if (payload?.duplicate !== true) options.refusals?.add(entryKey(entry.type, entry.title), /too similar/i.test(reason) ? ANY_WORDING : entryFingerprint(entry), reason);
       }
       return accepted;
     },

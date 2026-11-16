@@ -4,8 +4,8 @@ import type { AgentRunRequest, AgentRunResult, CrewConfig, CrewRun } from '@kai/
 import { DesktopCrewRunner } from '../apps/desktop/src/main/crew-runner';
 import type { CrewRunnerPorts } from '../apps/desktop/src/main/crew-runner';
 import type { ParallelSession } from '../apps/desktop/src/main/parallel-session';
-import { parsePlan } from '../apps/desktop/src/main/crew-prompts';
-import { guideCrewRun, helperChoiceFor } from '../apps/desktop/src/main/crew-engine';
+import { parsePlan, planPrompt, reviewPrompt } from '../apps/desktop/src/main/crew-prompts';
+import { askTaskSpend, awayEligible, guideCrewRun, helperChoiceFor, setAway } from '../apps/desktop/src/main/crew-engine';
 
 const PLAN = JSON.stringify({
   tasks: [
@@ -1098,5 +1098,93 @@ describe('crew runner, second round', () => {
     expect(second.feed.some((entry) => entry.text.includes('Another crew on this project'))).toBe(true);
     await runToIdle(f.runner, first.id);
     await runToIdle(f.runner, second.id);
+  });
+  it('keeps building the other tasks while one waits on a question, and waits only when nothing else can go', async () => {
+    const plan = JSON.stringify({ tasks: [
+      { id: 'a', title: 'Header', role: 'builder', description: 'Header', acceptance: ['Renders'], dependsOn: [] },
+      { id: 'b', title: 'Footer', role: 'builder', description: 'Footer', acceptance: ['Renders'], dependsOn: [] },
+      { id: 'c', title: 'Header menu', role: 'builder', description: 'Menu', acceptance: ['Opens'], dependsOn: ['a'] },
+    ] });
+    const f = fixture({ plan: [plan], lead: ['{"verdict":"needsYou","feedback":"Which logo?"}', '{"verdict":"accept"}'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build the site', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('needsYou');
+    expect(run.ask?.taskId).toBe('a');
+    expect(run.tasks.find((task) => task.id === 'b')?.status).toBe('accepted');
+    expect(run.tasks.find((task) => task.id === 'c')?.status).toBe('backlog');
+    expect(run.feed.some((entry) => entry.text.includes('waits for your answer. The crew carries on'))).toBe(true);
+    await f.runner.answer(started.id, 'continue', 'Use the round logo.', 1);
+    const done = await runToIdle(f.runner, started.id);
+    expect(done.status).toBe('completed');
+  });
+
+  it('keeps a second question in a queue instead of over the first, and brings it up once the first is answered', async () => {
+    const plan = JSON.stringify({ tasks: [
+      { id: 'a', title: 'Header', role: 'builder', description: 'Header', acceptance: ['Renders'], dependsOn: [] },
+      { id: 'b', title: 'Footer', role: 'builder', description: 'Footer', acceptance: ['Renders'], dependsOn: [] },
+    ] });
+    const f = fixture({ plan: [plan], lead: ['{"verdict":"needsYou","feedback":"Which logo?"}', '{"verdict":"needsYou","feedback":"Which links?"}', '{"verdict":"accept"}'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build the site', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('needsYou');
+    const first = run.ask!.taskId;
+    expect(run.queuedAsks.map((ask) => ask.taskId)).toHaveLength(1);
+    const queued = run.queuedAsks[0]!.taskId;
+    expect(queued).not.toBe(first);
+    await f.runner.answer(started.id, 'continue', 'Do it this way.', 1);
+    const next = await runToIdle(f.runner, started.id);
+    expect(next.ask?.taskId).toBe(queued);
+    expect(next.queuedAsks).toHaveLength(0);
+  });
+
+  it('retries a build whose connection was cut without counting it as a failure or asking the Lead', async () => {
+    const f = fixture({ buildFails: 2, buildError: 'terminated' });
+    f.runner.dropRetryMs = 0;
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('completed');
+    expect(run.feed.some((entry) => entry.text.includes('The connection to the agent was cut'))).toBe(true);
+    expect(f.requests.some((request) => request.prompt.includes('A task has failed or been sent back too many times'))).toBe(false);
+  });
+
+  it('stops a task that has cost far more than a usual one, and asks later the next time', async () => {
+    const f = fixture();
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const base = await runToIdle(f.runner, started.id);
+    const accepted = (id: string, cost: number) => ({ ...base.tasks[0]!, id, title: id, status: 'accepted' as const, costUsd: cost });
+    const pricey = { ...base.tasks[0]!, id: 'big', title: 'Big task', status: 'sentBack' as const, costUsd: 5, round: 4 };
+    const run: CrewRun = { ...base, status: 'running', tasks: [accepted('x', 1), accepted('y', 1), accepted('z', 1), pricey] };
+    const asked = askTaskSpend(run, 'big', '2026-11-01T10:00:00.000Z')!;
+    expect(asked.ask).toMatchObject({ reason: 'taskSpend', taskId: 'big' });
+    expect(asked.ask!.message).toContain('$5.00');
+    expect(asked.tasks.find((task) => task.id === 'big')?.status).toBe('needsYou');
+    // Once asked, the ceiling doubles: the same cost does not stop it again.
+    expect(askTaskSpend({ ...asked, ask: null, tasks: asked.tasks.map((task) => task.id === 'big' ? { ...task, status: 'sentBack' as const } : task) }, 'big', '2026-11-01T10:00:00.000Z')).toBeNull();
+    expect(awayEligible({ ...asked, away: { ...asked.away, enabled: true } })).toBeNull();
+  });
+
+  it('posts a summary of the stretch away when away mode is turned off', async () => {
+    const f = fixture();
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    const on = setAway(run, true, 0, '2026-11-01T09:00:00.000Z');
+    expect(on.away.since).toBe('2026-11-01T09:00:00.000Z');
+    const off = setAway(on, false, 0, '2026-11-01T11:00:00.000Z');
+    const last = off.chat.at(-1)!.text;
+    expect(last).toContain('While you were away: 2 tasks accepted');
+    expect(last).toContain('Nothing is waiting on you.');
+    expect(off.away.since).toBeNull();
+  });
+
+  it('tells the planner and the reviewers not to stop on criteria only the person can meet, or on wording late in a task', async () => {
+    const f = fixture();
+    expect(planPrompt('Build it', f.config, '', { tasks: [] })).toContain('Never write a criterion only the person can meet');
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    const task = { ...run.tasks[0]!, round: 4 };
+    const prompt = reviewPrompt(run, task, 'done');
+    expect(prompt).toContain('This task is on round 4');
+    expect(prompt).toContain('cannot be met by the crew');
+    expect(prompt).toContain('playwright');
   });
 });

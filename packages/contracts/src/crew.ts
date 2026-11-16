@@ -194,7 +194,7 @@ export type CrewFeedEntry = z.infer<typeof crewFeedEntrySchema>;
 /** Why a run stopped to ask. The user answers Continue or Finish; nothing is killed. */
 export const crewAskSchema = z
   .object({
-    reason: z.enum(['spend', 'time', 'sendBacks', 'sameFailure', 'securityBlock', 'designApproval', 'noProgress', 'approval', 'phaseSpend']),
+    reason: z.enum(['spend', 'time', 'sendBacks', 'sameFailure', 'securityBlock', 'designApproval', 'noProgress', 'approval', 'phaseSpend', 'taskSpend']),
     message: z.string().max(1_400),
     taskId: z.string().max(60).optional(),
     // The phase a phase-spend question is about, so answering it can be remembered for that phase.
@@ -280,6 +280,8 @@ export const crewAwaySchema = z
       choice: z.string().max(1_200),
       check: z.string().max(800).default(''),
     }).strict()).max(40).default([]),
+    // When away mode was last turned on, so turning it off can say what happened in between.
+    since: z.string().nullable().default(null),
   })
   .strict();
 export type CrewAway = z.infer<typeof crewAwaySchema>;
@@ -316,7 +318,11 @@ export const crewRunSchema = z
     // Whether the Lead writes for someone who is not very technical: no jargon, terms explained the first time.
     explainSimply: z.boolean().default(true),
     // Away mode: the Lead takes one of its own safe options for a stuck task instead of waiting for the person.
-    away: crewAwaySchema.default({ enabled: false, minutes: 15, picked: [], decisions: [] }),
+    away: crewAwaySchema.default({ enabled: false, minutes: 15, picked: [], decisions: [], since: null }),
+    // Questions about other tasks that came up while one was already waiting on the person; each comes up in turn.
+    queuedAsks: z.array(crewAskSchema).max(20).default([]),
+    // Each time a task was stopped for costing far more than a usual task, so the next stop for it comes later.
+    spendAsked: z.array(z.string().max(60)).max(200).default([]),
     // Things waiting for, or already given, the person's yes or no.
     approvals: z.array(crewApprovalSchema).max(30).default([]),
     // What the Lead found still undone when the board finished, so "done" says what is and is not.
@@ -615,7 +621,8 @@ export function crewStatusLine(run: CrewRun): CrewStatusLine {
   const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
   const spent = `$${run.spentUsd.toFixed(2)} so far`;
   const open = board.filter((task) => task.status !== 'accepted' && task.status !== 'skipped').length;
-  if (run.ask) return { tone: 'waiting', text: `Waiting on you: ${run.ask.message.slice(0, 180)}` };
+  // A parked question leaves the run working on the other tasks, and the line says so.
+  if (run.ask) return { tone: 'waiting', text: `${run.status === 'running' ? 'Working on other tasks; one waits on you' : 'Waiting on you'}: ${run.ask.message.slice(0, 180)}` };
   switch (run.status) {
     case 'planning':
       return { tone: 'working', text: 'The Lead is reading the project and planning the tasks.' };

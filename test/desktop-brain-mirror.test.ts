@@ -310,6 +310,16 @@ describe('remembering what the mirror refused', () => {
     expect(outcome.posted).toBe(1);
   });
 
+  it('does not ask again under a title refused as too similar, whatever the wording', async () => {
+    const memory = new FileRefusalMemory(path.join(memoryDir, 'refused.json'));
+    const similar = () => ({ ok: true, json: async () => ({ rejected: true, reason: 'Title too similar to existing "decisions" entry (100% match)' }) }) as unknown as Response;
+    await syncBrainToMirror(options(mirror([], similar).fetchImpl, memory));
+    await writeBrain('A different body under the same title.');
+    const again = mirror(['Footer sat at the top of short pages'], similar);
+    await syncBrainToMirror(options(again.fetchImpl, memory));
+    expect(again.posted).toEqual([]);
+  });
+
   it('does not remember a duplicate, because that resolves itself once the mirror lists the entry', async () => {
     const memory = new FileRefusalMemory(path.join(memoryDir, 'refused.json'));
     const duplicate = () => ({ ok: true, json: async () => ({ duplicate: true }) }) as unknown as Response;

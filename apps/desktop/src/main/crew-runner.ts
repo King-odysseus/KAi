@@ -3,7 +3,7 @@ import { classifyWork, crewConfigSchema, crewRunSchema, phaseReportMarkdown } fr
 import type { AgentRunRequest, AgentRunResult, ConversationOrigin, CrewRevertPreview, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask, CrewTaskDiff } from '@kai/contracts';
 import {
   acceptPhase, addNotes, clearNotes, phaseToPauseAfter, setPauseAfter, openTasks, reopenOpenTasks, addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, isBareContinue, mergeChat, phaseFromFollowUp, requestApprovals, resetForRevert, ruleBlock, isUsageLimit, setTaskCheckpoint, tasksToRebuild, teachBlockers, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
-  reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun, offerOptions, awayEligible, applyAwayPick, applyTriage, repeatsFailure, setAway,
+  reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun, offerOptions, awayEligible, applyAwayPick, applyTriage, repeatsFailure, setAway, parkAsk, parkableAsk, queueAsks, askTaskSpend, isConnectionDrop,
 } from './crew-engine';
 import { askPrompt, awayPrompt, parseAwayChoice, coveragePrompt, parseCoverage, parsePlanFull, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
 import type { ParallelSession } from './parallel-session';
@@ -115,6 +115,8 @@ export class DesktopCrewRunner {
 
   /** How many times the Lead has been asked about a task that failed the same way twice, so each task gets at most two. */
   private readonly triaged = new Map<string, number>();
+  /** How long to wait before retrying a build whose connection was cut. Tests set it to zero. */
+  dropRetryMs = 20_000;
   /** Away-mode waits: one timer per run, replaced when the question changes. */
   private readonly awayTimers = new Map<string, { key: string; timer: ReturnType<typeof setTimeout> }>();
   /** Questions the Lead judged were the person's to answer, so they are not put to it again and again. */
@@ -485,7 +487,8 @@ export class DesktopCrewRunner {
     const run = await this.require(runId);
     if (this.active.has(runId)) return this.active.get(runId)!.run;
     if (run.status === 'completed' || run.status === 'stopped') throw new Error('This crew has finished.');
-    if (run.ask || run.status === 'needsYou') throw new Error('This crew is waiting for your answer first.');
+    // A question about one task does not hold the rest: the crew resumes the other tasks and the question stays open.
+    if ((run.ask && !parkableAsk(run.ask)) || (run.status === 'needsYou' && !run.ask)) throw new Error('This crew is waiting for your answer first.');
     const at = this.now().toISOString();
     return this.resumeWith(run, ownerWindowId, {
       // A run with no tasks yet was interrupted while planning, so it plans again instead of starting an empty build.
@@ -573,7 +576,7 @@ export class DesktopCrewRunner {
 
   private async commit(active: ActiveRun, run: CrewRun): Promise<void> {
     // A line added to the thread while another save was in flight is kept, whichever copy of the run reaches here.
-    const stamped = { ...run, chat: mergeChat(active.run.chat, run.chat), liveConversations: this.liveIds(active) };
+    const stamped = { ...queueAsks(active.run, run), chat: mergeChat(active.run.chat, run.chat), liveConversations: this.liveIds(active) };
     active.run = stamped;
     await this.ports.save(stamped);
     this.ports.notifyChanged(active.ownerWindowId, stamped);
@@ -600,7 +603,14 @@ export class DesktopCrewRunner {
 
   /** The Lead looks at its own options for an idle crew's waiting question, and the crew carries on when one is safe. */
   private async awayNow(run: CrewRun, ownerWindowId: number): Promise<void> {
-    if (this.active.has(run.id)) return;
+    const live = this.active.get(run.id);
+    if (live) {
+      // The crew is working on other tasks while this question is parked: the pick is applied to the run as it is now.
+      if (live.cancelled) return;
+      const picked = await this.awayDecide(live);
+      if (picked && !live.cancelled) await this.commit(live, picked);
+      return;
+    }
     const active = await this.localActive(run, ownerWindowId);
     const next = await this.awayDecide(active);
     if (next) await this.resumeWith(active.run, ownerWindowId, next);
@@ -766,6 +776,11 @@ export class DesktopCrewRunner {
         const picked = await this.awayDecide(active);
         if (picked) { await this.commit(active, picked); continue; }
       }
+      // A question about one task holds only that task (and what depends on it); the rest of the board carries on.
+      if (run.status === 'needsYou') {
+        const parked = parkAsk(active.run, this.now().toISOString());
+        if (parked) { await this.commit(active, parked); continue; }
+      }
       if (run.status !== 'running') return;
 
       // Work waiting for a verdict (a task whose review was cut short) is judged before anything new is started.
@@ -781,12 +796,20 @@ export class DesktopCrewRunner {
       const ready = pickTasks(run);
       const serialRetry = active.serialRetryTasks.map((id) => ready.find((task) => task.id === id)).find((task) => task !== undefined);
       const next = serialRetry ?? ready[0];
+      if (!next && run.ask) {
+        // Everything else is done or waits on the parked question: the crew now waits for the person.
+        await this.commit(active, { ...run, status: 'needsYou', updatedAt: this.now().toISOString() });
+        return;
+      }
       if (!next) {
         const message = unfinishedReason(run) ?? 'No task can start.';
         run = { ...run, status: 'needsYou', ask: { reason: 'noProgress', message: `The crew is stuck: ${message}` }, updatedAt: this.now().toISOString() };
         await this.commit(active, settle(run, run.updatedAt));
         return;
       }
+      // A task that has cost far more than a usual one is stopped with a question before it gets another round.
+      const pricey = ready.map((task) => askTaskSpend(run, task.id, this.now().toISOString())).find((item) => item !== null);
+      if (pricey) { await this.commit(active, pricey); continue; }
       const roles = run.config.roles;
       const batch = serialRetry
         ? [next]
@@ -965,7 +988,21 @@ export class DesktopCrewRunner {
       const block = ruleBlock(error);
       if (block) await this.ports.blockers?.save(base.projectId, { key: block.key, note: block.note }).catch(() => undefined);
     }
+    if (isConnectionDrop(error)) {
+      // The provider cut the stream: a short wait before the free retry, so it is not cut again straight away.
+      await this.wait(active, this.dropRetryMs);
+      return;
+    }
     await this.triage(active, taskId, error, previousNote);
+  }
+
+  /** Waits, unless the run is stopped first. */
+  private async wait(active: ActiveRun, ms: number): Promise<void> {
+    if (ms <= 0 || active.cancelled) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      active.controller.signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
   }
 
   /**

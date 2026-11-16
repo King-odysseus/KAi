@@ -65,6 +65,7 @@ export function planPrompt(goal: string, config: CrewConfig, conventions: string
     'Rules for the tasks:',
     '- Small enough for one agent to finish in one sitting. Prefer 5 to 14 tasks.',
     '- Each task has 1 to 5 acceptance criteria that can be checked by reading the code or running a command.',
+    '- Never write a criterion only the person can meet (their approval, their sign-off, "every change is one they approved"). The crew cannot satisfy it, so the task would stop and wait. Put what needs their yes under "approvals" instead, and write the criterion as something the crew can check.',
     '- "dependsOn" lists task ids that must be accepted first. Use it only where order truly matters.',
     '- Give code tasks to a role that writes code. Never give a task to a read-only role.',
     '- When the goal or its plan is divided into phases, give every task a "phase": the name of the phase as the plan names it ("Phase 1: Shell, gating, access"). Otherwise leave "phase" null.',
@@ -77,6 +78,15 @@ export function planPrompt(goal: string, config: CrewConfig, conventions: string
 
 /** Anything that shows on screen is checked by looking at it, not by asking the person. */
 export const BROWSER_CHECK_LINE = 'To check anything that shows on screen (a page, a layout, a button, that a change left the rest of the app as it was), start the app if it is not running and look at it yourself with the browser tools (the playwright tools: navigate, snapshot, screenshot). Do that instead of asking the person to look.';
+
+/**
+ * A task several rounds in is usually stuck on wording, a report detail or a criterion read two ways, not on broken
+ * work: two tasks went to round 11 and 13 that way. From round 3 the reviewer is told to accept and note it instead.
+ */
+export function lateRoundLines(task: Pick<CrewTask, 'round'>): string[] {
+  if (task.round < 3) return [];
+  return [`This task is on round ${task.round}. Do not send it back again over wording, a detail of a report, or a criterion that can be read more than one way: accept it and put the disagreement in "notes". Send it back only for something actually broken or missing.`];
+}
 
 /**
  * While the person is away, a reviewer is told to settle what it can check or undo, and to leave only what is truly
@@ -111,6 +121,8 @@ function reviewPromptBase(run: CrewRun, task: CrewTask, builderReply: string, ch
     builderReply.trim().slice(-2_500) || '(no reply)',
     '',
     BROWSER_CHECK_LINE,
+    'A criterion that asks for the person\'s approval or sign-off cannot be met by the crew: judge the work itself, and say in "notes" what needs their approval. Do not stop the task for it.',
+    ...lateRoundLines(task),
     ...awayReviewLines(run),
     '',
     'Reply with one JSON object and nothing else:',
@@ -135,6 +147,7 @@ function reviewPreamble(run: CrewRun, task: CrewTask): string[] {
     ...(task.files.length > 0 ? [`Files changed: ${task.files.slice(0, 40).join(', ')}`] : []),
     '',
     BROWSER_CHECK_LINE,
+    ...lateRoundLines(task),
     ...awayReviewLines(run),
     '',
     ...REVIEW_SHAPE,
