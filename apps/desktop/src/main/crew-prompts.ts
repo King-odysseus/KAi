@@ -420,14 +420,15 @@ export function awayPrompt(run: CrewRun, task: CrewTask): string {
  * Reads the Lead's away-mode answer: an option by number, or (when there were none) its own instruction. "none", an
  * option that does not exist, or anything unreadable keeps the question waiting.
  */
-export function parseAwayChoice(text: string, count: number): { index: number; reason: string; check: string; instruction?: string } | null {
+export function parseAwayChoice(text: string, count: number): { index: number; reason: string; check: string; instruction?: string } | { none: true; reason: string } | null {
   const candidates = [...text.matchAll(/\{[^{}]*"choice"[^{}]*\}/g)].map((match) => match[0]);
   for (const candidate of candidates.reverse()) {
     try {
       const value = JSON.parse(candidate) as { choice?: unknown; reason?: unknown; check?: unknown; instruction?: unknown };
       const reason = typeof value.reason === 'string' ? value.reason.trim().slice(0, 300) : '';
       const check = typeof value.check === 'string' ? value.check.trim().slice(0, 800) : '';
-      if (value.choice === 'none') return null;
+      // "none" keeps the question for the person, with the Lead's reason so they can see why.
+      if (value.choice === 'none') return { none: true, reason };
       if (value.choice === 'own') {
         const instruction = typeof value.instruction === 'string' ? value.instruction.trim().slice(0, 1_200) : '';
         if (count === 0 && instruction) return { index: -1, reason, check, instruction };

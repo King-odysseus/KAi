@@ -632,9 +632,12 @@ export class DesktopCrewRunner {
     if (active.cancelled) return null;
     const at = this.now().toISOString();
     const paid = addSpend(active.run, task.id, answer.costUsd, at);
-    if (!answer.value) {
+    if (!answer.value || 'none' in answer.value) {
       this.awayDeclined.add(key);
-      await this.commit(active, this.info(paid, options.length > 0 ? 'The Lead left this question for you: none of its options is safe to take without you.' : 'The Lead left this question for you: there is no safe way forward to take without you.'));
+      // The Lead's own reason goes with it: "no safe way forward" alone left the person guessing why.
+      const why = answer.value ? (answer.value.reason ? ` Why: ${answer.value.reason}` : '') : ' Its answer could not be read.';
+      const text = `${options.length > 0 ? 'The Lead left this question for you: none of its options is safe to take without you.' : 'The Lead left this question for you: there is no safe way forward to take without you.'}${why}`;
+      await this.commit(active, addChat(this.info(paid, text), { from: 'lead', kind: 'note', text }, this.now().toISOString()));
       return null;
     }
     // With no options the Lead wrote its own way forward; either way, what to check later goes in the report.

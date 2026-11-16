@@ -333,8 +333,8 @@ function AwayRules({ policy, onChange }: { policy: CrewAwayPolicy; onChange: (po
           <div className="crew-away-grid">
             {AWAY_RULES.map((rule) => (
               <div key={rule.key} className="crew-away-rule">
-                <span className="crew-away-text"><span>{rule.label}</span><small>{rule.hint}</small></span>
                 <Toggle size="sm" checked={policy[rule.key]} ariaLabel={rule.label} onChange={(checked) => onChange({ ...policy, [rule.key]: checked })} />
+                <span className="crew-away-text"><span>{rule.label}</span><small>{rule.hint}</small></span>
               </div>
             ))}
           </div>

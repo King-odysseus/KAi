@@ -631,8 +631,12 @@ export function taskBudget(run: CrewRun, task: CrewTask): number | null {
   const step = Math.max(1, usual * 3);
   // After a "carry on", the next stop is a full step past what the task had cost by then: raising the ceiling by a
   // multiple left a task already past it asking again at once, three times in a row.
-  const lastAsked = run.spendAsked.filter((entry) => entry.split('@')[0] === task.id).map((entry) => Number(entry.split('@')[1] ?? 0)).reduce((max, cost) => Math.max(max, Number.isFinite(cost) ? cost : 0), -1);
-  return lastAsked < 0 ? step : lastAsked + step;
+  const entries = run.spendAsked.filter((entry) => entry.split('@')[0] === task.id);
+  const costed = entries.filter((entry) => entry.includes('@')).map((entry) => Number(entry.split('@')[1])).filter((cost) => Number.isFinite(cost));
+  if (costed.length > 0) return Math.max(...costed) + step;
+  // Records from before the cost was kept say only that it was asked: each one moves the ceiling out a step. Reading
+  // them as $0 put the ceiling back at one step and asked again at once.
+  return step * (entries.length + 1);
 }
 
 /** Stops one task that has cost far more than usual, with a question; the rest of the crew can carry on meanwhile. */
@@ -642,9 +646,11 @@ export function askTaskSpend(run: CrewRun, taskId: string, at: string): CrewRun 
   if (!task || budget === null || task.costUsd <= budget) return null;
   const paid = run.tasks.filter((item) => !item.proposed && item.status === 'accepted' && item.costUsd > 0);
   const usual = paid.reduce((sum, item) => sum + item.costUsd, 0) / paid.length;
+  const awayPolicy = run.away.policy ?? DEFAULT_AWAY_POLICY;
+  const pastAwayLimit = run.away.enabled && awayPolicy.costly && task.costUsd >= awayPolicy.costlyMaxUsd;
   const ask: CrewAsk = {
     reason: 'taskSpend',
-    message: `"${task.title}" has cost $${task.costUsd.toFixed(2)} over ${task.round} ${task.round === 1 ? 'round' : 'rounds'}, more than three times a usual task ($${usual.toFixed(2)}). Continue gives it another round, your words steer it, Skip task drops it.`,
+    message: `"${task.title}" has cost $${task.costUsd.toFixed(2)} over ${task.round} ${task.round === 1 ? 'round' : 'rounds'}, more than three times a usual task ($${usual.toFixed(2)}).${pastAwayLimit ? ` That is past the $${awayPolicy.costlyMaxUsd.toFixed(2)} you allowed per task while away, so it waits for you.` : ''} Continue gives it another round, your words steer it, Skip task drops it.`,
     taskId,
   };
   const marked = { ...run, spendAsked: [...run.spendAsked, `${taskId}@${task.costUsd.toFixed(2)}`].slice(-200) };

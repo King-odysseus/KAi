@@ -591,7 +591,7 @@ describe('crew runner', () => {
     const run = (await f.runner.get(started.id))!;
     expect(run.status).toBe('needsYou');
     expect(f.requests.some((request) => request.prompt.includes('No options were offered'))).toBe(true);
-    expect(run.feed.some((entry) => entry.text.includes('no safe way forward to take without you'))).toBe(true);
+    expect(run.feed.some((entry) => entry.text.includes('no safe way forward to take without you. Why: Their call.'))).toBe(true);
   });
 
   it('lets the Lead write its own way forward while the person is away, and lists it in the report', async () => {
@@ -1207,6 +1207,15 @@ describe('crew runner, second round', () => {
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('completed');
     expect(run.away.decisions.some((item) => item.choice.includes("Went on without"))).toBe(true);
+  });
+
+  it('reads spend records saved before the cost was kept as a step each, not as $0', async () => {
+    const f = fixture();
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const base = await runToIdle(f.runner, started.id);
+    const accepted = (id: string) => ({ ...base.tasks[0]!, id, title: id, status: 'accepted' as const, costUsd: 1.67 });
+    const run: CrewRun = { ...base, status: 'running', spendAsked: ['big', 'big', 'big'], tasks: [accepted('x'), accepted('y'), accepted('z'), { ...base.tasks[0]!, id: 'big', title: 'Big', status: 'sentBack' as const, costUsd: 18.6 }] };
+    expect(askTaskSpend(run, 'big', '2026-11-01T10:00:00.000Z')).toBeNull();
   });
 
   it('moves the spend ceiling past what the task already cost once the person says carry on', async () => {
