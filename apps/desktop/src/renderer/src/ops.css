@@ -3184,14 +3184,22 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 /* The thread scrolls inside a shorter box, and the composer stays pinned to the bottom of the page while it scrolls, so a
    long feed can never push the message box out of reach. */
 .crew-chat-thread { max-height: 45vh; overflow-y: auto; }
-/* Away mode's rules: a compact grid of checkboxes under the settings cards. Layout only; colours come from the theme. */
-.crew-away-rules { padding: 8px 12px; border: 1px solid var(--border-soft); border-radius: var(--radius); }
-.crew-away-rules summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
-.crew-away-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 6px 16px; margin-top: 8px; }
-.crew-away-rule { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
-.crew-away-limit { display: inline-flex; align-items: center; gap: 4px; }
-.crew-away-limit input { width: 64px; }
-.crew-away-other { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; font-size: 12px; }
+/* Away mode's rules: a collapsible section in the app's flat style (no borders), rows aligned in a grid with the
+   switch at the right edge of each. Layout only; colours come from theme tokens. */
+.crew-away-rules { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: var(--radius); background: var(--bg-hover); }
+.crew-away-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 0; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.crew-away-head strong { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.crew-away-head small { min-width: 0; overflow: hidden; color: var(--text-dim); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.crew-away-body { display: flex; flex-direction: column; gap: 12px; padding-left: 22px; }
+.crew-away-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 24px; }
+.crew-away-rule { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; padding: 4px 0; }
+.crew-away-text { display: flex; min-width: 0; flex-direction: column; gap: 1px; font-size: 12px; }
+.crew-away-text small { color: var(--text-dim); font-size: 10.5px; }
+.crew-away-fields { display: grid; grid-template-columns: minmax(200px, 280px) minmax(240px, 1fr); gap: 8px 24px; align-items: end; }
+.crew-away-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-dim); }
+@media (max-width: 720px) { .crew-away-fields { grid-template-columns: 1fr; } }
+/* The settings cards above it: flat, no borders, the same as the rest of the app's cards. */
+.crew-chat-head .toggle-row { border: 0; background: var(--bg-hover); }
 .crew-chat > .kai-composer { position: sticky; bottom: 0; z-index: 2; }
 .crew-chat-log { display: flex; flex-direction: column; gap: 2px; padding-left: 8px; border-left: 2px solid var(--border); font-size: 12px; }
 .crew-chat-log small { color: var(--text-dim); }

@@ -1,4 +1,4 @@
-import { CircleHelp, ExternalLink, Play, Search, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, CircleHelp, ExternalLink, Play, Search, X } from 'lucide-react';
 import { Markdown } from './Markdown';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { DEFAULT_AWAY_POLICY } from '@kai/contracts';
@@ -8,6 +8,8 @@ import { ROUTE_LABEL, routeMessage, type CrewRoute } from '../crew-routing';
 import { CrewApprovals } from './CrewApprovals';
 import { Switch } from './ui/Switch';
 import { Select } from './ui/Select';
+import { Toggle } from './ui/Toggle';
+import { UiTextInput } from './UiTextInput';
 import { Composer, ComposerInput, ComposerPause, ComposerSend, ComposerStop, ComposerToolbar } from './ui/Composer';
 import { UiButton } from './UiButton';
 
@@ -155,7 +157,7 @@ export function CrewChat({ run, activity, working, onSend, onStopAsk, onKeepGoin
         <label className="toggle-row">
           <span>
             <strong>I am away</strong>
-            <small>{run.away.enabled ? (run.away.minutes > 0 ? `On: a stuck task that waits ${run.away.minutes} minutes for you is settled by the Lead, using the safest of its own options.` : 'On: the Lead settles a stuck task at once, using the safest of its own options.') : 'Off: the crew waits for you on every question.'} Security, approvals, spend and time limits always wait for you.{run.away.picked.length > 0 ? ` ${run.away.picked.length} chosen so far, listed in the log.` : ''}</small>
+            <small>{run.away.enabled ? (run.away.minutes > 0 ? `On: a stuck task that waits ${run.away.minutes} minutes for you is settled by the Lead, using the safest of its own options.` : 'On: the Lead settles a stuck task at once, using the safest of its own options.') : 'Off: the crew waits for you on every question.'} It follows the rules below; plan approvals and run limits always wait for you.{run.away.picked.length > 0 ? ` ${run.away.picked.length} chosen so far, listed in the log.` : ''}</small>
           </span>
           <Switch checked={run.away.enabled} onChange={(event) => void guarded(() => onAway(event.target.checked, run.away.minutes))} />
         </label>
@@ -302,39 +304,52 @@ export function CrewChat({ run, activity, working, onSend, onStopAsk, onKeepGoin
 }
 
 /** The rules away mode follows, one row per kind of blocker. Each is saved as soon as it is changed. */
-const AWAY_RULES: Array<{ key: keyof Omit<CrewAwayPolicy, 'costlyMaxUsd' | 'other'>; label: string }> = [
-  { key: 'retry', label: 'Retry or redirect a failing task' },
-  { key: 'skip', label: 'Skip a task the goal does not need' },
-  { key: 'reversible', label: 'Make code choices that can be undone' },
-  { key: 'recheck', label: 'Go on when a check gives an unreadable answer (listed for you to re-check)' },
-  { key: 'costly', label: 'Let a costly task carry on' },
-  { key: 'dependencies', label: 'Add a dependency or package' },
-  { key: 'paid', label: 'Use anything that costs money' },
-  { key: 'security', label: 'Make security or permission changes' },
-  { key: 'deleteWork', label: 'Delete or overwrite work' },
+const AWAY_RULES: Array<{ key: keyof Omit<CrewAwayPolicy, 'costlyMaxUsd' | 'other'>; label: string; hint: string }> = [
+  { key: 'retry', label: 'Retry a failing task', hint: 'With a different instruction' },
+  { key: 'skip', label: 'Skip a task', hint: 'When the goal does not need it' },
+  { key: 'reversible', label: 'Make reversible code choices', hint: 'Keep or revert a small change, adjust a check' },
+  { key: 'recheck', label: 'Go on past an unreadable check', hint: 'Listed for you to re-check' },
+  { key: 'costly', label: 'Let a costly task carry on', hint: 'Up to the limit below' },
+  { key: 'dependencies', label: 'Add a dependency', hint: 'A new package or library' },
+  { key: 'paid', label: 'Spend money', hint: 'Paid services, plans, upgrades' },
+  { key: 'security', label: 'Change security or permissions', hint: 'Auth, access, secrets handling' },
+  { key: 'deleteWork', label: 'Delete or overwrite work', hint: 'Files, data or history' },
 ];
 
 function AwayRules({ policy, onChange }: { policy: CrewAwayPolicy; onChange: (policy: CrewAwayPolicy) => void }): ReactNode {
+  const [open, setOpen] = useState(false);
   const [other, setOther] = useState(policy.other);
   useEffect(() => setOther(policy.other), [policy.other]);
+  const allowed = AWAY_RULES.filter((rule) => policy[rule.key]).length;
   return (
-    <details className="crew-away-rules" open>
-      <summary><strong>While I am away, the Lead may…</strong> <small>Everything it decides is listed in the report for you to check.</small></summary>
-      <div className="crew-away-grid">
-        {AWAY_RULES.map((rule) => (
-          <label key={rule.key} className="crew-away-rule">
-            <input type="checkbox" checked={policy[rule.key]} onChange={(event) => onChange({ ...policy, [rule.key]: event.target.checked })} />
-            <span>{rule.label}</span>
-            {rule.key === 'costly' && (
-              <span className="crew-away-limit">up to $<input type="number" min={0} max={1000} step={1} aria-label="Most a task may cost before it waits for you" value={policy.costlyMaxUsd} disabled={!policy.costly} onChange={(event) => onChange({ ...policy, costlyMaxUsd: Math.max(0, Math.min(1000, Number(event.target.value) || 0)) })} /> per task</span>
-            )}
-          </label>
-        ))}
-      </div>
-      <label className="crew-away-other">
-        <span>Other rules, in your words</span>
-        <input type="text" maxLength={600} value={other} placeholder="For example: never change the database schema" onChange={(event) => setOther(event.target.value)} onBlur={() => { if (other !== policy.other) onChange({ ...policy, other }); }} />
-      </label>
-    </details>
+    <section className="crew-away-rules" aria-label="Away rules">
+      <button type="button" className="crew-away-head" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <strong>While I am away, the Lead may decide</strong>
+        <small>{allowed} of {AWAY_RULES.length} allowed{policy.costly ? ` · costly tasks up to $${policy.costlyMaxUsd}` : ''}{policy.other.trim() ? ' · plus your own rule' : ''}. Every decision is listed in the report.</small>
+      </button>
+      {open && (
+        <div className="crew-away-body">
+          <div className="crew-away-grid">
+            {AWAY_RULES.map((rule) => (
+              <div key={rule.key} className="crew-away-rule">
+                <span className="crew-away-text"><span>{rule.label}</span><small>{rule.hint}</small></span>
+                <Toggle size="sm" checked={policy[rule.key]} ariaLabel={rule.label} onChange={(checked) => onChange({ ...policy, [rule.key]: checked })} />
+              </div>
+            ))}
+          </div>
+          <div className="crew-away-fields">
+            <label className="crew-away-field crew-away-limit">
+              <span>Most a task may cost before it waits for you (USD)</span>
+              <UiTextInput type="number" min={0} max={1000} step={1} value={policy.costlyMaxUsd} disabled={!policy.costly} onChange={(event) => onChange({ ...policy, costlyMaxUsd: Math.max(0, Math.min(1000, Number(event.target.value) || 0)) })} />
+            </label>
+            <label className="crew-away-field crew-away-other">
+              <span>Your own rules, in your words</span>
+              <UiTextInput maxLength={600} value={other} placeholder="For example: never change the database schema" onChange={(event) => setOther(event.target.value)} onBlur={() => { if (other !== policy.other) onChange({ ...policy, other }); }} />
+            </label>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
