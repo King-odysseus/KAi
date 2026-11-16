@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { MAX_SUB_AGENTS_TOTAL, buildRoadmap, phaseKey, roleAccess } from '@kai/contracts';
-import type { CrewAsk, CrewChatEntry, CrewConfig, CrewFeedEntry, CrewReview, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
+import { DEFAULT_AWAY_POLICY, MAX_SUB_AGENTS_TOTAL, buildRoadmap, phaseKey, roleAccess } from '@kai/contracts';
+import type { CrewAsk, CrewAwayPolicy, CrewChatEntry, CrewConfig, CrewFeedEntry, CrewReview, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
 
 /**
  * The rules of a Crew run, kept apart from anything that starts an agent so they can be tested without one. Every
@@ -538,9 +538,14 @@ export const AWAY_MAX_PER_RUN = 10;
  */
 export function awayEligible(run: CrewRun): CrewTask | null {
   const ask = run.ask;
+  const policy = run.away.policy ?? DEFAULT_AWAY_POLICY;
   // A parked question (the crew carries on with other tasks meanwhile) leaves the run running, and still counts.
   if (!run.away.enabled || (run.status !== 'needsYou' && run.status !== 'running') || !ask?.taskId) return null;
-  if (ask.reason !== 'sendBacks' && ask.reason !== 'sameFailure' && ask.reason !== 'noProgress') return null;
+  // What the person allowed decides which questions the Lead may answer: a stuck task needs at least one way it may act,
+  // and a security finding only when they allowed security changes.
+  const stuckKinds = ask.reason === 'sendBacks' || ask.reason === 'sameFailure' || ask.reason === 'noProgress';
+  if (stuckKinds && !(policy.retry || policy.skip || policy.reversible)) return null;
+  if (!stuckKinds && !(ask.reason === 'securityBlock' && policy.security)) return null;
   const task = run.tasks.find((item) => item.id === ask.taskId);
   if (!task || task.status !== 'needsYou' || task.note.startsWith('Usage limit')) return null;
   if (run.away.picked.length >= AWAY_MAX_PER_RUN || run.away.picked.filter((id) => id === task.id).length >= AWAY_MAX_PER_TASK) return null;
@@ -551,7 +556,10 @@ export function awayEligible(run: CrewRun): CrewTask | null {
  * Turns away mode on or off. What was chosen so far is kept, so the ceilings hold across switches. Turning it off after
  * a stretch away posts a short summary of that stretch, written from the run's own records.
  */
-export function setAway(run: CrewRun, enabled: boolean, minutes: number, at: string): CrewRun {
+export function setAway(run: CrewRun, enabled: boolean, minutes: number, at: string, policy?: CrewAwayPolicy): CrewRun {
+  // Changing only the rules is not switching away mode on or off: no note, no summary.
+  if (policy && enabled === run.away.enabled && minutes === run.away.minutes) return setAwayPolicy(run, policy, at);
+  if (policy) run = setAwayPolicy(run, policy, at);
   const wasOn = run.away.enabled;
   const since = enabled ? (wasOn ? run.away.since ?? at : at) : null;
   const text = enabled
@@ -620,8 +628,11 @@ export function taskBudget(run: CrewRun, task: CrewTask): number | null {
   const paid = run.tasks.filter((item) => !item.proposed && item.status === 'accepted' && item.costUsd > 0);
   if (paid.length < 3) return null;
   const usual = paid.reduce((sum, item) => sum + item.costUsd, 0) / paid.length;
-  const asked = run.spendAsked.filter((id) => id === task.id).length;
-  return Math.max(1, usual * 3) * (asked + 1);
+  const step = Math.max(1, usual * 3);
+  // After a "carry on", the next stop is a full step past what the task had cost by then: raising the ceiling by a
+  // multiple left a task already past it asking again at once, three times in a row.
+  const lastAsked = run.spendAsked.filter((entry) => entry.split('@')[0] === task.id).map((entry) => Number(entry.split('@')[1] ?? 0)).reduce((max, cost) => Math.max(max, Number.isFinite(cost) ? cost : 0), -1);
+  return lastAsked < 0 ? step : lastAsked + step;
 }
 
 /** Stops one task that has cost far more than usual, with a question; the rest of the crew can carry on meanwhile. */
@@ -636,7 +647,13 @@ export function askTaskSpend(run: CrewRun, taskId: string, at: string): CrewRun 
     message: `"${task.title}" has cost $${task.costUsd.toFixed(2)} over ${task.round} ${task.round === 1 ? 'round' : 'rounds'}, more than three times a usual task ($${usual.toFixed(2)}). Continue gives it another round, your words steer it, Skip task drops it.`,
     taskId,
   };
-  const stopped = patchTask({ ...run, spendAsked: [...run.spendAsked, taskId].slice(-200) }, taskId, (item) => ({ ...item, status: 'needsYou' }), at);
+  const marked = { ...run, spendAsked: [...run.spendAsked, `${taskId}@${task.costUsd.toFixed(2)}`].slice(-200) };
+  // Away, with the person's say-so: another round is allowed while the task stays under their per-task limit.
+  const policy = run.away.policy ?? DEFAULT_AWAY_POLICY;
+  if (run.away.enabled && policy.costly && task.costUsd < policy.costlyMaxUsd) {
+    return recordAwayDecision(marked, taskId, ask.message, `Let it carry on for another round ($${task.costUsd.toFixed(2)} so far, under your $${policy.costlyMaxUsd.toFixed(2)} limit per task).`, '', `Whether "${task.title}" was worth what it cost.`, at);
+  }
+  const stopped = patchTask(marked, taskId, (item) => ({ ...item, status: 'needsYou' }), at);
   return feed({ ...stopped, status: 'needsYou', ask }, { who: 'crew', kind: 'needsYou', text: ask.message, taskId }, at);
 }
 
@@ -648,12 +665,25 @@ export function applyAwayPick(run: CrewRun, option: string, reason: string, at: 
   const taskId = run.ask?.taskId;
   if (!taskId) return run;
   const question = run.ask?.message ?? '';
-  const title = run.tasks.find((task) => task.id === taskId)?.title ?? taskId;
   const answered = answerAsk(run, 'continue', option, at);
-  const text = `Chose automatically while you were away: ${shorten(option)}${reason ? ` (${shorten(reason)})` : ''}${check ? ` Check when you are back: ${shorten(check)}` : ''}`;
-  const decision = { at, taskId, task: title.slice(0, 300), question: question.slice(0, 1_200), choice: option.slice(0, 1_200), check: check.slice(0, 800) };
-  const next = { ...answered, away: { ...answered.away, picked: [...answered.away.picked, taskId].slice(-40), decisions: [...(answered.away.decisions ?? []), decision].slice(-40) } };
+  return recordAwayDecision(answered, taskId, question, option, reason, check, at);
+}
+
+/**
+ * Writes down a decision taken for the person while they were away, so it is in the chat now and in the report and the
+ * summary later: the question, the choice, and what they should check.
+ */
+export function recordAwayDecision(run: CrewRun, taskId: string, question: string, choice: string, reason: string, check: string, at: string): CrewRun {
+  const title = run.tasks.find((task) => task.id === taskId)?.title ?? taskId;
+  const text = `Chose automatically while you were away: ${shorten(choice)}${reason ? ` (${shorten(reason)})` : ''}${check ? ` Check when you are back: ${shorten(check)}` : ''}`;
+  const decision = { at, taskId, task: title.slice(0, 300), question: question.slice(0, 1_200), choice: choice.slice(0, 1_200), check: check.slice(0, 800) };
+  const next = { ...run, away: { ...run.away, picked: [...run.away.picked, taskId].slice(-40), decisions: [...(run.away.decisions ?? []), decision].slice(-40) } };
   return addChat(feed(next, { who: 'lead', kind: 'info', text, taskId }, at), { from: 'lead', kind: 'note', text }, at);
+}
+
+/** Sets what the Lead may decide alone while the person is away. */
+export function setAwayPolicy(run: CrewRun, policy: CrewAwayPolicy, at: string): CrewRun {
+  return { ...run, away: { ...run.away, policy }, updatedAt: at };
 }
 
 /**
@@ -845,6 +875,34 @@ export function isConnectionDrop(error: string): boolean {
   return /^\s*(?:TypeError:\s*)?terminated\s*$|ECONNRESET|socket hang up|other side closed|UND_ERR_SOCKET|fetch failed|network connection was lost|stream (?:was )?(?:closed|ended) (?:unexpectedly|early)/i.test(cleanError(error));
 }
 
+/**
+ * Every top-level {...} in a reply, found by matching braces outside strings. A pattern that forbids braces inside the
+ * object missed any verdict whose feedback quoted code ("{}", "${x}"), and the reply was then read as unreadable.
+ */
+export function jsonObjects(text: string): string[] {
+  const found: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') { if (depth > 0) inString = true; continue; }
+    if (char === '{') { if (depth === 0) start = index; depth += 1; continue; }
+    if (char === '}' && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) { found.push(text.slice(start, index + 1)); start = -1; }
+    }
+  }
+  return found;
+}
+
 /** Whether an agent's failure says its usage, credit or subscription is spent, rather than that the work went wrong. */
 export function isUsageLimit(error: string): boolean {
   return /usage limit|rate limit|quota|out of (credits|usage)|credit balance|limit (has been |was )?reached|too many requests|(?:http|status|error|code)[ :]*429|plan limit|insufficient (credit|balance|quota)|subscription (limit|expired)|reached your .{0,24}limit/i.test(error);
@@ -954,7 +1012,7 @@ ${output.slice(-3_000)}`,
  * a missing field) reads as "no verdict" and the caller asks again, because guessing would accept unchecked work.
  */
 export function parseReview(text: string): { verdict: CrewReview['verdict']; feedback: string; notes: string[] } | null {
-  const candidates = [...text.matchAll(/\{[^{}]*"verdict"[^{}]*\}/g)].map((match) => match[0]);
+  const candidates = jsonObjects(text).filter((candidate) => candidate.includes('"verdict"'));
   for (const candidate of candidates.reverse()) {
     try {
       const value = JSON.parse(candidate) as { verdict?: unknown; feedback?: unknown; notes?: unknown };

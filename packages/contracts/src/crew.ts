@@ -263,6 +263,28 @@ export const crewChatEntrySchema = z
   .strict();
 export type CrewChatEntry = z.infer<typeof crewChatEntrySchema>;
 
+/**
+ * What the Lead may decide alone while the person is away. The defaults allow what can be undone and forbid what costs
+ * money, adds to the project, touches security or loses work; "other" is the person's own rule in their words.
+ */
+export const crewAwayPolicySchema = z
+  .object({
+    retry: z.boolean().default(true),
+    skip: z.boolean().default(true),
+    reversible: z.boolean().default(true),
+    recheck: z.boolean().default(true),
+    costly: z.boolean().default(true),
+    costlyMaxUsd: z.number().min(0).max(1_000).default(10),
+    dependencies: z.boolean().default(false),
+    paid: z.boolean().default(false),
+    security: z.boolean().default(false),
+    deleteWork: z.boolean().default(false),
+    other: z.string().max(600).default(''),
+  })
+  .strict();
+export type CrewAwayPolicy = z.infer<typeof crewAwayPolicySchema>;
+export const DEFAULT_AWAY_POLICY: CrewAwayPolicy = crewAwayPolicySchema.parse({});
+
 /** The person's standing permission for the Lead to settle a stuck task alone while they are away from the computer. */
 export const crewAwaySchema = z
   .object({
@@ -282,6 +304,7 @@ export const crewAwaySchema = z
     }).strict()).max(40).default([]),
     // When away mode was last turned on, so turning it off can say what happened in between.
     since: z.string().nullable().default(null),
+    policy: crewAwayPolicySchema.default(DEFAULT_AWAY_POLICY),
   })
   .strict();
 export type CrewAway = z.infer<typeof crewAwaySchema>;
@@ -318,7 +341,7 @@ export const crewRunSchema = z
     // Whether the Lead writes for someone who is not very technical: no jargon, terms explained the first time.
     explainSimply: z.boolean().default(true),
     // Away mode: the Lead takes one of its own safe options for a stuck task instead of waiting for the person.
-    away: crewAwaySchema.default({ enabled: false, minutes: 15, picked: [], decisions: [], since: null }),
+    away: crewAwaySchema.default({ enabled: false, minutes: 15, picked: [], decisions: [], since: null, policy: DEFAULT_AWAY_POLICY }),
     // Questions about other tasks that came up while one was already waiting on the person; each comes up in turn.
     queuedAsks: z.array(crewAskSchema).max(20).default([]),
     // Each time a task was stopped for costing far more than a usual task, so the next stop for it comes later.
@@ -413,7 +436,7 @@ export const crewDecideInputSchema = z.object({ runId: z.string().min(1), approv
 export type CrewDecideInput = z.infer<typeof crewDecideInputSchema>;
 export const crewExplainSimplyInputSchema = z.object({ runId: z.string().min(1), explainSimply: z.boolean() }).strict();
 
-export const crewAwayInputSchema = z.object({ runId: z.string().min(1), enabled: z.boolean(), minutes: z.number().int().min(0).max(240) }).strict();
+export const crewAwayInputSchema = z.object({ runId: z.string().min(1), enabled: z.boolean(), minutes: z.number().int().min(0).max(240), policy: crewAwayPolicySchema.optional() }).strict();
 export const crewKeepGoingInputSchema = z.object({ runId: z.string().min(1), keepGoing: z.boolean() }).strict();
 
 /**

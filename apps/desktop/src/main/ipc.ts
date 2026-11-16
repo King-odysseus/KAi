@@ -627,7 +627,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'crew:resume', async ({ runId }, request) => context.crew.resume(runId, request.ownerWindowId));
   handle(context, 'crew:follow-up', async ({ runId, prompt }, request) => context.crew.followUp(runId, prompt, request.ownerWindowId));
   handle(context, 'crew:message', async ({ runId, kind, text }, request) => context.crew.message(runId, kind, text, request.ownerWindowId));
-  handle(context, 'crew:away', async ({ runId, enabled, minutes }, request) => context.crew.setAway(runId, enabled, minutes, request.ownerWindowId));
+  handle(context, 'crew:away', async ({ runId, enabled, minutes, policy }, request) => context.crew.setAway(runId, enabled, minutes, request.ownerWindowId, policy));
   handle(context, 'crew:keep-going', async ({ runId, keepGoing }, request) => context.crew.setKeepGoing(runId, keepGoing, request.ownerWindowId));
   handle(context, 'crew:update-config', async ({ runId, config }) => context.crew.updateConfig(runId, config));
   handle(context, 'crew:stop-ask', async ({ runId }) => context.crew.stopAsk(runId));

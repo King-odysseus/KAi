@@ -1,4 +1,5 @@
-import type { CrewConfig, CrewDesign, CrewRun, CrewTask } from '@kai/contracts';
+import { DEFAULT_AWAY_POLICY } from '@kai/contracts';
+import type { CrewAwayPolicy, CrewConfig, CrewDesign, CrewRun, CrewTask } from '@kai/contracts';
 import { boardSummary, roleAccess } from './crew-engine';
 
 /**
@@ -94,8 +95,34 @@ export function lateRoundLines(task: Pick<CrewTask, 'round'>): string[] {
  */
 export function awayReviewLines(run: Pick<CrewRun, 'away'>): string[] {
   if (!run.away?.enabled) return [];
+  const forbidden = forbiddenWhileAway(run.away.policy ?? DEFAULT_AWAY_POLICY);
   return [
-    'The person is away from the computer and has asked the crew to keep going. Do not use "needsYou" for something you can check yourself (run the tests, look at the app in the browser) or for a choice that can be undone later: make the reversible choice, check it, and put what the person should look at when they are back in "notes". Use "needsYou" only for a secret, an account, money, a security or permission change, or deleting the person\'s work.',
+    `The person is away from the computer and has asked the crew to keep going. Do not use "needsYou" for something you can check yourself (run the tests, look at the app in the browser) or for a choice that can be undone later: make the reversible choice, check it, and put what the person should look at when they are back in "notes". Use "needsYou" only for ${forbidden.length > 0 ? forbidden.join(', ') : 'a secret or an account only they have'}.`,
+    ...((run.away.policy?.other ?? '').trim() ? [`The person's own rule while away: ${run.away.policy!.other.trim()}`] : []),
+  ];
+}
+
+/** What the person did not allow while away, as plain phrases. */
+export function forbiddenWhileAway(policy: CrewAwayPolicy): string[] {
+  return [
+    'a secret or an account only they have',
+    ...(policy.dependencies ? [] : ['adding a dependency or package']),
+    ...(policy.paid ? [] : ['anything that costs money (a paid service, a plan, an upgrade)']),
+    ...(policy.security ? [] : ['a security or permission change']),
+    ...(policy.deleteWork ? [] : ["deleting or overwriting the person's work"]),
+  ];
+}
+
+/** What the person allowed while away, as plain phrases. */
+export function allowedWhileAway(policy: CrewAwayPolicy): string[] {
+  return [
+    ...(policy.retry ? ['retry a task with a different instruction'] : []),
+    ...(policy.skip ? ['skip a task the goal does not need'] : []),
+    ...(policy.reversible ? ['make a code choice that can be undone (keep or revert a small change, adjust a check so it allows exactly the approved changes, record evidence in the report)'] : []),
+    ...(policy.dependencies ? ['add a dependency or package'] : []),
+    ...(policy.paid ? ['use something that costs money'] : []),
+    ...(policy.security ? ['make a security or permission change'] : []),
+    ...(policy.deleteWork ? ["delete or overwrite the person's work"] : []),
   ];
 }
 
@@ -377,7 +404,9 @@ export function awayPrompt(run: CrewRun, task: CrewTask): string {
     ...(options.length > 0
       ? ['Options:', ...options.map((option, index) => `${index + 1}. ${option}`), '', 'Choose the safest option that keeps the work moving.']
       : ['No options were offered. Write the way forward yourself: one complete instruction the builder can follow as written, that keeps the work moving and can be undone later. Where it helps, include checking the result: run the tests, and look at the app in the browser with the playwright tools.']),
-    "Never choose anything that needs a secret, an account, a new paid service, a new dependency, a change to security or permissions, or deleting or overwriting the person's work: answer none for those. A reversible choice inside the goal (keep a small change and record it, amend a check so it allows exactly the approved changes, record evidence in the report) is yours to make.",
+    `The person allowed you to: ${allowedWhileAway(run.away.policy ?? DEFAULT_AWAY_POLICY).join('; ') || 'nothing beyond keeping the question for them'}.`,
+    `Answer none for anything that needs ${forbiddenWhileAway(run.away.policy ?? DEFAULT_AWAY_POLICY).join(', ')}.`,
+    ...((run.away.policy?.other ?? '').trim() ? [`The person's own rule while away, which always holds: ${run.away.policy!.other.trim()}`] : []),
     '',
     'Reply with only one JSON object:',
     ...(options.length > 0

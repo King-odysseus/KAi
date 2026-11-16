@@ -1,7 +1,8 @@
 import { CircleHelp, ExternalLink, Play, Search, X } from 'lucide-react';
 import { Markdown } from './Markdown';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { CrewChatEntry, CrewFeedEntry, CrewRun } from '@kai/contracts';
+import { DEFAULT_AWAY_POLICY } from '@kai/contracts';
+import type { CrewAwayPolicy, CrewChatEntry, CrewFeedEntry, CrewRun } from '@kai/contracts';
 import { collapseFeed } from '../crew-feed';
 import { ROUTE_LABEL, routeMessage, type CrewRoute } from '../crew-routing';
 import { CrewApprovals } from './CrewApprovals';
@@ -43,7 +44,7 @@ export function CrewChat({ run, activity, working, onSend, onStopAsk, onKeepGoin
   /** Stops the Lead answering, without touching the crew's own agents. */
   onStopAsk: () => Promise<void>;
   onKeepGoing: (on: boolean) => Promise<void>;
-  onAway: (on: boolean, minutes: number) => Promise<void>;
+  onAway: (on: boolean, minutes: number, policy?: CrewAwayPolicy) => Promise<void>;
   onExplainSimply: (on: boolean) => Promise<void>;
   onFindPhases: () => Promise<void>;
   onDecide: (approvalId: string, approve: boolean) => void;
@@ -180,6 +181,8 @@ export function CrewChat({ run, activity, working, onSend, onStopAsk, onKeepGoin
         )}
       </div>
 
+      {run.away.enabled && <AwayRules policy={run.away.policy ?? DEFAULT_AWAY_POLICY} onChange={(policy) => void guarded(() => onAway(true, run.away.minutes, policy))} />}
+
       <CrewApprovals run={run} working={working} onDecide={onDecide} />
 
       {/* Only while agents are running: a crew waiting on you is not working, and the moving bar cost a redraw every frame. */}
@@ -295,5 +298,43 @@ export function CrewChat({ run, activity, working, onSend, onStopAsk, onKeepGoin
       <small className="crew-empty crew-chat-hint">Enter to send · Shift+Enter for a new line</small>
       {error && <p className="studio-notice error" role="alert">{error}</p>}
     </section>
+  );
+}
+
+/** The rules away mode follows, one row per kind of blocker. Each is saved as soon as it is changed. */
+const AWAY_RULES: Array<{ key: keyof Omit<CrewAwayPolicy, 'costlyMaxUsd' | 'other'>; label: string }> = [
+  { key: 'retry', label: 'Retry or redirect a failing task' },
+  { key: 'skip', label: 'Skip a task the goal does not need' },
+  { key: 'reversible', label: 'Make code choices that can be undone' },
+  { key: 'recheck', label: 'Go on when a check gives an unreadable answer (listed for you to re-check)' },
+  { key: 'costly', label: 'Let a costly task carry on' },
+  { key: 'dependencies', label: 'Add a dependency or package' },
+  { key: 'paid', label: 'Use anything that costs money' },
+  { key: 'security', label: 'Make security or permission changes' },
+  { key: 'deleteWork', label: 'Delete or overwrite work' },
+];
+
+function AwayRules({ policy, onChange }: { policy: CrewAwayPolicy; onChange: (policy: CrewAwayPolicy) => void }): ReactNode {
+  const [other, setOther] = useState(policy.other);
+  useEffect(() => setOther(policy.other), [policy.other]);
+  return (
+    <details className="crew-away-rules" open>
+      <summary><strong>While I am away, the Lead may…</strong> <small>Everything it decides is listed in the report for you to check.</small></summary>
+      <div className="crew-away-grid">
+        {AWAY_RULES.map((rule) => (
+          <label key={rule.key} className="crew-away-rule">
+            <input type="checkbox" checked={policy[rule.key]} onChange={(event) => onChange({ ...policy, [rule.key]: event.target.checked })} />
+            <span>{rule.label}</span>
+            {rule.key === 'costly' && (
+              <span className="crew-away-limit">up to $<input type="number" min={0} max={1000} step={1} aria-label="Most a task may cost before it waits for you" value={policy.costlyMaxUsd} disabled={!policy.costly} onChange={(event) => onChange({ ...policy, costlyMaxUsd: Math.max(0, Math.min(1000, Number(event.target.value) || 0)) })} /> per task</span>
+            )}
+          </label>
+        ))}
+      </div>
+      <label className="crew-away-other">
+        <span>Other rules, in your words</span>
+        <input type="text" maxLength={600} value={other} placeholder="For example: never change the database schema" onChange={(event) => setOther(event.target.value)} onBlur={() => { if (other !== policy.other) onChange({ ...policy, other }); }} />
+      </label>
+    </details>
   );
 }

@@ -10,7 +10,7 @@ import {
 import { apiChoices, targetFromValue, targetValue } from './architect-settings';
 import type { PersistedEvent, RoleTarget } from '@kai/contracts';
 import { crewStatusLine } from '@kai/contracts';
-import type { AgentCapability, AgentId, AppSettings, AutonomyMode, CrewConfig, CrewInterview, CrewDesign, CrewRole, CrewRun, CrewTask, ProjectRecord } from '@kai/contracts';
+import type { AgentCapability, AgentId, AppSettings, AutonomyMode, CrewAwayPolicy, CrewConfig, CrewInterview, CrewDesign, CrewRole, CrewRun, CrewTask, ProjectRecord } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
 import { crewTitle } from '../crew-title';
 import { Pill, type PillTone } from './Pill';
@@ -223,9 +223,9 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
     reconcile(unwrap(await window.kaiDesktop.setCrewKeepGoing(activeRun.id, on)));
   }
 
-  async function away(on: boolean, minutes: number): Promise<void> {
+  async function away(on: boolean, minutes: number, policy?: CrewAwayPolicy): Promise<void> {
     if (!activeRun) return;
-    reconcile(unwrap(await window.kaiDesktop.setCrewAway(activeRun.id, on, minutes)));
+    reconcile(unwrap(await window.kaiDesktop.setCrewAway(activeRun.id, on, minutes, policy)));
   }
 
   async function explainSimply(on: boolean): Promise<void> {

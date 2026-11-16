@@ -5,7 +5,7 @@ import { DesktopCrewRunner } from '../apps/desktop/src/main/crew-runner';
 import type { CrewRunnerPorts } from '../apps/desktop/src/main/crew-runner';
 import type { ParallelSession } from '../apps/desktop/src/main/parallel-session';
 import { parsePlan, planPrompt, reviewPrompt } from '../apps/desktop/src/main/crew-prompts';
-import { askTaskSpend, awayEligible, guideCrewRun, helperChoiceFor, setAway } from '../apps/desktop/src/main/crew-engine';
+import { askTaskSpend, awayEligible, guideCrewRun, helperChoiceFor, parseReview, setAway } from '../apps/desktop/src/main/crew-engine';
 
 const PLAN = JSON.stringify({
   tasks: [
@@ -1186,5 +1186,68 @@ describe('crew runner, second round', () => {
     expect(prompt).toContain('This task is on round 4');
     expect(prompt).toContain('cannot be met by the crew');
     expect(prompt).toContain('playwright');
+  });
+  it('reads a verdict whose feedback quotes code with braces', () => {
+    expect(parseReview('Done.\n{"verdict":"sendBack","feedback":"Use `${base}/x` and return {} on error.","notes":["See {a:1}."]}')).toEqual({ verdict: 'sendBack', feedback: 'Use `${base}/x` and return {} on error.', notes: ['See {a:1}.'] });
+  });
+
+  it('never treats an unreadable security reply as a security block', async () => {
+    const f = fixture({ security: ['I looked at it and it seems fine overall.'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('needsYou');
+    expect(run.ask?.reason).toBe('noProgress');
+    expect(run.ask?.message).toContain('could not give a readable verdict');
+  });
+
+  it('goes on without an unreadable check while away, and lists it for the person', async () => {
+    const f = fixture({ security: ['I looked at it and it seems fine overall.'] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    await f.runner.setAway(started.id, true, 0, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('completed');
+    expect(run.away.decisions.some((item) => item.choice.includes("Went on without"))).toBe(true);
+  });
+
+  it('moves the spend ceiling past what the task already cost once the person says carry on', async () => {
+    const f = fixture();
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const base = await runToIdle(f.runner, started.id);
+    const accepted = (id: string) => ({ ...base.tasks[0]!, id, title: id, status: 'accepted' as const, costUsd: 1.67 });
+    const run: CrewRun = { ...base, status: 'running', tasks: [accepted('x'), accepted('y'), accepted('z'), { ...base.tasks[0]!, id: 'big', title: 'Big', status: 'sentBack' as const, costUsd: 15.97 }] };
+    const asked = askTaskSpend(run, 'big', '2026-11-01T10:00:00.000Z')!;
+    const answered = { ...asked, ask: null, status: 'running' as const, tasks: asked.tasks.map((task) => (task.id === 'big' ? { ...task, status: 'sentBack' as const } : task)) };
+    expect(askTaskSpend(answered, 'big', '2026-11-01T10:00:00.000Z')).toBeNull();
+  });
+
+  it('lets a costly task carry on by itself while away, under the person\'s limit, and records it', async () => {
+    const f = fixture();
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const base = await runToIdle(f.runner, started.id);
+    const accepted = (id: string) => ({ ...base.tasks[0]!, id, title: id, status: 'accepted' as const, costUsd: 1 });
+    const run: CrewRun = { ...base, status: 'running', away: { ...base.away, enabled: true }, tasks: [accepted('x'), accepted('y'), accepted('z'), { ...base.tasks[0]!, id: 'big', title: 'Big', status: 'sentBack' as const, costUsd: 5 }] };
+    const carried = askTaskSpend(run, 'big', '2026-11-01T10:00:00.000Z')!;
+    expect(carried.ask).toBeNull();
+    expect(carried.away.decisions.at(-1)?.choice).toContain('under your $10.00 limit');
+    const strict = askTaskSpend({ ...run, away: { ...run.away, policy: { ...run.away.policy, costly: false } } }, 'big', '2026-11-01T10:00:00.000Z')!;
+    expect(strict.ask?.reason).toBe('taskSpend');
+  });
+
+  it('follows the person\'s away rules: what the Lead may decide, what it must leave, and their own words', async () => {
+    const f = fixture({ buildFails: 99, buildError: 'The API key is rejected.' });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const stuck = await runToIdle(f.runner, started.id);
+    const policy = { ...stuck.away.policy, other: 'Never change the database schema.' };
+    const changed = await f.runner.setAway(started.id, true, 0, 1, policy);
+    expect(changed.away.policy.other).toBe('Never change the database schema.');
+    const prompt = f.requests.map((request) => request.prompt).find((text) => text.includes('The person is away from the computer'))!;
+    expect(prompt).toContain('adding a dependency or package');
+    expect(prompt).toContain('Never change the database schema.');
+    const none = { ...stuck, away: { ...stuck.away, enabled: true, policy: { ...stuck.away.policy, retry: false, skip: false, reversible: false } } };
+    expect(awayEligible(none)).toBeNull();
+    // Changing only the rules posts nothing in the chat.
+    const before = changed.chat.length;
+    const again = await f.runner.setAway(started.id, true, 0, 1, { ...policy, paid: true });
+    expect(again.chat.length).toBe(before);
   });
 });

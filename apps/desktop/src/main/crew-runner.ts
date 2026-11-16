@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { classifyWork, crewConfigSchema, crewRunSchema, phaseReportMarkdown } from '@kai/contracts';
-import type { AgentRunRequest, AgentRunResult, ConversationOrigin, CrewRevertPreview, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask, CrewTaskDiff } from '@kai/contracts';
+import { DEFAULT_AWAY_POLICY, classifyWork, crewConfigSchema, crewRunSchema, phaseReportMarkdown } from '@kai/contracts';
+import type { AgentRunRequest, AgentRunResult, ConversationOrigin, CrewAwayPolicy, CrewRevertPreview, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask, CrewTaskDiff } from '@kai/contracts';
 import {
   acceptPhase, addNotes, clearNotes, phaseToPauseAfter, setPauseAfter, openTasks, reopenOpenTasks, addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, isBareContinue, mergeChat, phaseFromFollowUp, requestApprovals, resetForRevert, ruleBlock, isUsageLimit, setTaskCheckpoint, tasksToRebuild, teachBlockers, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
-  reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun, offerOptions, awayEligible, applyAwayPick, applyTriage, repeatsFailure, setAway, parkAsk, parkableAsk, queueAsks, askTaskSpend, isConnectionDrop,
+  reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun, offerOptions, awayEligible, applyAwayPick, applyTriage, repeatsFailure, setAway, parkAsk, parkableAsk, queueAsks, askTaskSpend, isConnectionDrop, recordAwayDecision,
 } from './crew-engine';
 import { askPrompt, awayPrompt, parseAwayChoice, coveragePrompt, parseCoverage, parsePlanFull, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
 import type { ParallelSession } from './parallel-session';
@@ -337,9 +337,9 @@ export class DesktopCrewRunner {
   }
 
   /** Turns away mode on or off. With it on, a stuck task the Lead has options for is settled by the Lead, after the wait the person set. */
-  async setAway(runId: string, enabled: boolean, minutes: number, ownerWindowId: number): Promise<CrewRun> {
+  async setAway(runId: string, enabled: boolean, minutes: number, ownerWindowId: number, policy?: CrewAwayPolicy): Promise<CrewRun> {
     const run = await this.require(runId);
-    const next = setAway(run, enabled, minutes, this.now().toISOString());
+    const next = setAway(run, enabled, minutes, this.now().toISOString(), policy);
     const active = this.active.get(runId);
     if (active) await this.commit(active, next);
     else {
@@ -1095,13 +1095,34 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
       for (const reviewer of roles.filter((role) => role.kind === kind)) {
         if (!mayChangeFiles) continue;
         if (task().reviews.some((review) => review.reviewer === reviewer.id && review.round === task().round)) continue;
-        const answer = await this.askJson(active, reviewer, reviewRolePrompt(kind, active.run, task()), 'review', parseReview);
+        let answer = await this.askJson(active, reviewer, reviewRolePrompt(kind, active.run, task()), 'review', parseReview);
         if (active.cancelled) return;
+        if (!answer.value) {
+          // An unreadable reply is asked for once more from the start, before anyone is bothered with it.
+          const again = await this.askJson(active, reviewer, reviewRolePrompt(kind, active.run, task()), 'review', parseReview);
+          if (active.cancelled) return;
+          answer = { value: again.value, costUsd: answer.costUsd + again.costUsd, raw: again.raw || answer.raw };
+        }
         let run = addSpend(active.run, taskId, answer.costUsd, at());
         if (answer.value?.notes.length) run = addNotes(run, reviewer.id, taskId, answer.value.notes, at());
         if (answer.value && answer.value.verdict === 'accept') {
           run = { ...run, tasks: run.tasks.map((item) => (item.id === taskId ? { ...item, reviews: [...item.reviews, { round: item.round, verdict: 'accept' as const, feedback: '', reviewer: reviewer.id, at: at() }] } : item)) };
           await this.commit(active, run);
+        } else if (!answer.value) {
+          // A reply nobody could read is a reading problem, not a finding: it must not stop the crew as a security block,
+          // which away mode is never allowed to settle. Away, with the person's say-so, the crew goes on and the report
+          // says which check is missing; otherwise it waits as a stuck task.
+          const unreadable = `${reviewer.label} could not give a readable verdict after four tries, so it did not check "${task().title}".`;
+          const policy = run.away.policy ?? DEFAULT_AWAY_POLICY;
+          if (run.away.enabled && policy.recheck) {
+            run = { ...run, tasks: run.tasks.map((item) => (item.id === taskId ? { ...item, reviews: [...item.reviews, { round: item.round, verdict: 'accept' as const, feedback: `Not checked: ${reviewer.label}'s reply could not be read.`, reviewer: reviewer.id, at: at() }] } : item)) };
+            run = recordAwayDecision(run, taskId, unreadable, `Went on without ${reviewer.label}'s check.`, '', `Have ${reviewer.label} check "${task().title}" again.`, at());
+            await this.commit(active, run);
+            continue;
+          }
+          const blocked = reviewTask(run, taskId, { verdict: 'needsYou', feedback: unreadable, reviewer: reviewer.id }, at());
+          await this.commit(active, blocked.ask ? { ...blocked, ask: { ...blocked.ask, reason: 'noProgress' } } : blocked);
+          return;
         } else {
           const verdict = answer.value ?? { verdict: 'needsYou' as const, feedback: `${reviewer.label} gave an answer that could not be read, so the work was not checked.` };
           await this.commit(active, reviewTask(run, taskId, { ...verdict, reviewer: reviewer.id }, at()));
@@ -1111,8 +1132,13 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
     }
 
     const lead = roles.find((role) => role.kind === 'lead')!;
-    const answer = await this.askJson(active, lead, reviewPrompt(active.run, task(), this.builderReply.get(taskId) ?? '', this.checkNote.get(taskId)), 'review', parseReview);
+    let answer = await this.askJson(active, lead, reviewPrompt(active.run, task(), this.builderReply.get(taskId) ?? '', this.checkNote.get(taskId)), 'review', parseReview);
     if (active.cancelled) return;
+    if (!answer.value) {
+      const again = await this.askJson(active, lead, reviewPrompt(active.run, task(), this.builderReply.get(taskId) ?? '', this.checkNote.get(taskId)), 'review', parseReview);
+      if (active.cancelled) return;
+      answer = { value: again.value, costUsd: answer.costUsd + again.costUsd, raw: again.raw || answer.raw };
+    }
     let run = addSpend(active.run, taskId, answer.costUsd, at());
     if (answer.value?.notes.length) run = addNotes(run, lead.id, taskId, answer.value.notes, at());
     const verdict = answer.value ?? { verdict: 'needsYou' as const, feedback: 'The Lead gave an answer that could not be read, so the work was not accepted without a check.' };
