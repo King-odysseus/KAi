@@ -3085,9 +3085,10 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .crew-live-body small { overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
 .crew-live-time { flex: none; color: var(--text-dim); text-align: right; }
 .crew-live-bar { position: absolute; right: 0; bottom: 0; left: 0; height: 3px; background: var(--border-soft); overflow: hidden; }
-.crew-live-bar::after { content: ''; position: absolute; top: 0; bottom: 0; width: 35%; background: var(--mint); animation: crew-live-sweep 1.6s ease-in-out infinite; }
+.crew-live-bar::after { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 35%; background: var(--mint); animation: crew-live-sweep 1.6s ease-in-out infinite; will-change: transform; }
 @keyframes crew-live-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.7); } }
-@keyframes crew-live-sweep { 0% { left: -35%; } 100% { left: 100%; } }
+/* Moved with transform, not left: left re-laid out the page every frame. 286% of the bar's own 35% width is the far edge. */
+@keyframes crew-live-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(286%); } }
 @media (prefers-reduced-motion: reduce) {
   .crew-live-dot, .crew-live-bar::after { animation: none; }
 }
@@ -3180,7 +3181,10 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .crew-chat-head { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 330px)); gap: 10px; align-items: stretch; justify-content: start; }
 .crew-chat-head .toggle-row { height: 100%; }
 .crew-chat-head > .secondary-button { align-self: center; justify-self: start; }
-.crew-chat-thread { max-height: 55vh; overflow-y: auto; }
+/* The thread scrolls inside a shorter box, and the composer stays pinned to the bottom of the page while it scrolls, so a
+   long feed can never push the message box out of reach. */
+.crew-chat-thread { max-height: 45vh; overflow-y: auto; }
+.crew-chat > .kai-composer { position: sticky; bottom: 0; z-index: 2; }
 .crew-chat-log { display: flex; flex-direction: column; gap: 2px; padding-left: 8px; border-left: 2px solid var(--border); font-size: 12px; }
 .crew-chat-log small { color: var(--text-dim); }
 .crew-chat-tag { display: block; color: var(--text-dim); font-size: 11px; }

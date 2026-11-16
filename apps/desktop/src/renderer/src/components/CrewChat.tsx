@@ -74,7 +74,8 @@ export function CrewChat({ run, activity, working, onSend, onStopAsk, onKeepGoin
   const visible = items.slice(Math.max(0, items.length - shown));
   const earlier = items.length - visible.length;
 
-  useEffect(() => { end.current?.scrollIntoView({ block: 'end' }); }, [run.chat.length, run.feed.length, run.status]);
+  // Scrolls the thread only. scrollIntoView also scrolled the page, which pushed the composer out of view.
+  useEffect(() => { const thread = end.current?.parentElement; if (thread) thread.scrollTop = thread.scrollHeight; }, [run.chat.length, run.feed.length, run.status]);
 
   // "Add work" only means something once the board has finished; a forced choice that does not fit falls back to Auto.
   const forced: CrewRoute | null = mode === 'auto' || (mode === 'work' && !finished) ? null : mode;
@@ -181,7 +182,8 @@ export function CrewChat({ run, activity, working, onSend, onStopAsk, onKeepGoin
 
       <CrewApprovals run={run} working={working} onDecide={onDecide} />
 
-      {!finished && run.status !== 'paused' && activity}
+      {/* Only while agents are running: a crew waiting on you is not working, and the moving bar cost a redraw every frame. */}
+      {(run.status === 'running' || run.status === 'planning') && activity}
 
       {finished && unfinished > 0 && (
         <div className="studio-actions">

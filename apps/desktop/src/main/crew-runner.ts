@@ -613,7 +613,7 @@ export class DesktopCrewRunner {
   private async awayDecide(active: ActiveRun): Promise<CrewRun | null> {
     const task = awayEligible(active.run);
     const options = active.run.ask?.options ?? [];
-    if (!task || options.length === 0) return null;
+    if (!task) return null;
     const key = `${active.run.id}|${task.id}|${active.run.ask?.message ?? ''}`;
     if (this.awayDeclined.has(key)) return null;
     const lead = active.run.config.roles.find((role) => role.kind === 'lead');
@@ -624,10 +624,13 @@ export class DesktopCrewRunner {
     const paid = addSpend(active.run, task.id, answer.costUsd, at);
     if (!answer.value) {
       this.awayDeclined.add(key);
-      await this.commit(active, this.info(paid, 'The Lead left this question for you: none of its options is safe to take without you.'));
+      await this.commit(active, this.info(paid, options.length > 0 ? 'The Lead left this question for you: none of its options is safe to take without you.' : 'The Lead left this question for you: there is no safe way forward to take without you.'));
       return null;
     }
-    return applyAwayPick(paid, options[answer.value.index]!, answer.value.reason, at);
+    // With no options the Lead wrote its own way forward; either way, what to check later goes in the report.
+    const choice = answer.value.instruction ?? options[answer.value.index];
+    if (!choice) return null;
+    return applyAwayPick(paid, choice, answer.value.reason, at, answer.value.check);
   }
 
   private liveIds(active: ActiveRun): string[] {

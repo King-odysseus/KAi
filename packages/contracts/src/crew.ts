@@ -195,7 +195,7 @@ export type CrewFeedEntry = z.infer<typeof crewFeedEntrySchema>;
 export const crewAskSchema = z
   .object({
     reason: z.enum(['spend', 'time', 'sendBacks', 'sameFailure', 'securityBlock', 'designApproval', 'noProgress', 'approval', 'phaseSpend']),
-    message: z.string().max(500),
+    message: z.string().max(1_400),
     taskId: z.string().max(60).optional(),
     // The phase a phase-spend question is about, so answering it can be remembered for that phase.
     phase: z.string().max(200).optional(),
@@ -271,6 +271,15 @@ export const crewAwaySchema = z
     minutes: z.number().int().min(0).max(240).default(15),
     // The task of every automatic choice made so far, so each task and the whole run have a ceiling.
     picked: z.array(z.string().max(60)).max(40).default([]),
+    // What the Lead decided in the person's place, and what it says they should check on return. The report lists these.
+    decisions: z.array(z.object({
+      at: z.string(),
+      taskId: z.string().max(60),
+      task: z.string().max(300),
+      question: z.string().max(1_200),
+      choice: z.string().max(1_200),
+      check: z.string().max(800).default(''),
+    }).strict()).max(40).default([]),
   })
   .strict();
 export type CrewAway = z.infer<typeof crewAwaySchema>;
@@ -307,7 +316,7 @@ export const crewRunSchema = z
     // Whether the Lead writes for someone who is not very technical: no jargon, terms explained the first time.
     explainSimply: z.boolean().default(true),
     // Away mode: the Lead takes one of its own safe options for a stuck task instead of waiting for the person.
-    away: crewAwaySchema.default({ enabled: false, minutes: 15, picked: [] }),
+    away: crewAwaySchema.default({ enabled: false, minutes: 15, picked: [], decisions: [] }),
     // Things waiting for, or already given, the person's yes or no.
     approvals: z.array(crewApprovalSchema).max(30).default([]),
     // What the Lead found still undone when the board finished, so "done" says what is and is not.
@@ -485,6 +494,8 @@ export interface CrewReport {
   verified: string[];
   verdicts: Array<{ role: string; verdict: 'ship' | 'noShip'; note: string }>;
   openRisks: string[];
+  /** Decisions the Lead took while the person was away, each with what to check. */
+  awayDecisions: string[];
   totals: { tasks: number; accepted: number; skipped: number; sentBackOnce: number; sentBackMore: number; files: number; costUsd: number; minutes: number };
 }
 
@@ -516,6 +527,7 @@ export function buildReport(run: CrewRun, now: Date = new Date()): CrewReport {
       ...open.map((task) => `"${task.title}" is ${task.status === 'needsYou' ? 'waiting on you' : 'not finished'}.`),
       ...skipped.map((task) => `"${task.title}" was skipped.`),
     ],
+    awayDecisions: awayDecisionLines(run),
     totals: {
       tasks: board.length,
       accepted: accepted.length,
@@ -527,6 +539,13 @@ export function buildReport(run: CrewRun, now: Date = new Date()): CrewReport {
       minutes: Math.max(0, Math.round((end.getTime() - new Date(run.startedAt).getTime()) / 60_000)),
     },
   };
+}
+
+/** One line per decision the Lead took for the person while they were away: the question, the choice, and what to check. */
+export function awayDecisionLines(run: Pick<CrewRun, 'away'>, taskIds?: ReadonlySet<string>): string[] {
+  return (run.away?.decisions ?? [])
+    .filter((item) => !taskIds || taskIds.has(item.taskId))
+    .map((item) => `"${item.task}": asked ${item.question} Chose: ${item.choice}${item.check ? ` Check: ${item.check}` : ''}`);
 }
 
 /** The same phase under different wordings ("Phase 1: Shell" and "Phase 1 - Shell, gating") reads as one. */
@@ -646,6 +665,10 @@ export function phaseReportMarkdown(run: CrewRun, phase: string, at: string): st
     files.length > 0 ? files.slice(0, 80).map((file) => `- \`${file}\``).join('\n') + (files.length > 80 ? `\n- and ${files.length - 80} more` : '') : '- None recorded.',
     '## Notes from the reviewers',
     notes.length > 0 ? notes.map((note) => `- ${roleLabel(note.role)}: ${note.text}`).join('\n') : '- None.',
+    ...((): string[] => {
+      const decided = awayDecisionLines(run, new Set(tasks.map((task) => task.id)));
+      return decided.length > 0 ? ['## Decided while you were away: check these', decided.map((item) => `- ${item}`).join('\n')] : [];
+    })(),
     '## Cost',
     `$${(row?.costUsd ?? 0).toFixed(2)} across ${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}.`,
   ].join('\n\n') + '\n';

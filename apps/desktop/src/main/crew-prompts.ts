@@ -75,6 +75,20 @@ export function planPrompt(goal: string, config: CrewConfig, conventions: string
   ].join('\n');
 }
 
+/** Anything that shows on screen is checked by looking at it, not by asking the person. */
+export const BROWSER_CHECK_LINE = 'To check anything that shows on screen (a page, a layout, a button, that a change left the rest of the app as it was), start the app if it is not running and look at it yourself with the browser tools (the playwright tools: navigate, snapshot, screenshot). Do that instead of asking the person to look.';
+
+/**
+ * While the person is away, a reviewer is told to settle what it can check or undo, and to leave only what is truly
+ * theirs (a secret, an account, money, security, deleting work) as a question.
+ */
+export function awayReviewLines(run: Pick<CrewRun, 'away'>): string[] {
+  if (!run.away?.enabled) return [];
+  return [
+    'The person is away from the computer and has asked the crew to keep going. Do not use "needsYou" for something you can check yourself (run the tests, look at the app in the browser) or for a choice that can be undone later: make the reversible choice, check it, and put what the person should look at when they are back in "notes". Use "needsYou" only for a secret, an account, money, a security or permission change, or deleting the person\'s work.',
+  ];
+}
+
 export function reviewPrompt(run: CrewRun, task: CrewTask, builderReply: string, checkNote?: string): string {
   return `${reviewPromptBase(run, task, builderReply, checkNote)}\n\n${REVIEW_SCOPE_RULE}`;
 }
@@ -96,6 +110,9 @@ function reviewPromptBase(run: CrewRun, task: CrewTask, builderReply: string, ch
     'The builder said:',
     builderReply.trim().slice(-2_500) || '(no reply)',
     '',
+    BROWSER_CHECK_LINE,
+    ...awayReviewLines(run),
+    '',
     'Reply with one JSON object and nothing else:',
     '{"verdict":"accept"} when every criterion is met,',
     '{"verdict":"sendBack","feedback":"what is wrong, naming the criterion"} when the builder can fix it,',
@@ -116,6 +133,9 @@ function reviewPreamble(run: CrewRun, task: CrewTask): string[] {
     `Project goal: ${run.goal}`,
     `Task: ${task.title}`,
     ...(task.files.length > 0 ? [`Files changed: ${task.files.slice(0, 40).join(', ')}`] : []),
+    '',
+    BROWSER_CHECK_LINE,
+    ...awayReviewLines(run),
     '',
     ...REVIEW_SHAPE,
   ];
@@ -215,7 +235,7 @@ function reviewRoleBase(kind: 'security' | 'tester' | 'auditor' | 'license' | 'c
 export function retryPrompt(kind: 'plan' | 'review' | 'stuck' | 'coverage' | 'away'): string {
   if (kind === 'coverage') return 'Your previous reply could not be used. Reply again with only one JSON object such as {"complete":true} or {"complete":false,"remaining":["Phase 1: ..."]}, and no other text.';
   if (kind === 'plan') return 'Your previous reply could not be used. Reply again with only the JSON object {"tasks":[...]} and no other text.';
-  if (kind === 'away') return 'Your previous reply could not be used. Reply again with only one JSON object such as {"choice":1,"reason":"..."} or {"choice":"none","reason":"..."}, and no other text.';
+  if (kind === 'away') return 'Your previous reply could not be used. Reply again with only one JSON object such as {"choice":1,"reason":"...","check":"..."}, {"choice":"own","instruction":"...","reason":"...","check":"..."} or {"choice":"none","reason":"..."}, and no other text.';
   if (kind === 'stuck') return 'Your previous reply could not be used. Reply again with only one JSON object such as {"decision":"skip","reason":"..."} or {"decision":"retry","guidance":"..."} or {"decision":"ask","reason":"..."}, and no other text.';
   return 'Your previous reply could not be used. Reply again with only one JSON object such as {"verdict":"accept"} or {"verdict":"sendBack","feedback":"..."}, and no other text.';
 }
@@ -327,30 +347,52 @@ export function askPrompt(run: CrewRun, question: string): string {
  */
 export function awayPrompt(run: CrewRun, task: CrewTask): string {
   const options = run.ask?.options ?? [];
+  const history = task.reviews.slice(-3).map((review) => `- ${review.reviewer}, round ${review.round}, ${review.verdict}${review.feedback ? `: ${review.feedback.slice(0, 900)}` : ''}`);
   return [
-    'You are the Lead. The person is away from the computer and a task is waiting on a question you raised. Decide whether one of your own options is safe to take without them.',
+    'You are the Lead. The person is away from the computer and a task is waiting on a question. They asked the crew to keep going and to leave them a list of what to check when they are back.',
     '',
+    `Project goal: ${run.goal}`,
     `Task: ${task.title}`,
+    task.description,
+    '',
+    'Acceptance criteria:',
+    ...task.acceptance.map((criterion, index) => `${index + 1}. ${criterion}`),
+    '',
     `The question: ${run.ask?.message ?? task.note}`,
+    ...(history.length > 0 ? ['', 'Recent verdicts:', ...history] : []),
     '',
-    'Options:',
-    ...options.map((option, index) => `${index + 1}. ${option}`),
+    ...(options.length > 0
+      ? ['Options:', ...options.map((option, index) => `${index + 1}. ${option}`), '', 'Choose the safest option that keeps the work moving.']
+      : ['No options were offered. Write the way forward yourself: one complete instruction the builder can follow as written, that keeps the work moving and can be undone later. Where it helps, include checking the result: run the tests, and look at the app in the browser with the playwright tools.']),
+    "Never choose anything that needs a secret, an account, a new paid service, a new dependency, a change to security or permissions, or deleting or overwriting the person's work: answer none for those. A reversible choice inside the goal (keep a small change and record it, amend a check so it allows exactly the approved changes, record evidence in the report) is yours to make.",
     '',
-    "Take an option only if it is a reversible change to this project that stays inside the goal. Answer none when any option would need a secret, an account, a new paid service, a new dependency, a change to security or permissions, deleting or overwriting the person's work, or a product decision only they can make.",
-    'Reply with only one JSON object: {"choice":<option number>,"reason":"..."} or {"choice":"none","reason":"..."}.',
+    'Reply with only one JSON object:',
+    ...(options.length > 0
+      ? ['{"choice":<option number>,"reason":"...","check":"what the person should look at when they are back"}']
+      : ['{"choice":"own","instruction":"...","reason":"...","check":"what the person should look at when they are back"}']),
+    'or {"choice":"none","reason":"..."}.',
   ].join('\n');
 }
 
-/** Reads the Lead's away-mode answer. "none", an option that does not exist, or anything unreadable keeps the question waiting. */
-export function parseAwayChoice(text: string, count: number): { index: number; reason: string } | null {
+/**
+ * Reads the Lead's away-mode answer: an option by number, or (when there were none) its own instruction. "none", an
+ * option that does not exist, or anything unreadable keeps the question waiting.
+ */
+export function parseAwayChoice(text: string, count: number): { index: number; reason: string; check: string; instruction?: string } | null {
   const candidates = [...text.matchAll(/\{[^{}]*"choice"[^{}]*\}/g)].map((match) => match[0]);
   for (const candidate of candidates.reverse()) {
     try {
-      const value = JSON.parse(candidate) as { choice?: unknown; reason?: unknown };
+      const value = JSON.parse(candidate) as { choice?: unknown; reason?: unknown; check?: unknown; instruction?: unknown };
       const reason = typeof value.reason === 'string' ? value.reason.trim().slice(0, 300) : '';
+      const check = typeof value.check === 'string' ? value.check.trim().slice(0, 800) : '';
       if (value.choice === 'none') return null;
+      if (value.choice === 'own') {
+        const instruction = typeof value.instruction === 'string' ? value.instruction.trim().slice(0, 1_200) : '';
+        if (count === 0 && instruction) return { index: -1, reason, check, instruction };
+        continue;
+      }
       const number = typeof value.choice === 'number' ? value.choice : typeof value.choice === 'string' ? Number(value.choice) : NaN;
-      if (Number.isInteger(number) && number >= 1 && number <= count) return { index: number - 1, reason };
+      if (Number.isInteger(number) && number >= 1 && number <= count) return { index: number - 1, reason, check };
     } catch {
       continue;
     }

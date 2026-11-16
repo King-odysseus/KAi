@@ -1035,6 +1035,7 @@ function ReportTab({ run }: { run: CrewRun | null }): ReactNode {
         </>
       )}
       <ReportList title="Open risks" items={report.openRisks} empty="None recorded." />
+      {report.awayDecisions.length > 0 && <ReportList title="Decided while you were away: check these" items={report.awayDecisions} empty="" />}
     </section>
   );
 }

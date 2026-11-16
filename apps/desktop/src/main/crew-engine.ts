@@ -433,7 +433,8 @@ export function reviewTask(run: CrewRun, taskId: string, input: ReviewInput, at:
       ? `"${task.title}" came back for the same problem twice: ${shorten(input.feedback)}`
       : exhausted
         ? `"${task.title}" has been sent back ${sendBacks - 1} times. ${shorten(input.feedback)}`
-        : `${input.reviewer} needs you on "${task.title}": ${shorten(input.feedback)}`,
+        // A question for the person is shown whole: cut short, it hid what they were being asked to decide.
+        : `${input.reviewer} needs you on "${task.title}": ${shorten(input.feedback, 900)}`,
     taskId,
   };
   return feed({ ...withReview, status: 'needsYou', ask }, { who: input.reviewer, kind: 'needsYou', text: ask.message, taskId }, at);
@@ -522,7 +523,7 @@ export function offerOptions(run: CrewRun, decision: { text: string; options?: s
   const options = decision.options ?? [];
   if (options.length === 0 && !decision.text) return run;
   const reason = decision.text ? ` The Lead's view: ${decision.text}` : '';
-  const message = `${run.ask.message.slice(0, 250)}${reason}`.slice(0, 500);
+  const message = `${run.ask.message.slice(0, 900)}${reason}`.slice(0, 1_400);
   return { ...run, ask: { ...run.ask, message, ...(options.length > 0 ? { options } : {}) } };
 }
 
@@ -531,15 +532,16 @@ export const AWAY_MAX_PER_TASK = 2;
 export const AWAY_MAX_PER_RUN = 10;
 
 /**
- * The stuck task away mode may settle, or null. Only a task question the Lead gave options for qualifies: security
- * blocks, approvals, limits and anything else that is the person's own to decide never reach here.
+ * The stuck task away mode may settle, or null. Only a question about one task qualifies, with the Lead's options or
+ * without them (then the Lead writes its own reversible way forward). Security blocks, approvals, limits and an agent
+ * out of usage never reach here: those wait for the person.
  */
 export function awayEligible(run: CrewRun): CrewTask | null {
   const ask = run.ask;
-  if (!run.away.enabled || run.status !== 'needsYou' || !ask?.taskId || !ask.options?.length) return null;
+  if (!run.away.enabled || run.status !== 'needsYou' || !ask?.taskId) return null;
   if (ask.reason !== 'sendBacks' && ask.reason !== 'sameFailure' && ask.reason !== 'noProgress') return null;
   const task = run.tasks.find((item) => item.id === ask.taskId);
-  if (!task || task.status !== 'needsYou') return null;
+  if (!task || task.status !== 'needsYou' || task.note.startsWith('Usage limit')) return null;
   if (run.away.picked.length >= AWAY_MAX_PER_RUN || run.away.picked.filter((id) => id === task.id).length >= AWAY_MAX_PER_TASK) return null;
   return task;
 }
@@ -552,13 +554,19 @@ export function setAway(run: CrewRun, enabled: boolean, minutes: number, at: str
   return addChat({ ...run, away: { ...run.away, enabled, minutes }, updatedAt: at }, { from: 'lead', kind: 'note', text }, at);
 }
 
-/** The Lead's pick, applied as the answer to the question, and recorded so the person can see it on return. */
-export function applyAwayPick(run: CrewRun, option: string, reason: string, at: string): CrewRun {
+/**
+ * The Lead's pick, applied as the answer to the question, and recorded so the person can see it on return: in the
+ * chat now, and in the report with what the Lead says they should check.
+ */
+export function applyAwayPick(run: CrewRun, option: string, reason: string, at: string, check = ''): CrewRun {
   const taskId = run.ask?.taskId;
   if (!taskId) return run;
+  const question = run.ask?.message ?? '';
+  const title = run.tasks.find((task) => task.id === taskId)?.title ?? taskId;
   const answered = answerAsk(run, 'continue', option, at);
-  const text = `Chose automatically while you were away: ${shorten(option)}${reason ? ` (${shorten(reason)})` : ''}`;
-  const next = { ...answered, away: { ...answered.away, picked: [...answered.away.picked, taskId].slice(-40) } };
+  const text = `Chose automatically while you were away: ${shorten(option)}${reason ? ` (${shorten(reason)})` : ''}${check ? ` Check when you are back: ${shorten(check)}` : ''}`;
+  const decision = { at, taskId, task: title.slice(0, 300), question: question.slice(0, 1_200), choice: option.slice(0, 1_200), check: check.slice(0, 800) };
+  const next = { ...answered, away: { ...answered.away, picked: [...answered.away.picked, taskId].slice(-40), decisions: [...(answered.away.decisions ?? []), decision].slice(-40) } };
   return addChat(feed(next, { who: 'lead', kind: 'info', text, taskId }, at), { from: 'lead', kind: 'note', text }, at);
 }
 
@@ -682,6 +690,7 @@ export function taskBrief(run: CrewRun, taskId: string, conventions = ''): strin
     boardSummary(run),
     '',
     writes ? 'You may change files. Keep the change to this task, run the relevant checks, and report the files you changed.' : 'Do not change any files. Report what you found.',
+    'For anything that shows on screen, check it yourself in the running app with the browser tools (the playwright tools) rather than asking the person to look.',
     ...(writes && !run.config.commitWork ? ['Do not run git commit or git push, and do not stage files. Leave your changes uncommitted: the person reviews them and commits when the phase is done.'] : []),
   ].join('\n');
 }

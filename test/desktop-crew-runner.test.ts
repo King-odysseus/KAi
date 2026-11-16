@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultCrewConfig, crewConfigSchema } from '@kai/contracts';
+import { buildReport, createDefaultCrewConfig, crewConfigSchema } from '@kai/contracts';
 import type { AgentRunRequest, AgentRunResult, CrewConfig, CrewRun } from '@kai/contracts';
 import { DesktopCrewRunner } from '../apps/desktop/src/main/crew-runner';
 import type { CrewRunnerPorts } from '../apps/desktop/src/main/crew-runner';
@@ -583,14 +583,30 @@ describe('crew runner', () => {
     expect(run.feed.some((entry) => entry.text.includes('none of its options is safe to take without you'))).toBe(true);
   });
 
-  it('never lets away mode settle a question that has no options from the Lead', async () => {
+  it('keeps a question with no options waiting when the Lead finds no safe way forward', async () => {
     const f = fixture({ buildFails: 99, buildError: 'The API key is rejected.' });
     const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
     await runToIdle(f.runner, started.id);
     await f.runner.setAway(started.id, true, 0, 1);
     const run = (await f.runner.get(started.id))!;
     expect(run.status).toBe('needsYou');
-    expect(f.requests.some((request) => request.prompt.includes('The person is away from the computer'))).toBe(false);
+    expect(f.requests.some((request) => request.prompt.includes('No options were offered'))).toBe(true);
+    expect(run.feed.some((entry) => entry.text.includes('no safe way forward to take without you'))).toBe(true);
+  });
+
+  it('lets the Lead write its own way forward while the person is away, and lists it in the report', async () => {
+    const f = fixture({
+      buildFails: 99, buildError: 'The API key is rejected.',
+      away: ['{"choice":"own","instruction":"Mock the API and record it in the report.","reason":"Reversible.","check":"Whether a mock is acceptable for the demo."}'],
+    });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const stuck = await runToIdle(f.runner, started.id);
+    await f.runner.setAway(started.id, true, 0, 1);
+    await f.runner.whenIdle(started.id);
+    const run = (await f.runner.get(started.id))!;
+    expect(run.away.decisions[0]).toMatchObject({ taskId: stuck.ask!.taskId, choice: 'Mock the API and record it in the report.', check: 'Whether a mock is acceptable for the demo.' });
+    expect(buildReport(run).awayDecisions[0]).toContain('Check: Whether a mock is acceptable for the demo.');
+    expect(run.tasks.find((task) => task.id === stuck.ask!.taskId)?.reviews.some((review) => review.feedback === 'Mock the API and record it in the report.')).toBe(true);
   });
 
   it('tries the planned task titles against the commit rules before the first build', async () => {
