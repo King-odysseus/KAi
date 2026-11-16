@@ -274,7 +274,10 @@ export const crewAwayPolicySchema = z
     reversible: z.boolean().default(true),
     recheck: z.boolean().default(true),
     costly: z.boolean().default(true),
+    // 0 means no limit: a costly task carries on while the person is away, and each round is still listed.
     costlyMaxUsd: z.number().min(0).max(1_000).default(10),
+    // Off turns the costly-task stop off altogether, away or not. Kept with these rules because they are saved live.
+    costCheck: z.boolean().default(true),
     dependencies: z.boolean().default(false),
     paid: z.boolean().default(false),
     security: z.boolean().default(false),

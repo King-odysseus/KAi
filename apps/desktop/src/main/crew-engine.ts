@@ -641,13 +641,15 @@ export function taskBudget(run: CrewRun, task: CrewTask): number | null {
 
 /** Stops one task that has cost far more than usual, with a question; the rest of the crew can carry on meanwhile. */
 export function askTaskSpend(run: CrewRun, taskId: string, at: string): CrewRun | null {
+  // The person turned the costly-task stop off: tasks never stop for what they cost.
+  if (!(run.away.policy ?? DEFAULT_AWAY_POLICY).costCheck) return null;
   const task = run.tasks.find((item) => item.id === taskId);
   const budget = task ? taskBudget(run, task) : null;
   if (!task || budget === null || task.costUsd <= budget) return null;
   const paid = run.tasks.filter((item) => !item.proposed && item.status === 'accepted' && item.costUsd > 0);
   const usual = paid.reduce((sum, item) => sum + item.costUsd, 0) / paid.length;
   const awayPolicy = run.away.policy ?? DEFAULT_AWAY_POLICY;
-  const pastAwayLimit = run.away.enabled && awayPolicy.costly && task.costUsd >= awayPolicy.costlyMaxUsd;
+  const pastAwayLimit = run.away.enabled && awayPolicy.costly && awayPolicy.costlyMaxUsd > 0 && task.costUsd >= awayPolicy.costlyMaxUsd;
   const ask: CrewAsk = {
     reason: 'taskSpend',
     message: `"${task.title}" has cost $${task.costUsd.toFixed(2)} over ${task.round} ${task.round === 1 ? 'round' : 'rounds'}, more than three times a usual task ($${usual.toFixed(2)}).${pastAwayLimit ? ` That is past the $${awayPolicy.costlyMaxUsd.toFixed(2)} you allowed per task while away, so it waits for you.` : ''} Continue gives it another round, your words steer it, Skip task drops it.`,
@@ -656,8 +658,9 @@ export function askTaskSpend(run: CrewRun, taskId: string, at: string): CrewRun 
   const marked = { ...run, spendAsked: [...run.spendAsked, `${taskId}@${task.costUsd.toFixed(2)}`].slice(-200) };
   // Away, with the person's say-so: another round is allowed while the task stays under their per-task limit.
   const policy = run.away.policy ?? DEFAULT_AWAY_POLICY;
-  if (run.away.enabled && policy.costly && task.costUsd < policy.costlyMaxUsd) {
-    return recordAwayDecision(marked, taskId, ask.message, `Let it carry on for another round ($${task.costUsd.toFixed(2)} so far, under your $${policy.costlyMaxUsd.toFixed(2)} limit per task).`, '', `Whether "${task.title}" was worth what it cost.`, at);
+  if (run.away.enabled && policy.costly && (policy.costlyMaxUsd === 0 || task.costUsd < policy.costlyMaxUsd)) {
+    const limit = policy.costlyMaxUsd === 0 ? 'you set no limit per task' : `under your $${policy.costlyMaxUsd.toFixed(2)} limit per task`;
+    return recordAwayDecision(marked, taskId, ask.message, `Let it carry on for another round ($${task.costUsd.toFixed(2)} so far, ${limit}).`, '', `Whether "${task.title}" was worth what it cost.`, at);
   }
   const stopped = patchTask(marked, taskId, (item) => ({ ...item, status: 'needsYou' }), at);
   return feed({ ...stopped, status: 'needsYou', ask }, { who: 'crew', kind: 'needsYou', text: ask.message, taskId }, at);

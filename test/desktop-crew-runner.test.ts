@@ -1209,6 +1209,18 @@ describe('crew runner, second round', () => {
     expect(run.away.decisions.some((item) => item.choice.includes("Went on without"))).toBe(true);
   });
 
+  it('never stops a task for cost when the person turned the check off, and 0 means no limit while away', async () => {
+    const f = fixture();
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const base = await runToIdle(f.runner, started.id);
+    const accepted = (id: string) => ({ ...base.tasks[0]!, id, title: id, status: 'accepted' as const, costUsd: 1 });
+    const run: CrewRun = { ...base, status: 'running', tasks: [accepted('x'), accepted('y'), accepted('z'), { ...base.tasks[0]!, id: 'big', title: 'Big', status: 'sentBack' as const, costUsd: 50 }] };
+    expect(askTaskSpend({ ...run, away: { ...run.away, policy: { ...run.away.policy, costCheck: false } } }, 'big', '2026-11-01T10:00:00.000Z')).toBeNull();
+    const noLimit = askTaskSpend({ ...run, away: { ...run.away, enabled: true, policy: { ...run.away.policy, costlyMaxUsd: 0 } } }, 'big', '2026-11-01T10:00:00.000Z')!;
+    expect(noLimit.ask).toBeNull();
+    expect(noLimit.away.decisions.at(-1)?.choice).toContain('you set no limit per task');
+  });
+
   it('reads spend records saved before the cost was kept as a step each, not as $0', async () => {
     const f = fixture();
     const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
