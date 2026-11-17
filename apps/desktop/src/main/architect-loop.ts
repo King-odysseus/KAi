@@ -37,7 +37,30 @@ const LOG_LIMIT = 80;
 export const REVISIONS_BEFORE_STEP_IN = 3;
 /** Rounds without an approval before the person is asked whether to carry on. A question, never a cut-off. */
 export const ROUNDS_BEFORE_ASKING = 6;
-const REVIEW_MATERIAL_CHARS = 60_000;
+/**
+ * How much of the project's diff goes into one review prompt. Every review is a turn in the conversation, and a diff of
+ * 60,000 characters (about 15,000 tokens) in each one made the conversation outgrow the auto-compact size as fast as it
+ * could be compacted. The reviewer can read any file itself, so it gets a fair share of each file, not all of it.
+ */
+export const REVIEW_MATERIAL_CHARS = 12_000;
+
+/**
+ * The project's changes, cut to `limit` characters by giving every changed file an equal share, so one big file cannot
+ * push the others out. The list of every file is always kept, and the cut is stated so the reviewer reads the rest.
+ */
+export function trimReviewMaterial(material: string, limit: number = REVIEW_MATERIAL_CHARS): string {
+  if (material.length <= limit) return material;
+  const chunks = material.split(/\n\n(?=--- )/);
+  const names = chunks.map((chunk) => (chunk.split('\n', 1)[0] ?? '').replace(/^--- /, '').replace(/ \(new or unreadable as a diff\)$/, ''));
+  const header = `${chunks.length} ${chunks.length === 1 ? 'file' : 'files'} changed: ${names.join(', ')}`.slice(0, 1_500);
+  const footer = 'Parts of the diffs below were left out to keep this short. You can read any file yourself for the rest.';
+  const budget = Math.max(400, Math.floor((limit - header.length - footer.length - 8) / chunks.length));
+  const shown = chunks.map((chunk) => {
+    if (chunk.length <= budget) return chunk;
+    return `${chunk.slice(0, budget)}\n… (${(chunk.length - budget).toLocaleString()} more characters of this file's changes left out)`;
+  });
+  return [header, ...shown, footer].join('\n\n');
+}
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Reading the Architect's answers
@@ -398,7 +421,7 @@ export class ArchitectCoach {
     implementerNote: string,
     signal?: AbortSignal,
   ): Promise<{ verdict: ArchitectVerdict; readable: boolean; label: string; fallbackUsed: boolean; costUsd: number; check: BriefCheck | null }> {
-    const material = (await this.ports.reviewMaterial(context.projectId).catch(() => '')).slice(0, REVIEW_MATERIAL_CHARS);
+    const material = trimReviewMaterial(await this.ports.reviewMaterial(context.projectId).catch(() => ''));
     const check = await this.runBriefCheck(context.projectId, brief, signal);
     const answer = await this.ask(context, (label) => reviewPrompt(brief, task, material, implementerNote, label, check), { splitRole: 'architect', taskText: task });
     const parsed = parseVerdict(answer.output);
@@ -431,7 +454,7 @@ export class ArchitectCoach {
     task: string,
     why: string,
   ): Promise<{ brief: ArchitectBrief; readable: boolean; label: string; fallbackUsed: boolean; costUsd: number }> {
-    const material = (await this.ports.reviewMaterial(context.projectId).catch(() => '')).slice(0, REVIEW_MATERIAL_CHARS);
+    const material = trimReviewMaterial(await this.ports.reviewMaterial(context.projectId).catch(() => ''));
     const answer = await this.ask(context, (label) => stepInPrompt(brief, task, why, material, label), { splitRole: 'architect', taskText: task });
     const next = parseBrief(answer.output);
     return { brief: next ?? brief, readable: next !== null, label: answer.label, fallbackUsed: answer.fallbackUsed, costUsd: answer.costUsd };

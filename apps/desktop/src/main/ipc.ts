@@ -988,7 +988,14 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     if (request.session) request.session.conversationId = conversation.id;
     return conversation;
   });
-  handle(context, 'conversations:compact', async ({ conversationId }) => compactConversation(context, conversationId));
+  handle(context, 'conversations:compact', async ({ conversationId, beforeNextRun }) => {
+    if (!beforeNextRun) return compactConversation(context, conversationId);
+    // Asked while a run is going: it is done just before this conversation's next request starts.
+    const conversation = await context.conversations.get(conversationId);
+    if (!conversation) throw new NotFoundError('Conversation not found.');
+    compactBeforeNextRun.add(conversationId);
+    return conversation;
+  });
   handle(context, 'conversations:save', async (conversation, request) => {
     if (request.session && request.session.projectId !== conversation.projectId) {
       throw new Error('This window can save conversations only for its open project. Open the project in this window first.');
@@ -1896,7 +1903,8 @@ export async function runConversationAgent(
   // One place for every agent run (composer, Crew, Studio, workflows): a history past the chosen size is summarised
   // first. A failure never blocks the run; it simply goes ahead with the full history.
   const compactAt = settings.usageBudget.compactAtTokens;
-  if (compactAt > 0 && conversation.turns.length > 0 && estimateConversationTokens(conversation) >= compactAt) {
+  const askedToCompact = compactBeforeNextRun.delete(conversation.id);
+  if (conversation.turns.length > 0 && (askedToCompact || (compactAt > 0 && estimateConversationTokens(conversation) >= compactAt))) {
     try {
       Object.assign(conversation, await compactConversation(context, conversation.id));
     } catch (error) {
@@ -4050,6 +4058,8 @@ export async function mirrorBrainNow(context: IpcContext, dryRun: boolean): Prom
 
 /** Stops on Stop: the checks and hooks a run's automation is executing, not only the agent. */
 const automationRuns = new Map<string, AbortController>();
+/** Conversations whose person pressed Compact while a run was going: each is compacted before its next request starts. */
+const compactBeforeNextRun = new Set<string>();
 /** Keep ordinary interactive runs from two windows from editing the same project at the same time. */
 const interactiveProjectRuns = new Map<string, string>();
 
@@ -4506,6 +4516,8 @@ async function compactConversation(
   context: IpcContext,
   conversationId: string,
 ): Promise<ConversationRecord> {
+  // Compacting now answers any request to compact later.
+  compactBeforeNextRun.delete(conversationId);
   const conversation = await context.conversations.get(conversationId);
   if (!conversation) throw new NotFoundError('Conversation not found.');
   if (conversation.turns.length === 0) throw new Error('There are no turns to compact yet.');

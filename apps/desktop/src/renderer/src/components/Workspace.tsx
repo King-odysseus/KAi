@@ -3126,7 +3126,7 @@ function ContextRing({ tokens, limit, busy, running, onCompact }: { tokens: numb
           <div className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--text-dim)]">Context</div>
           <div className="mt-1 text-sm text-[var(--text)]">About {Math.round(ratio * 100)}% used</div>
           <div className="mt-0.5 text-xs text-[var(--text-muted)]">~{formatCompact(tokens)} of ~{formatCompact(limit)} tokens before KAI suggests compacting.</div>
-          <UiButton type="button" className="secondary-button mt-2.5" disabled={busy} onClick={() => { setOpen(false); onCompact(); }}>{running ? 'Compact when this run ends' : 'Compact conversation'}</UiButton>
+          <UiButton type="button" className="secondary-button mt-2.5" disabled={busy} onClick={() => { setOpen(false); onCompact(); }}>{running ? 'Compact before the next step' : 'Compact conversation'}</UiButton>
         </div>
       )}
     </div>

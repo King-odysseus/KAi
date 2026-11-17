@@ -330,7 +330,7 @@ const bridge: KaiDesktopBridge = {
   getConversation: (id) => ipcRenderer.invoke('conversations:get', { id }),
   createConversation: (projectId, firstPrompt) =>
     ipcRenderer.invoke('conversations:create', { projectId, firstPrompt }),
-  compactConversation: (conversationId) => ipcRenderer.invoke('conversations:compact', { conversationId }),
+  compactConversation: (conversationId, options) => ipcRenderer.invoke('conversations:compact', { conversationId, ...(options?.beforeNextRun ? { beforeNextRun: true } : {}) }),
   saveConversation: (conversation) => ipcRenderer.invoke('conversations:save', conversation),
   forkConversation: (request) => ipcRenderer.invoke('conversations:fork', request),
   rewindConversation: (request) => ipcRenderer.invoke('conversations:rewind', request),

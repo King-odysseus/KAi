@@ -2116,8 +2116,11 @@ export function App(): ReactNode {
     }
     // Rewriting the history under an agent that is using it would corrupt the run, so Compact waits for the run to end.
     if (runningConversationIds.includes(activeConversation.id)) {
+      // The app compacts before this conversation's next request starts, which for an Auto or Architect run is the
+      // next step, not the end of the whole run. If the run ends first, the effect above compacts instead.
+      await window.kaiDesktop.compactConversation(activeConversation.id, { beforeNextRun: true }).then(unwrap).catch(() => null);
       setCompactWhenIdle((current) => current.includes(activeConversation.id) ? current : [...current, activeConversation.id]);
-      setAgentNotice('KAI will compact this conversation as soon as the current run finishes.');
+      setAgentNotice('KAI will compact this conversation before its next step starts.');
       return;
     }
     await compactConversationNow(activeConversation.id);

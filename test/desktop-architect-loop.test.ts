@@ -689,3 +689,20 @@ describe('Auto mode with the split on', () => {
     expect(withImplementer(untouched)).toBe(untouched);
   });
 });
+
+describe('the diff in a review prompt', () => {
+  it('is cut to a fair share of each file, keeps the list of every file, and says it was cut', async () => {
+    const { trimReviewMaterial, REVIEW_MATERIAL_CHARS } = await import('../apps/desktop/src/main/architect-loop');
+    const files = ['a.ts', 'b.ts', 'c.ts'];
+    const material = files.map((file) => `--- ${file}\n${'+ line of change\n'.repeat(2_000)}`).join('\n\n');
+    expect(material.length).toBeGreaterThan(REVIEW_MATERIAL_CHARS * 5);
+    const trimmed = trimReviewMaterial(material);
+    expect(trimmed.length).toBeLessThanOrEqual(REVIEW_MATERIAL_CHARS + 600);
+    // Every file is still named and still has some of its changes, so one big file cannot push the others out.
+    expect(trimmed).toContain('3 files changed: a.ts, b.ts, c.ts');
+    for (const file of files) expect(trimmed).toContain(`--- ${file}`);
+    expect(trimmed).toContain('left out');
+    // A small diff is left exactly as it is.
+    expect(trimReviewMaterial('--- a.ts\n+ one line')).toBe('--- a.ts\n+ one line');
+  });
+});

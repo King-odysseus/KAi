@@ -1182,7 +1182,9 @@ export const ipcInputSchemas = {
   'prompt-presets:delete': promptPresetDeleteInputSchema,
   'conversations:get': z.object({ id: z.string().min(1) }).strict(),
   'conversations:create': z.object({ projectId: z.string().nullable(), firstPrompt: z.string().max(20_000) }).strict(),
-  'conversations:compact': z.object({ conversationId: z.string().min(1) }).strict(),
+  // `beforeNextRun`: do not compact now; compact just before the conversation's next request starts, which is how a
+  // run that has no end (Auto, Architect) can still be compacted.
+  'conversations:compact': z.object({ conversationId: z.string().min(1), beforeNextRun: z.boolean().optional() }).strict(),
   'conversations:save': conversationRecordV1Schema,
   'conversations:delete': z.object({ id: z.string().min(1) }).strict(),
   'conversations:fork': conversationForkInputSchema,
@@ -1918,7 +1920,7 @@ export interface KaiDesktopBridge {
   listConversations(): Promise<IpcResponse<ConversationRecord[]>>;
   getConversation(id: string): Promise<IpcResponse<ConversationRecord | null>>;
   createConversation(projectId: string | null, firstPrompt: string): Promise<IpcResponse<ConversationRecord>>;
-  compactConversation(conversationId: string): Promise<IpcResponse<ConversationRecord>>;
+  compactConversation(conversationId: string, options?: { beforeNextRun?: boolean }): Promise<IpcResponse<ConversationRecord>>;
   saveConversation(conversation: ConversationRecord): Promise<IpcResponse<ConversationRecord>>;
   forkConversation(request: { conversationId: string; throughTurnId?: string }): Promise<IpcResponse<ConversationBranchResult>>;
   rewindConversation(request: { conversationId: string; turnId: string; restoreFiles: boolean }): Promise<IpcResponse<ConversationBranchResult>>;
