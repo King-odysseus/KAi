@@ -3043,6 +3043,8 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .crew-board { display: grid; grid-template-columns: repeat(5, minmax(150px, 1fr)); gap: 10px; min-width: 0; overflow-x: auto; padding-bottom: 4px; }
 .crew-task.flag { border-color: var(--red); }
 .crew-feedback { padding: 6px 8px; border-radius: 6px; background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--text); font-size: 12px; }
+.crew-board .kanban-column { align-self: start; }
+.crew-design-ref.crew-card-clamp { display: -webkit-box; -webkit-line-clamp: 1; line-clamp: 1; }
 .crew-card-clamp { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .crew-card-clamp-title { -webkit-line-clamp: 2; line-clamp: 2; }
 .crew-card-clamp-note { -webkit-line-clamp: 3; line-clamp: 3; }

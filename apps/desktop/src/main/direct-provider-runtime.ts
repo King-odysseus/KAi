@@ -504,7 +504,7 @@ export interface DirectProviderRuntimeOptions {
   resolveProxyRoute?: (request: AgentRunRequest) => Promise<DirectApiProxyRoute>;
   waitIfPaused?: (conversationId: string, signal: AbortSignal) => Promise<void>;
   /** Asks a local server (LM Studio) which models it offers; replaced in tests. */
-  probeLocalServer?: (baseUrl: string) => Promise<LocalServerProbe>;
+  probeLocalServer?: (baseUrl: string, apiKey?: string) => Promise<LocalServerProbe>;
   /** Spaces requests out; Autopilot sets it so a long job stays under the provider's limit. Off by default. */
   pacer?: RequestPacer;
   /** Stop a run whose estimated cost passes this many USD. Zero disables it; defaults to KAI_MAX_RUN_COST_USD, then the Usage setting. */
@@ -834,7 +834,8 @@ export class DesktopDirectProviderRuntime {
     }
     if (local) {
       // A local server needs no key, but it has to be running and have a model to offer.
-      const probe = await (this.options.probeLocalServer ?? probeLocalServer)(directApi.baseUrl);
+      const key = credentialStored ? await this.credentials.get(directApi.credentialId).catch(() => undefined) : undefined;
+      const probe = await (this.options.probeLocalServer ?? probeLocalServer)(directApi.baseUrl, key || undefined);
       if (!probe.reachable) {
         return {
           ...base,

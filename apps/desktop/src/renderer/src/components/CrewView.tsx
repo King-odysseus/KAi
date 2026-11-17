@@ -715,19 +715,32 @@ function Board({ run, onSelect }: { run: CrewRun; onSelect: (taskId: string) => 
       <div className="crew-board" role="list">
         {COLUMNS.map((column) => {
           const tasks = board.filter((task) => column.statuses.includes(task.status));
-          return (
-            <section key={column.id} className="kanban-column" role="listitem" aria-label={column.label}>
-              <h3>{column.label} <small>{tasks.length}</small></h3>
-              {tasks.map((task) => (
-                <BoardCard key={task.id} task={task} roleLabel={roleLabel(task.role)} onSelect={onSelect} />
-              ))}
-              {tasks.length === 0 && <small className="crew-empty">Nothing here</small>}
-            </section>
-          );
+          return <BoardColumn key={column.id} id={column.id} label={column.label} tasks={tasks} roleLabel={roleLabel} onSelect={onSelect} />;
         })}
       </div>
       <LiveFeed run={run} />
     </div>
+  );
+}
+
+const COLUMN_FIRST_PAGE = 10;
+const COLUMN_PAGE = 20;
+
+/** One board column: the 10 most recently changed tasks first, then a button for the rest. */
+function BoardColumn({ id, label, tasks, roleLabel, onSelect }: { id: string; label: string; tasks: CrewRun['tasks']; roleLabel: (role: string) => string; onSelect: (taskId: string) => void }): ReactNode {
+  const [shown, setShown] = useState(COLUMN_FIRST_PAGE);
+  const recent = [...tasks].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  const rest = recent.length - shown;
+  return (
+    <section key={id} className="kanban-column" role="listitem" aria-label={label}>
+      <h3>{label} <small>{tasks.length}</small></h3>
+      {recent.slice(0, shown).map((task) => (
+        <BoardCard key={task.id} task={task} roleLabel={roleLabel(task.role)} onSelect={onSelect} />
+      ))}
+      {tasks.length === 0 && <small className="crew-empty">Nothing here</small>}
+      {rest > 0 && <button type="button" className="crew-card-more" onClick={() => setShown((count) => count + COLUMN_PAGE)}>Show {Math.min(rest, COLUMN_PAGE)} more <small>({rest} older)</small></button>}
+      {shown > COLUMN_FIRST_PAGE && rest <= 0 && <button type="button" className="crew-card-more" onClick={() => setShown(COLUMN_FIRST_PAGE)}>Show less</button>}
+    </section>
   );
 }
 
@@ -740,12 +753,12 @@ function BoardCard({ task, roleLabel, onSelect }: { task: CrewRun['tasks'][numbe
   const status = TASK_STATUS[task.status];
   const feedback = [...task.reviews].reverse().find((review) => review.verdict !== 'accept' && review.feedback);
   const feedbackText = (task.status === 'sentBack' || task.status === 'needsYou') && feedback ? `${feedback.reviewer}: ${feedback.feedback}` : '';
-  const long = task.title.length > CARD_TITLE_LONG || feedbackText.length > CARD_FEEDBACK_LONG;
+  const long = task.title.length > CARD_TITLE_LONG || feedbackText.length > CARD_FEEDBACK_LONG || (task.designRef?.length ?? 0) > CARD_TITLE_LONG;
   return (
     <article className={`kanban-card crew-task crew-task-clickable ${task.status === 'needsYou' ? 'flag' : ''}`} role="button" tabIndex={0} aria-label={`Details: ${task.title}`} onClick={() => onSelect(task.id)} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(task.id); } }}>
       <strong className={long && !open ? 'crew-card-clamp crew-card-clamp-title' : undefined}>{task.title}</strong>
       <small>{roleLabel}{task.round > 0 ? ` · round ${task.round}` : ''} · {task.acceptance.length} {task.acceptance.length === 1 ? 'criterion' : 'criteria'}</small>
-      {task.designRef && <small className="crew-design-ref"><Palette size={11} />{task.designRef}</small>}
+      {task.designRef && <small className={`crew-design-ref${long && !open ? ' crew-card-clamp' : ''}`}><Palette size={11} />{task.designRef}</small>}
       {feedbackText && <p className={`crew-feedback${long && !open ? ' crew-card-clamp crew-card-clamp-note' : ''}`}>{feedbackText}</p>}
       {long && <button type="button" className="crew-card-more" aria-expanded={open} onClick={(event) => { event.stopPropagation(); setOpen((value) => !value); }}>{open ? 'Show less' : 'Show more'}</button>}
       <span className="crew-task-foot">

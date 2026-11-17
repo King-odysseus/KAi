@@ -114,7 +114,7 @@ describe('LM Studio as a provider', () => {
   it('probes a server quickly, and reports a stopped one instead of hanging', async () => {
     const baseUrl = await listen(lmStudio(['a-model']));
     await expect(probeLocalServer(baseUrl)).resolves.toMatchObject({ reachable: true, models: ['a-model'] });
-    const stopped = await probeLocalServer('http://127.0.0.1:9/v1', 1_000);
+    const stopped = await probeLocalServer('http://127.0.0.1:9/v1', undefined, 1_000);
     expect(stopped.reachable).toBe(false);
     expect(stopped.models).toEqual([]);
   });
@@ -136,6 +136,21 @@ describe('LM Studio as a provider', () => {
 
     const noModel = new DesktopDirectProviderRuntime({ load: async () => lmStudioSettings(baseUrl, '') }, noVault());
     await expect(noModel.capability()).resolves.toMatchObject({ available: false, unavailableReason: 'Set a direct API model in Settings.' });
+  });
+
+  it('is available when a gateway wants the saved key even to list its models', async () => {
+    const gateway = http.createServer((request, response) => {
+      if (request.headers.authorization !== 'Bearer gateway-test-key') { response.writeHead(401).end(); return; }
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ data: [{ id: 'ollama/qwen3-coder:30b' }] }));
+    });
+    const baseUrl = await listen(gateway);
+    const vault = { isAvailable: () => true, has: async () => true, get: async () => 'gateway-test-key' };
+    const withKey = new DesktopDirectProviderRuntime({ load: async () => lmStudioSettings(baseUrl, 'ollama/qwen3-coder:30b') }, vault);
+    await expect(withKey.capability()).resolves.toMatchObject({ available: true });
+
+    const noKey = new DesktopDirectProviderRuntime({ load: async () => lmStudioSettings(baseUrl, 'ollama/qwen3-coder:30b') }, noVault());
+    await expect(noKey.capability()).resolves.toMatchObject({ available: false, unavailableReason: expect.stringContaining('has no models') });
   });
 
   it('keeps every other provider strict about its key', async () => {
