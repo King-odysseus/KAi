@@ -3043,6 +3043,11 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .crew-board { display: grid; grid-template-columns: repeat(5, minmax(150px, 1fr)); gap: 10px; min-width: 0; overflow-x: auto; padding-bottom: 4px; }
 .crew-task.flag { border-color: var(--red); }
 .crew-feedback { padding: 6px 8px; border-radius: 6px; background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--text); font-size: 12px; }
+.crew-card-clamp { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.crew-card-clamp-title { -webkit-line-clamp: 2; line-clamp: 2; }
+.crew-card-clamp-note { -webkit-line-clamp: 3; line-clamp: 3; }
+.crew-card-more { align-self: flex-start; padding: 0; border: 0; background: none; color: var(--mint); font-size: 12px; cursor: pointer; }
+.crew-card-more:hover { text-decoration: underline; }
 .crew-task-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .crew-empty { color: var(--text-dim); font-size: 12px; }
 

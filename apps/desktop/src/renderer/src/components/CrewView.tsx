@@ -718,22 +718,9 @@ function Board({ run, onSelect }: { run: CrewRun; onSelect: (taskId: string) => 
           return (
             <section key={column.id} className="kanban-column" role="listitem" aria-label={column.label}>
               <h3>{column.label} <small>{tasks.length}</small></h3>
-              {tasks.map((task) => {
-                const status = TASK_STATUS[task.status];
-                const feedback = [...task.reviews].reverse().find((review) => review.verdict !== 'accept' && review.feedback);
-                return (
-                  <article key={task.id} className={`kanban-card crew-task crew-task-clickable ${task.status === 'needsYou' ? 'flag' : ''}`} role="button" tabIndex={0} aria-label={`Details: ${task.title}`} onClick={() => onSelect(task.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(task.id); } }}>
-                    <strong>{task.title}</strong>
-                    <small>{roleLabel(task.role)}{task.round > 0 ? ` · round ${task.round}` : ''} · {task.acceptance.length} {task.acceptance.length === 1 ? 'criterion' : 'criteria'}</small>
-                    {task.designRef && <small className="crew-design-ref"><Palette size={11} />{task.designRef}</small>}
-                    {(task.status === 'sentBack' || task.status === 'needsYou') && feedback && <p className="crew-feedback">{feedback.reviewer}: {feedback.feedback}</p>}
-                    <span className="crew-task-foot">
-                      {task.status !== 'accepted' && task.status !== 'backlog' && <Pill tone={status.tone}>{status.label}</Pill>}
-                      {task.costUsd > 0 && <small>{money(task.costUsd)}</small>}
-                    </span>
-                  </article>
-                );
-              })}
+              {tasks.map((task) => (
+                <BoardCard key={task.id} task={task} roleLabel={roleLabel(task.role)} onSelect={onSelect} />
+              ))}
               {tasks.length === 0 && <small className="crew-empty">Nothing here</small>}
             </section>
           );
@@ -741,6 +728,31 @@ function Board({ run, onSelect }: { run: CrewRun; onSelect: (taskId: string) => 
       </div>
       <LiveFeed run={run} />
     </div>
+  );
+}
+
+const CARD_TITLE_LONG = 70;
+const CARD_FEEDBACK_LONG = 140;
+
+/** One board card. Long titles and reviewer notes are cut to a few lines with a Show more button, so every card stays short. */
+function BoardCard({ task, roleLabel, onSelect }: { task: CrewRun['tasks'][number]; roleLabel: string; onSelect: (taskId: string) => void }): ReactNode {
+  const [open, setOpen] = useState(false);
+  const status = TASK_STATUS[task.status];
+  const feedback = [...task.reviews].reverse().find((review) => review.verdict !== 'accept' && review.feedback);
+  const feedbackText = (task.status === 'sentBack' || task.status === 'needsYou') && feedback ? `${feedback.reviewer}: ${feedback.feedback}` : '';
+  const long = task.title.length > CARD_TITLE_LONG || feedbackText.length > CARD_FEEDBACK_LONG;
+  return (
+    <article className={`kanban-card crew-task crew-task-clickable ${task.status === 'needsYou' ? 'flag' : ''}`} role="button" tabIndex={0} aria-label={`Details: ${task.title}`} onClick={() => onSelect(task.id)} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(task.id); } }}>
+      <strong className={long && !open ? 'crew-card-clamp crew-card-clamp-title' : undefined}>{task.title}</strong>
+      <small>{roleLabel}{task.round > 0 ? ` · round ${task.round}` : ''} · {task.acceptance.length} {task.acceptance.length === 1 ? 'criterion' : 'criteria'}</small>
+      {task.designRef && <small className="crew-design-ref"><Palette size={11} />{task.designRef}</small>}
+      {feedbackText && <p className={`crew-feedback${long && !open ? ' crew-card-clamp crew-card-clamp-note' : ''}`}>{feedbackText}</p>}
+      {long && <button type="button" className="crew-card-more" aria-expanded={open} onClick={(event) => { event.stopPropagation(); setOpen((value) => !value); }}>{open ? 'Show less' : 'Show more'}</button>}
+      <span className="crew-task-foot">
+        {task.status !== 'accepted' && task.status !== 'backlog' && <Pill tone={status.tone}>{status.label}</Pill>}
+        {task.costUsd > 0 && <small>{money(task.costUsd)}</small>}
+      </span>
+    </article>
   );
 }
 
