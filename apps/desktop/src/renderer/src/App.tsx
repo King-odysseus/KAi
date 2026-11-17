@@ -1554,7 +1554,8 @@ export function App(): ReactNode {
 
     // A conversation that has grown long is summarised first, so every later request stays small. A failure here
     // never blocks the message: the run simply goes ahead with the full history.
-    if (estimateConversationTokens(conversation) >= COMPACTION_WARNING_TOKENS) {
+    const compactAt = settings.usageBudget.compactAtTokens;
+    if (compactAt > 0 && estimateConversationTokens(conversation) >= compactAt) {
       setAgentNotice('This conversation has grown long, so KAI is summarising the older turns first.');
       const compacted = await window.kaiDesktop.compactConversation(conversation.id).then(unwrap).catch(() => null);
       if (compacted) {

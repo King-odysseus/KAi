@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appSettingsV1Schema, createDefaultSettings, type ConversationRecord, type UsageBudget } from '../packages/contracts/src';
+import { appSettingsV1Schema, createDefaultSettings, usageBudgetSchema, type ConversationRecord, type UsageBudget } from '../packages/contracts/src';
 import {
   blockingReason,
   estimateCostUsd,
@@ -162,7 +162,10 @@ describe('usage budget settings contract', () => {
   it('fills budget defaults so settings saved before this feature still load', () => {
     const defaults = createDefaultSettings();
     // No per-run cap unless the person sets one: a run is not interrupted by a number they did not choose.
-    expect(defaults.usageBudget).toEqual({ mode: 'warn', perRunUsd: 0, perConversationUsd: 0, dailyUsd: 0, monthlyUsd: 0, providerDailyUsd: {} });
+    expect(defaults.usageBudget).toEqual({ mode: 'warn', perRunUsd: 0, perConversationUsd: 0, dailyUsd: 0, monthlyUsd: 0, providerDailyUsd: {}, compactAtTokens: 60_000 });
+    // Auto-compact is on at the old warning size by default, 0 turns it off, and a negative or silly size is refused.
+    expect(usageBudgetSchema.parse({ compactAtTokens: 0 }).compactAtTokens).toBe(0);
+    expect(usageBudgetSchema.safeParse({ compactAtTokens: -1 }).success).toBe(false);
     const { usageBudget: _omitted, ...legacy } = defaults;
     expect(appSettingsV1Schema.parse(legacy).usageBudget.mode).toBe('warn');
   });

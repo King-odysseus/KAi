@@ -119,6 +119,7 @@ import { windowBriefing } from './window-control';
 import { runSecurityPrepass } from './security-prepass';
 import { boardCardSchema, type ImportReport } from '@kai/contracts';
 import type { ExecutionMode } from '@kai/contracts';
+import { estimateConversationTokens } from '@kai/contracts';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
 import { gitCheckout, gitCloneTeamRepository, gitCommit, gitCreateBranch, gitCreatePullRequest, gitCreateRepository, gitBlameFile, gitChangedHunks, gitDiffAgainstHead, scanTodos, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitPullTeamBranch, gitStage, gitSync } from './git-tools';
@@ -1892,6 +1893,16 @@ export async function runConversationAgent(
   const projectId = conversation.projectId ?? (ownerWindowId === null ? settings.activeProjectId : null);
   const project = projectId ? (await context.projects.list()).find((item) => item.id === projectId) : undefined;
   if (!project) throw new NotFoundError('Open a project before sending a message.');
+  // One place for every agent run (composer, Crew, Studio, workflows): a history past the chosen size is summarised
+  // first. A failure never blocks the run; it simply goes ahead with the full history.
+  const compactAt = settings.usageBudget.compactAtTokens;
+  if (compactAt > 0 && conversation.turns.length > 0 && estimateConversationTokens(conversation) >= compactAt) {
+    try {
+      Object.assign(conversation, await compactConversation(context, conversation.id));
+    } catch (error) {
+      context.logger.error('agent_crash', 'Automatic context compaction failed; running with the full history', undefined, error);
+    }
+  }
   // Where the agent works and reads files. The project itself stays the identity for memory, claims and checks.
   const workRoot = options.cwd ?? project.path;
 

@@ -1729,6 +1729,8 @@ export function WorkspaceView({
       setStoppingRun(false);
     }
   }
+  // The size the person chose for compacting; with auto-compact off the old warning size still marks "getting long".
+  const compactLimit = settings.usageBudget.compactAtTokens > 0 ? settings.usageBudget.compactAtTokens : COMPACTION_WARNING_TOKENS;
   const liveTokenEstimate = (activeConversation ? estimateConversationTokens(activeConversation) : 0) + Math.ceil(streamingText.length / 4);
   const refineBlocked = busy || running || paused || awaitingApproval || refiningPrompt;
   const refineTitle = !prompt.trim()
@@ -1830,7 +1832,7 @@ export function WorkspaceView({
           </NoticeBanner>
         )}
 
-        {activeConversation && !running && estimateConversationTokens(activeConversation) >= COMPACTION_WARNING_TOKENS && (
+        {activeConversation && !running && estimateConversationTokens(activeConversation) >= compactLimit && (
           <NoticeBanner
             primary={<UiButton type="button" variant="secondary" disabled={busy} onClick={onCompactConversation}>Compact</UiButton>}
             more={[{ key: 'continue', label: 'Continue in new tab', disabled: busy, onSelect: onContinueInNewTab }]}
@@ -2425,7 +2427,7 @@ export function WorkspaceView({
               <IconButton aria-label="Add context" title="Add files, images, memory, or project context" active={contextPickerOpen} onClick={() => setContextPickerOpen((current) => !current)} icon={<Plus size={15} />} />
               <IconButton aria-label="Saved prompts" title="Saved prompts" active={presetsOpen} onClick={() => setPresetsOpen((current) => !current)} icon={<Hash size={14} />} />
               <IconButton aria-label="Slash commands" title="Commands: type / in the message box" onClick={() => { setPrompt((current) => (current.startsWith('/') ? current : `/${current}`)); window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Task prompt"]')?.focus(), 0); }} icon={<span className="font-mono text-[13px] font-semibold leading-none">/</span>} />
-              {activeConversation && <ContextRing tokens={liveTokenEstimate} limit={COMPACTION_WARNING_TOKENS} busy={busy || running} onCompact={onCompactConversation} />}
+              {activeConversation && <ContextRing tokens={liveTokenEstimate} limit={compactLimit} busy={busy || running} onCompact={onCompactConversation} />}
               {activeConversation && <IconButton aria-label="Side question" title="Ask a quick question without derailing this conversation" active={sideOpen} onClick={() => setSideOpen((current) => !current)} icon={<MessageCircleQuestion size={14} />} />}
               <OptionMenu ariaLabel="Access level" disabled={busy} icon={<ShieldCheck size={13} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
               <OptionMenu ariaLabel="Task type" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={PERSONAS.map((persona) => ({ value: persona.id, label: persona.label, description: persona.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />

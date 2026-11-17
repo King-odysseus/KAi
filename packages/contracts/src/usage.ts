@@ -12,6 +12,9 @@ export const usageBudgetSchema = z
     dailyUsd: usdSchema.default(0),
     monthlyUsd: usdSchema.default(0),
     providerDailyUsd: z.record(z.string().min(1), usdSchema).default({}),
+    // When a conversation's history reaches about this many tokens, KAI summarises the older turns before the next
+    // request. It applies to every place an agent runs (composer, Crew, Studio, workflows). Zero turns it off.
+    compactAtTokens: z.number().int().min(0).max(2_000_000).default(60_000),
   })
   .strict();
 

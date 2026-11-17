@@ -3258,10 +3258,11 @@ async function executeToolCalls(
   return results;
 }
 
-/** A provider that accepts the request but never answers would leave the run waiting forever. */
-const RESPONSE_HEADERS_TIMEOUT_MS = 90_000;
+/** A provider that accepts the request but never answers would leave the run waiting forever. A large local model on a
+ *  big prompt can take minutes before its first byte, so this is long (500 s) rather than a tight 90 s. */
+const RESPONSE_HEADERS_TIMEOUT_MS = 500_000;
 /** A provider that goes quiet in the middle of a reply, for longer than any real pause between chunks. */
-const STREAM_IDLE_TIMEOUT_MS = 120_000;
+const STREAM_IDLE_TIMEOUT_MS = 500_000;
 
 export async function fetchWithHeaderTimeout(
   url: string,

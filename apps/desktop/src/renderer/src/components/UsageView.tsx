@@ -131,6 +131,15 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
           )}
         </section>
 
+        <section className="settings-section usage-compact">
+          <div className="section-title"><span>Auto-compact</span></div>
+          <p className="settings-note">When a conversation's history reaches this many tokens, KAI summarises the older turns before the next request, in the composer, Crew, Studio and workflows alike. Set it to 0 to never compact on its own.</p>
+          <div className="usage-budget-row">
+            <label className="field"><span>Compact at (tokens)</span><UiTextInput type="number" min={0} max={2000000} step={1000} value={draft.compactAtTokens} onChange={(event) => { const value = Math.floor(Number(event.target.value)); setDraft((current) => ({ ...current, compactAtTokens: Number.isFinite(value) && value >= 0 ? Math.min(value, 2_000_000) : 0 })); }} /></label>
+            <UiButton type="button" className="primary-button" disabled={busy} onClick={() => onSave({ usageBudget: draft })}><Check size={16} /><span>Save</span></UiButton>
+          </div>
+        </section>
+
         <section className="settings-section usage-days">
           <div className="section-title"><span>Last 30 days</span></div>
           <div className="usage-chart" role="img" aria-label="Estimated daily spend for the last 30 days">
