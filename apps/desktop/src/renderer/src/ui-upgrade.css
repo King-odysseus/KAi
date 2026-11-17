@@ -352,7 +352,7 @@ html[data-theme]:root .composer textarea {
  * Usage follows its board: four stat tiles, then Budget limits beside the 30-day chart, then three short
  * breakdown cards (provider, model, conversation) that show a name and its estimate.
  */
-.usage-metrics { display: grid; width: auto; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 14px 20px 14px; box-sizing: border-box; }
+.usage-metrics { display: grid; width: auto; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; margin: 14px 20px 14px; box-sizing: border-box; }
 .usage-metrics .metric { align-items: flex-start; padding: 14px 16px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--bg-panel); }
 .usage-metrics .metric-icon { display: none; }
 .usage-metrics .metric small { color: var(--text-muted); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
@@ -365,7 +365,14 @@ html[data-theme]:root .composer textarea {
   padding: 0 20px 24px;
 }
 .usage-layout > .usage-budget { grid-column: span 3; }
-.usage-layout > .usage-days { grid-column: span 3; display: flex; flex-direction: column; }
+.usage-layout > .usage-side { grid-column: span 3; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.usage-side > .usage-compact { flex: 0 0 auto; }
+.usage-side > .usage-days { flex: 1 1 auto; display: flex; flex-direction: column; }
+.usage-compact .usage-budget-row { flex-wrap: nowrap; }
+.usage-compact .usage-budget-row .field { max-width: 220px; }
+.usage-compact .saved { align-self: center; color: var(--mint); font-size: 12px; }
+.usage-unit-hint { color: var(--text-dim); font-size: 11px; }
+.usage-budget-row .saved { align-self: center; color: var(--mint); font-size: 12px; }
 .usage-layout > .usage-table-card { grid-column: span 2; align-self: start; }
 .usage-days .usage-chart { flex: 1 1 auto; min-height: 180px; }
 .usage-budget-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
@@ -381,7 +388,7 @@ html[data-theme]:root .composer textarea {
 .usage-rows li > strong { flex: 0 0 auto; color: var(--text); font-weight: 600; }
 @media (max-width: 1100px) {
   .usage-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .usage-layout > .usage-budget, .usage-layout > .usage-days { grid-column: 1 / -1; }
+  .usage-layout > .usage-budget, .usage-layout > .usage-side { grid-column: 1 / -1; }
   .usage-layout > .usage-table-card { grid-column: span 3; }
 }
 

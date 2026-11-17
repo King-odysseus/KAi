@@ -2089,18 +2089,38 @@ export function App(): ReactNode {
     setConversations((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
   }
 
-  async function compactActiveConversation(): Promise<void> {
-    if (!activeConversation) {
-      setError('Open a conversation before compacting context.');
-      return;
-    }
+  // Conversations whose Compact was pressed while a run was going: it happens the moment that run ends.
+  const [compactWhenIdle, setCompactWhenIdle] = useState<string[]>([]);
+  useEffect(() => {
+    const ready = compactWhenIdle.filter((id) => !runningConversationIds.includes(id));
+    if (ready.length === 0) return;
+    setCompactWhenIdle((current) => current.filter((id) => !ready.includes(id)));
+    for (const id of ready) void compactConversationNow(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compactWhenIdle, runningConversationIds]);
+
+  async function compactConversationNow(conversationId: string): Promise<void> {
     const compacted = await perform(
-      () => window.kaiDesktop.compactConversation(activeConversation.id).then(unwrap),
+      () => window.kaiDesktop.compactConversation(conversationId).then(unwrap),
       'Compacting conversation context',
     );
     if (!compacted) return;
     setConversations((current) => current.map((item) => item.id === compacted.id ? compacted : item));
     setAgentNotice(`Compacted ${compacted.compaction?.originalTurns ?? 0} conversation turns into a reusable context briefing.`);
+  }
+
+  async function compactActiveConversation(): Promise<void> {
+    if (!activeConversation) {
+      setError('Open a conversation before compacting context.');
+      return;
+    }
+    // Rewriting the history under an agent that is using it would corrupt the run, so Compact waits for the run to end.
+    if (runningConversationIds.includes(activeConversation.id)) {
+      setCompactWhenIdle((current) => current.includes(activeConversation.id) ? current : [...current, activeConversation.id]);
+      setAgentNotice('KAI will compact this conversation as soon as the current run finishes.');
+      return;
+    }
+    await compactConversationNow(activeConversation.id);
   }
 
   /** Summarises the open conversation and carries on from that summary in a new tab; the old tab is left as it was. */
@@ -2433,7 +2453,7 @@ export function App(): ReactNode {
           />
         );
       case 'usage':
-        return <UsageView settings={bootstrap.settings} activeConversationId={activeConversationId} busy={Boolean(busy)} onSave={(update) => void saveSettings(update)} />;
+        return <UsageView settings={bootstrap.settings} activeConversationId={activeConversationId} busy={Boolean(busy)} onSave={(update) => saveSettings(update)} />;
       case 'commands':
         return <CommandsView onOpenTerminal={() => setTerminalOpen(true)} />;
       case 'import':

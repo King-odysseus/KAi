@@ -729,11 +729,23 @@ const COLUMN_PAGE = 20;
 /** One board column: the 10 most recently changed tasks first, then a button for the rest. */
 function BoardColumn({ id, label, tasks, roleLabel, onSelect }: { id: string; label: string; tasks: CrewRun['tasks']; roleLabel: (role: string) => string; onSelect: (taskId: string) => void }): ReactNode {
   const [shown, setShown] = useState(COLUMN_FIRST_PAGE);
-  const recent = [...tasks].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  // Finished work is rarely what the person is looking for, so that column starts closed.
+  const [open, setOpen] = useState(id !== 'accepted');
+  // A task that needs the person comes first, then the newest.
+  const recent = [...tasks].sort((a, b) => Number(b.status === 'needsYou') - Number(a.status === 'needsYou') || Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   const rest = recent.length - shown;
+  if (!open && tasks.length > 0) {
+    return (
+      <section key={id} className="kanban-column" role="listitem" aria-label={label}>
+        <h3>{label} <small>{tasks.length}</small></h3>
+        <button type="button" className="crew-card-more" aria-expanded={false} onClick={() => setOpen(true)}>Show {tasks.length} accepted {tasks.length === 1 ? 'task' : 'tasks'}</button>
+      </section>
+    );
+  }
   return (
     <section key={id} className="kanban-column" role="listitem" aria-label={label}>
       <h3>{label} <small>{tasks.length}</small></h3>
+      {id === 'accepted' && tasks.length > 0 && <button type="button" className="crew-card-more" aria-expanded onClick={() => setOpen(false)}>Hide accepted</button>}
       {recent.slice(0, shown).map((task) => (
         <BoardCard key={task.id} task={task} roleLabel={roleLabel(task.role)} onSelect={onSelect} />
       ))}

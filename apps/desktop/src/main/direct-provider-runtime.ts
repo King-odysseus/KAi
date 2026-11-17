@@ -258,6 +258,94 @@ function textOfContent(content: string | Array<Record<string, unknown>> | null |
     .join('\n');
 }
 
+/** Rough size of a chat history in tokens (4 characters each): text and tool calls only, never the bytes of an image. */
+export function estimateChatTokens(messages: readonly ChatMessage[]): number {
+  let characters = 0;
+  for (const message of messages) {
+    characters += textOfContent(message.content).length;
+    for (const call of message.tool_calls ?? []) characters += call.function.name.length + call.function.arguments.length;
+  }
+  return Math.ceil(characters / 4);
+}
+
+/**
+ * Whether the part of a run since the last fold should be folded into a summary now: the whole history has reached the
+ * size the person chose, and this block is a real share of it (so a long starting history that cannot shrink does not
+ * make every round fold on its own). Zero turns it off.
+ */
+export function shouldCompactRun(messages: readonly ChatMessage[], segmentStart: number, compactAt: number, reportedTokens = 0): boolean {
+  if (compactAt <= 0 || messages.length - segmentStart < 2) return false;
+  // The size the model itself reported for its last request beats our estimate, which cannot see everything it was sent.
+  return Math.max(estimateChatTokens(messages), reportedTokens) >= compactAt && estimateChatTokens(messages.slice(segmentStart)) >= Math.max(1_000, compactAt / 5);
+}
+
+/** Rough size of an Anthropic-shaped history in tokens: text, tool calls and tool results, never the bytes of an image. */
+export function estimateAnthropicTokens(messages: readonly AnthropicMessage[]): number {
+  let characters = 0;
+  for (const message of messages) characters += anthropicBlocksText(message.content).length;
+  return Math.ceil(characters / 4);
+}
+
+function anthropicBlocksText(content: AnthropicMessage['content']): string {
+  if (typeof content === 'string') return content;
+  return content
+    .map((block) => {
+      if (typeof block.text === 'string') return block.text;
+      if (block.type === 'tool_use') return `${String(block.name ?? '')}${JSON.stringify(block.input ?? {})}`;
+      if (block.type === 'tool_result') return typeof block.content === 'string' ? block.content : anthropicBlocksText(Array.isArray(block.content) ? block.content as Array<Record<string, unknown>> : []);
+      return '';
+    })
+    .join('\n');
+}
+
+/** The same decision as `shouldCompactRun`, for an Anthropic-shaped history. */
+export function shouldCompactAnthropicRun(messages: readonly AnthropicMessage[], segmentStart: number, compactAt: number, reportedTokens = 0): boolean {
+  if (compactAt <= 0 || messages.length - segmentStart < 2) return false;
+  return Math.max(estimateAnthropicTokens(messages), reportedTokens) >= compactAt && estimateAnthropicTokens(messages.slice(segmentStart)) >= Math.max(1_000, compactAt / 5);
+}
+
+/** The tool activity of an Anthropic-shaped run so far, as the same short plain-text list the chat shape uses. */
+export function compactAnthropicToolHistory(tail: readonly AnthropicMessage[]): string {
+  const results = new Map<string, string>();
+  for (const message of tail) {
+    if (message.role !== 'user' || typeof message.content === 'string') continue;
+    for (const block of message.content) {
+      if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+        results.set(block.tool_use_id, typeof block.content === 'string' ? block.content : anthropicBlocksText(Array.isArray(block.content) ? block.content as Array<Record<string, unknown>> : []));
+      }
+    }
+  }
+  const entries: string[] = [];
+  for (const message of tail) {
+    if (message.role !== 'assistant') continue;
+    const blocks: Array<Record<string, unknown>> = typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : message.content;
+    for (const block of blocks) {
+      if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) entries.push(`You said: ${clip(block.text, CONTINUATION_TEXT_LIMIT)}`);
+      if (block.type !== 'tool_use') continue;
+      const result = results.get(String(block.id));
+      const status = result === undefined ? 'no result' : (toolResultFailed(result) ? 'failed' : 'ok');
+      entries.push(`${String(block.name ?? 'unknown')} ${clip(JSON.stringify(block.input ?? {}), CONTINUATION_TEXT_LIMIT)} -> ${status}${result ? `: ${clip(result, CONTINUATION_TEXT_LIMIT)}` : ''}`);
+    }
+  }
+  const shown = entries.slice(-CONTINUATION_ENTRY_LIMIT);
+  const omitted = entries.length - shown.length;
+  return [
+    'Progress so far on this task (your earlier tool calls, oldest first):',
+    ...(omitted > 0 ? [`(${omitted} earlier steps not shown)`] : []),
+    ...shown.map((entry, index) => `${omitted + index + 1}. ${entry}`),
+  ].join('\n');
+}
+
+/** Adds text as the next user turn, joining it to a user turn that is already last, as the Anthropic API wants roles to alternate. */
+function pushUserText(messages: AnthropicMessage[], text: string): void {
+  const last = messages.at(-1);
+  if (last?.role === 'user') {
+    last.content = typeof last.content === 'string' ? `${last.content}\n\n${text}` : [...last.content, { type: 'text', text }];
+    return;
+  }
+  messages.push({ role: 'user', content: text });
+}
+
 export function compactChatToolHistory(tail: readonly ChatMessage[]): string {
   const results = new Map<string, ChatMessage>();
   for (const message of tail) {
@@ -843,6 +931,9 @@ export class DesktopDirectProviderRuntime {
           unavailableReason: `${displayName} is not reachable at ${directApi.baseUrl}. ${localServerHint(directApi.provider)}`,
         };
       }
+      if (probe.models.length === 0 && /wants a key/.test(probe.detail ?? '')) {
+        return { ...base, available: false, unavailableReason: `${displayName} at ${directApi.baseUrl} wants a key. Save one for this provider in Settings (${directApi.credentialId}).` };
+      }
       if (probe.models.length === 0) {
         return {
           ...base,
@@ -1354,6 +1445,10 @@ export class DesktopDirectProviderRuntime {
     let resumeAfterSteer = false;
     let continuations = 0;
     let reasoningOnly = false;
+    // The size the person chose in Settings: a long run folds its older tool activity into a summary at this point,
+    // so one run does not keep growing past it. Zero (or no setting) leaves the history alone.
+    const compactAt = (await this.settings.load().catch(() => undefined))?.usageBudget?.compactAtTokens ?? 0;
+    let lastContextTokens = 0;
 
     try {
       for (let providerRound = 0; providerRound < providerRoundLimit; providerRound += 1) {
@@ -1406,7 +1501,7 @@ export class DesktopDirectProviderRuntime {
           const usage = asRecord(value.usage);
           const roundInputTokens = integerValue(usage?.prompt_tokens) ?? integerValue(usage?.input_tokens);
           const roundOutputTokens = integerValue(usage?.completion_tokens) ?? integerValue(usage?.output_tokens);
-          if (roundInputTokens !== undefined) inputTokens = (inputTokens ?? 0) + roundInputTokens;
+          if (roundInputTokens !== undefined) { inputTokens = (inputTokens ?? 0) + roundInputTokens; lastContextTokens = roundInputTokens; }
           if (roundOutputTokens !== undefined) outputTokens = (outputTokens ?? 0) + roundOutputTokens;
 
           const choice = firstRecord(value.choices);
@@ -1545,6 +1640,14 @@ export class DesktopDirectProviderRuntime {
             forceFinalAnswer = true;
             messages.push({ role: 'user', content: WRAP_UP_MESSAGE });
           }
+        } else if (!forceFinalAnswer && toolRounds < totalToolRoundLimit && shouldCompactRun(messages, segmentStart, compactAt, lastContextTokens)) {
+          // The history reached the size chosen for auto-compact: the same fold as above, triggered by size.
+          const summary = compactChatToolHistory(messages.slice(segmentStart));
+          messages.length = segmentStart;
+          messages.push({ role: 'user', content: continuationMessage(summary) });
+          segmentStart = messages.length;
+          segmentRounds = 0;
+          emit(lifecycleEvent(request, 'starting', `This run reached ${compactAt.toLocaleString()} tokens, so KAI summarised its earlier steps and is carrying on.`));
         }
       }
     } catch (error) {
@@ -1659,6 +1762,11 @@ export class DesktopDirectProviderRuntime {
     let forceFinalAnswer = false;
     let resumeAfterSteer = false;
     const toolRoundLimit = this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
+    // The size chosen for auto-compact (zero leaves the history alone), and where the part of this run that can be
+    // folded into a summary begins.
+    const compactAt = (await this.settings.load().catch(() => undefined))?.usageBudget?.compactAtTokens ?? 0;
+    let segmentStart = messages.length;
+    let lastContextTokens = 0;
 
     try {
       for (let providerRound = 0; providerRound < toolRoundLimit + PROVIDER_ROUND_HEADROOM; providerRound += 1) {
@@ -1713,7 +1821,7 @@ export class DesktopDirectProviderRuntime {
             const roundInputTokens = integerValue(usage?.input_tokens);
             // Cached prompt tokens are reported separately; count them so budgets never undercount the prompt.
             const cachedTokens = (integerValue(usage?.cache_read_input_tokens) ?? 0) + (integerValue(usage?.cache_creation_input_tokens) ?? 0);
-            if (roundInputTokens !== undefined) inputTokens = (inputTokens ?? 0) + roundInputTokens + cachedTokens;
+            if (roundInputTokens !== undefined) { inputTokens = (inputTokens ?? 0) + roundInputTokens + cachedTokens; lastContextTokens = roundInputTokens + cachedTokens; }
             cachedReadTokens += integerValue(usage?.cache_read_input_tokens) ?? 0;
             continue;
           }
@@ -1851,6 +1959,14 @@ export class DesktopDirectProviderRuntime {
           anthropicToolOutput,
         );
         messages.push({ role: 'user', content: toolResults as Array<Record<string, unknown>> });
+        if (!forceFinalAnswer && toolRounds < toolRoundLimit && shouldCompactAnthropicRun(messages, segmentStart, compactAt, lastContextTokens)) {
+          // The history reached the size chosen for auto-compact: fold this block of tool activity into a summary.
+          const summary = compactAnthropicToolHistory(messages.slice(segmentStart));
+          messages.length = segmentStart;
+          pushUserText(messages, continuationMessage(summary));
+          segmentStart = messages.length;
+          emit(lifecycleEvent(request, 'starting', `This run reached ${compactAt.toLocaleString()} tokens, so KAI summarised its earlier steps and is carrying on.`));
+        }
       }
     } catch (error) {
       aborted = controller.signal.aborted;

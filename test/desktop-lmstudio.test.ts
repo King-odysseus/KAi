@@ -12,7 +12,7 @@ import {
   type AgentRunRequest,
   type AppSettings,
 } from '../packages/contracts/src';
-import { DesktopDirectProviderRuntime } from '../apps/desktop/src/main/direct-provider-runtime';
+import { DesktopDirectProviderRuntime, compactAnthropicToolHistory, compactChatToolHistory, estimateAnthropicTokens, estimateChatTokens, shouldCompactAnthropicRun, shouldCompactRun, type ChatMessage } from '../apps/desktop/src/main/direct-provider-runtime';
 import { probeLocalServer } from '../apps/desktop/src/main/local-provider';
 import { listProviderModels } from '../apps/desktop/src/main/provider-models';
 import { assignTeam, billingFor, type AssignmentEnvironment } from '../apps/desktop/src/main/team-assign';
@@ -150,7 +150,52 @@ describe('LM Studio as a provider', () => {
     await expect(withKey.capability()).resolves.toMatchObject({ available: true });
 
     const noKey = new DesktopDirectProviderRuntime({ load: async () => lmStudioSettings(baseUrl, 'ollama/qwen3-coder:30b') }, noVault());
-    await expect(noKey.capability()).resolves.toMatchObject({ available: false, unavailableReason: expect.stringContaining('has no models') });
+    await expect(noKey.capability()).resolves.toMatchObject({ available: false, unavailableReason: expect.stringContaining('wants a key') });
+  });
+
+  it('folds a long run into a summary once its history reaches the chosen size', () => {
+    const big = 'x'.repeat(4_000); // about 1,000 tokens
+    const round = (id: string): ChatMessage[] => [
+      { role: 'assistant', content: null, tool_calls: [{ id, type: 'function', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } }] },
+      { role: 'tool', tool_call_id: id, content: big },
+    ];
+    const history: ChatMessage[] = [{ role: 'user', content: big }, ...round('a'), ...round('b'), ...round('c')];
+    expect(estimateChatTokens(history)).toBeGreaterThan(3_500);
+    // Off at 0, and not before the history reaches the size.
+    expect(shouldCompactRun(history, 1, 0)).toBe(false);
+    expect(shouldCompactRun(history, 1, 50_000)).toBe(false);
+    // At the chosen size, and the block since the last fold is a real share of it.
+    expect(shouldCompactRun(history, 1, 3_000)).toBe(true);
+    // A history that cannot shrink (nothing but the starting turn, or an empty block) does not fold every round.
+    expect(shouldCompactRun(history, history.length, 3_000)).toBe(false);
+    expect(shouldCompactRun(history, history.length - 1, 3_000)).toBe(false);
+    const summary = compactChatToolHistory(history.slice(1));
+    expect(summary).toContain('read_file');
+    expect(summary.length).toBeLessThan(estimateChatTokens(history) * 4);
+  });
+
+  it('counts the size the model reported when that is larger than the estimate', () => {
+    const history: ChatMessage[] = [{ role: 'user', content: 'start' }, { role: 'assistant', content: 'a'.repeat(4_000) }, { role: 'user', content: 'b'.repeat(4_000) }];
+    expect(shouldCompactRun(history, 1, 8_000)).toBe(false);
+    expect(shouldCompactRun(history, 1, 8_000, 10_000)).toBe(true);
+  });
+
+  it('folds an Anthropic-shaped run the same way', () => {
+    const big = 'x'.repeat(4_000);
+    const round = (id: string): Array<{ role: 'user' | 'assistant'; content: string | Array<Record<string, unknown>> }> => [
+      { role: 'assistant', content: [{ type: 'tool_use', id, name: 'read_file', input: { path: 'a.ts' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: big }] },
+    ];
+    const history = [{ role: 'user' as const, content: 'start' }, ...round('a'), ...round('b'), ...round('c')];
+    expect(estimateAnthropicTokens(history)).toBeGreaterThan(2_500);
+    expect(shouldCompactAnthropicRun(history, 1, 0)).toBe(false);
+    expect(shouldCompactAnthropicRun(history, 1, 50_000)).toBe(false);
+    expect(shouldCompactAnthropicRun(history, 1, 2_000)).toBe(true);
+    expect(shouldCompactAnthropicRun(history, history.length, 2_000)).toBe(false);
+    const summary = compactAnthropicToolHistory(history.slice(1));
+    expect(summary).toContain('read_file');
+    expect(summary).toContain('-> ok');
+    expect(summary.length).toBeLessThan(big.length);
   });
 
   it('keeps every other provider strict about its key', async () => {

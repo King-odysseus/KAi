@@ -1,5 +1,5 @@
 import { AlertTriangle, Check, RefreshCw, Wallet } from 'lucide-react';
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { DIRECT_PROVIDER_ORDER, directProviderPreset } from '@kai/contracts';
 import type { AppSettings, SettingsUpdate, UsageBudget, UsageLimitStatus, UsageSummary } from '@kai/contracts';
 import { unwrap } from '../types';
@@ -60,7 +60,7 @@ export function UsageBanner({ conversationId, refreshToken, onOpenUsage }: { con
   );
 }
 
-export function UsageView({ settings, activeConversationId, busy, onSave }: { settings: AppSettings; activeConversationId: string | null; busy: boolean; onSave: (update: SettingsUpdate) => void }): ReactNode {
+export function UsageView({ settings, activeConversationId, busy, onSave }: { settings: AppSettings; activeConversationId: string | null; busy: boolean; onSave: (update: SettingsUpdate) => void | Promise<boolean | void> }): ReactNode {
   const { summary, error, refresh } = useUsageSummary(activeConversationId ?? undefined, settings.usageBudget);
   const [draft, setDraft] = useState<UsageBudget>(settings.usageBudget);
   useEffect(() => setDraft(settings.usageBudget), [settings.usageBudget]);
@@ -69,6 +69,20 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
     return () => window.clearInterval(timer);
   }, [refresh]);
 
+  // Says so, briefly, once a save has gone through; a failed save shows nothing here (the app's error banner reports it).
+  const [saved, setSaved] = useState<'budget' | 'compact' | null>(null);
+  const savedTimer = useRef<number | null>(null);
+  async function save(which: 'budget' | 'compact'): Promise<void> {
+    if (savedTimer.current) window.clearTimeout(savedTimer.current);
+    setSaved(null);
+    const outcome = await onSave({ usageBudget: draft });
+    if (outcome === false) return;
+    setSaved(which);
+    savedTimer.current = window.setTimeout(() => setSaved(null), 3_000);
+  }
+
+  const totalIn = (summary?.byProvider ?? []).reduce((sum, row) => sum + row.inputTokens, 0);
+  const totalOut = (summary?.byProvider ?? []).reduce((sum, row) => sum + row.outputTokens, 0);
   const paidProviders = DIRECT_PROVIDER_ORDER;
   const maxDay = Math.max(...(summary?.byDay.map((day) => day.usd) ?? [0]), 0.000001);
   const setLimit = (key: 'perRunUsd' | 'perConversationUsd' | 'dailyUsd' | 'monthlyUsd', value: number): void =>
@@ -90,6 +104,7 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
         <div className="metric"><span className="metric-icon"><Wallet size={16} /></span><div><small>Today (estimate)</small><strong>{formatUsd(summary?.todayUsd ?? 0)}</strong></div></div>
         <div className="metric"><span className="metric-icon"><Wallet size={16} /></span><div><small>This month (estimate)</small><strong>{formatUsd(summary?.monthUsd ?? 0)}</strong></div></div>
         <div className="metric"><span className="metric-icon"><Wallet size={16} /></span><div><small>Active conversation</small><strong>{summary?.conversationUsd == null ? 'None open' : formatUsd(summary.conversationUsd)}</strong></div></div>
+        <div className="metric"><span className="metric-icon"><Wallet size={16} /></span><div><small>Tokens used</small><strong title={`${totalIn.toLocaleString()} in / ${totalOut.toLocaleString()} out`}>{formatTokens(totalIn + totalOut)}</strong></div></div>
         <div className="metric"><span className="metric-icon"><Wallet size={16} /></span><div><small>Unpriced runs</small><strong>{summary?.unpricedRuns ?? 0}</strong></div></div>
       </div>
       {summary && summary.unpricedRuns > 0 && (
@@ -106,7 +121,8 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
             <UsdField label="Per conversation (USD)" value={draft.perConversationUsd} onChange={(value) => setLimit('perConversationUsd', value)} />
             <UsdField label="Per day (USD)" value={draft.dailyUsd} onChange={(value) => setLimit('dailyUsd', value)} />
             <UsdField label="Per month (USD)" value={draft.monthlyUsd} onChange={(value) => setLimit('monthlyUsd', value)} />
-            <UiButton type="button" className="primary-button" disabled={busy} onClick={() => onSave({ usageBudget: draft })}><Check size={16} /><span>Save budget</span></UiButton>
+            <UiButton type="button" className="primary-button" disabled={busy} onClick={() => void save('budget')}><Check size={16} /><span>Save budget</span></UiButton>
+            {saved === 'budget' && <span className="saved" role="status">Saved</span>}
           </div>
           <details className="usage-provider-limits">
             <summary>Daily limit per provider</summary>
@@ -131,12 +147,14 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
           )}
         </section>
 
-        <section className="settings-section usage-compact">
+        <div className="usage-side">
+          <section className="settings-section usage-compact">
           <div className="section-title"><span>Auto-compact</span></div>
           <p className="settings-note">When a conversation's history reaches this many tokens, KAI summarises the older turns before the next request, in the composer, Crew, Studio and workflows alike. Set it to 0 to never compact on its own.</p>
           <div className="usage-budget-row">
-            <label className="field"><span>Compact at (tokens)</span><UiTextInput type="number" min={0} max={2000000} step={1000} value={draft.compactAtTokens} onChange={(event) => { const value = Math.floor(Number(event.target.value)); setDraft((current) => ({ ...current, compactAtTokens: Number.isFinite(value) && value >= 0 ? Math.min(value, 2_000_000) : 0 })); }} /></label>
-            <UiButton type="button" className="primary-button" disabled={busy} onClick={() => onSave({ usageBudget: draft })}><Check size={16} /><span>Save</span></UiButton>
+            <label className="field"><span>Compact at (tokens)</span><small className="usage-unit-hint">{draft.compactAtTokens > 0 ? `about ${Math.round(draft.compactAtTokens * 0.75).toLocaleString()} words of history` : 'off: never compacts on its own'}</small><UiTextInput type="number" min={0} max={2000000} step={1000} value={draft.compactAtTokens} onChange={(event) => { const value = Math.floor(Number(event.target.value)); setDraft((current) => ({ ...current, compactAtTokens: Number.isFinite(value) && value >= 0 ? Math.min(value, 2_000_000) : 0 })); }} /></label>
+            <UiButton type="button" className="primary-button" disabled={busy} onClick={() => void save('compact')}><Check size={16} /><span>Save</span></UiButton>
+            {saved === 'compact' && <span className="saved" role="status">Saved: compacting at {draft.compactAtTokens > 0 ? `${draft.compactAtTokens.toLocaleString()} tokens` : 'never (off)'}</span>}
           </div>
         </section>
 
@@ -148,6 +166,7 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
             ))}
           </div>
         </section>
+        </div>
 
         <UsageTable title="By provider" empty="No paid API runs yet" rows={(summary?.byProvider ?? []).map((row) => ({ name: row.provider, usd: formatUsd(row.usd), detail: `${row.runs} runs · ${row.inputTokens.toLocaleString()} in / ${row.outputTokens.toLocaleString()} out` }))} />
         <UsageTable title="By model" empty="No paid API runs yet" rows={(summary?.byModel ?? []).map((row) => ({ name: row.model, usd: formatUsd(row.usd), detail: `${row.provider} · ${row.runs} runs · ${row.inputTokens.toLocaleString()} in / ${row.outputTokens.toLocaleString()} out` }))} />
@@ -155,6 +174,13 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
       </div>
     </div>
   );
+}
+
+/** 1,234 as "1.2K", 2,500,000 as "2.5M": the table rows carry the exact counts. */
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(value);
 }
 
 function UsdField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }): ReactNode {

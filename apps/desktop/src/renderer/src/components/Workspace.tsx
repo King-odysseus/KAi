@@ -2427,7 +2427,7 @@ export function WorkspaceView({
               <IconButton aria-label="Add context" title="Add files, images, memory, or project context" active={contextPickerOpen} onClick={() => setContextPickerOpen((current) => !current)} icon={<Plus size={15} />} />
               <IconButton aria-label="Saved prompts" title="Saved prompts" active={presetsOpen} onClick={() => setPresetsOpen((current) => !current)} icon={<Hash size={14} />} />
               <IconButton aria-label="Slash commands" title="Commands: type / in the message box" onClick={() => { setPrompt((current) => (current.startsWith('/') ? current : `/${current}`)); window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Task prompt"]')?.focus(), 0); }} icon={<span className="font-mono text-[13px] font-semibold leading-none">/</span>} />
-              {activeConversation && <ContextRing tokens={liveTokenEstimate} limit={compactLimit} busy={busy || running} onCompact={onCompactConversation} />}
+              {activeConversation && <ContextRing tokens={liveTokenEstimate} limit={compactLimit} busy={busy} running={running} onCompact={onCompactConversation} />}
               {activeConversation && <IconButton aria-label="Side question" title="Ask a quick question without derailing this conversation" active={sideOpen} onClick={() => setSideOpen((current) => !current)} icon={<MessageCircleQuestion size={14} />} />}
               <OptionMenu ariaLabel="Access level" disabled={busy} icon={<ShieldCheck size={13} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
               <OptionMenu ariaLabel="Task type" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={PERSONAS.map((persona) => ({ value: persona.id, label: persona.label, description: persona.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
@@ -3091,7 +3091,7 @@ function modelGroup(name: string): string {
  * How full the conversation's context is, as a small ring beside the composer's other tools. Opening it says how much
  * is used and holds the one action that frees room, Compact, so that action sits where the fullness is shown.
  */
-function ContextRing({ tokens, limit, busy, onCompact }: { tokens: number; limit: number; busy: boolean; onCompact: () => void }): ReactNode {
+function ContextRing({ tokens, limit, busy, running, onCompact }: { tokens: number; limit: number; busy: boolean; running: boolean; onCompact: () => void }): ReactNode {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -3126,7 +3126,7 @@ function ContextRing({ tokens, limit, busy, onCompact }: { tokens: number; limit
           <div className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--text-dim)]">Context</div>
           <div className="mt-1 text-sm text-[var(--text)]">About {Math.round(ratio * 100)}% used</div>
           <div className="mt-0.5 text-xs text-[var(--text-muted)]">~{formatCompact(tokens)} of ~{formatCompact(limit)} tokens before KAI suggests compacting.</div>
-          <UiButton type="button" className="secondary-button mt-2.5" disabled={busy} onClick={() => { setOpen(false); onCompact(); }}>Compact conversation</UiButton>
+          <UiButton type="button" className="secondary-button mt-2.5" disabled={busy} onClick={() => { setOpen(false); onCompact(); }}>{running ? 'Compact when this run ends' : 'Compact conversation'}</UiButton>
         </div>
       )}
     </div>
