@@ -2,6 +2,7 @@ import { Compass, Hammer, LifeBuoy, Loader2, Square, Wrench, X } from 'lucide-re
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   directProviderPreset,
+  isLocalProvider,
   roleTargetKey,
   type AgentCapability,
   type ArchitectReadiness,
@@ -136,7 +137,9 @@ export function useArchitectSplit(input: {
         baseUrl: api.baseUrl ?? preset.defaultBaseUrl,
         credentialId: api.credentialId ?? preset.credentialId,
       }).then(unwrap).then((catalog) => {
-        setLiveModels((current) => new Map(current).set(key, catalog.source === 'live' ? catalog.models : []));
+        // A local server that cannot be asked right now (a gateway wanting a key, or switched off) still answers with the
+        // models KAI remembered from earlier, so keep those. Any other provider's unreachable answer is just the shipped list.
+        setLiveModels((current) => new Map(current).set(key, catalog.source === 'live' || isLocalProvider(api.provider) ? catalog.models : []));
       }).catch(() => setLiveModels((current) => new Map(current).set(key, [])));
     }
   }, [wanted, liveModels]);
