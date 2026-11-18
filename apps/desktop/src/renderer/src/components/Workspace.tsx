@@ -104,7 +104,7 @@ import type {
   VerificationOverview,
   WorkbenchGoal,
 } from '@kai/contracts';
-import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, HELPER_CHOICES, HELPER_CHOICE_DESCRIPTION, HELPER_CHOICE_LABEL, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, estimateConversationTokens, estimateResponseCostUsd, experienceProfile, MAX_SAVED_RECIPES, SAVED_RECIPE_INTENTS, architectSplitActive } from '@kai/contracts';
+import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, HELPER_CHOICES, HELPER_CHOICE_DESCRIPTION, HELPER_CHOICE_LABEL, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, isLocalProvider, estimateConversationTokens, estimateResponseCostUsd, experienceProfile, MAX_SAVED_RECIPES, SAVED_RECIPE_INTENTS, architectSplitActive } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
 import { HunkReview, canReviewHunks } from './HunkReview';
 import { ToolCallCard, toolCallStatus } from './ToolCallCard';
@@ -582,6 +582,7 @@ export function WorkspaceView({
   const attachmentOnlyPrompt = hasFileAttachment ? FILE_ONLY_PROMPT : IMAGE_ONLY_PROMPT;
   const canSendPrompt = Boolean(prompt.trim()) || hasAttachment;
   const estimateModel = selectedModel || directApiCapability?.model || '';
+  const localModels = useLocalModels(apiRun ? directApiCapability : null);
   const promptContextCharacters = allContextChips.reduce((total, chip) => total + (
     chip.type === 'selection' || chip.type === 'terminal' ? chip.content?.length ?? 0
       : chip.type === 'gitDiff' ? chip.stat.length
@@ -2448,7 +2449,7 @@ export function WorkspaceView({
                 />
               )}
               {activeRecipe && activeRecipe.id.startsWith('saved_') && <IconButton aria-label="Remove saved recipe" title="Remove this saved recipe" disabled={busy} onClick={() => void removeSavedRecipe(activeRecipe.id)} icon={<Trash2 size={14} />} />}
-              <OptionMenu ariaLabel="Model" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)} title="Model for this conversation" value={selectedModel} />
+              <OptionMenu ariaLabel="Model" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel, localModels)} title="Model for this conversation" value={selectedModel} />
               <IconButton data-tour="composer-advanced" aria-label="More run options" title="More run options" aria-expanded={advancedComposerOpen} active={advancedComposerOpen} disabled={busy} onClick={() => setAdvancedComposerOpen((open) => !open)} icon={<Settings2 size={14} />} />
             </>}
             actions={<>
@@ -3144,14 +3145,40 @@ function validateModelName(value: string): string | null {
     : 'Use only letters, numbers, ., -, _, /, and :.';
 }
 
+/**
+ * The models a local server (LM Studio, Ollama, ...) has loaded or this app has seen before. The shipped preset for
+ * those providers is empty, so without this the composer's model menu offered only the default and "Other model...".
+ * A failure leaves the list empty; the menu still works.
+ */
+function useLocalModels(capability: DirectApiCapability | null): readonly string[] {
+  const [models, setModels] = useState<readonly string[]>([]);
+  const provider = capability?.provider;
+  const baseUrl = capability?.baseUrl;
+  const credentialId = capability?.credentialId;
+  useEffect(() => {
+    if (!provider || !baseUrl || !credentialId || !isLocalProvider(provider)) { setModels([]); return; }
+    let alive = true;
+    const load = (): void => {
+      void window.kaiDesktop.listProviderModels({ provider, baseUrl, credentialId }).then(unwrap)
+        .then((catalog) => { if (alive) setModels(catalog.models); })
+        .catch(() => undefined);
+    };
+    load();
+    window.addEventListener('focus', load);
+    return () => { alive = false; window.removeEventListener('focus', load); };
+  }, [provider, baseUrl, credentialId]);
+  return models;
+}
+
 function modelOptions(
   apiRun: boolean,
   agent: AgentId,
   capability: DirectApiCapability | null,
   selected: string,
+  localModels: readonly string[] = [],
 ): OptionMenuOption<string>[] {
   const suggestions = apiRun
-    ? directProviderPreset(capability?.provider ?? 'openai').models
+    ? [...new Set([...directProviderPreset(capability?.provider ?? 'openai').models, ...localModels])]
     : agent in CLI_MODEL_SUGGESTIONS ? CLI_MODEL_SUGGESTIONS[agent as keyof typeof CLI_MODEL_SUGGESTIONS] : [];
   const known = new Set(suggestions);
   const defaultLabel = apiRun && capability?.model ? `Default (${capability.model})` : 'Default';
