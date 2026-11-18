@@ -9,6 +9,7 @@ import {
   readStoredSplit,
   roleModelOptions,
   splitFor,
+  pairingWarning,
   splitProblem,
   tabKeyFor,
   targetFromValue,
@@ -225,5 +226,18 @@ describe('what the pickers offer', () => {
     const local = roleModelOptions('implementer', { execution: 'api', api: { provider: 'ollama' } }, ['qwen2.5-coder', 'llama3.3']);
     expect(local[0]).toEqual({ value: '', label: 'Whatever is loaded' });
     expect(local.map((option) => option.value)).toEqual(expect.arrayContaining(['qwen2.5-coder', 'llama3.3']));
+  });
+});
+
+describe('pairingWarning', () => {
+  const on = (architect: RoleTarget, implementer: RoleTarget): ArchitectSplit => ({ enabled: true, architect, implementer, fallback: null });
+  it('warns, without blocking, about a weak Architect or a local Implementer', () => {
+    const strong: RoleTarget = { execution: 'cli', agent: 'claude', model: 'claude-opus-5-5' };
+    const weak: RoleTarget = { execution: 'cli', agent: 'claude', model: 'claude-haiku-5-5' };
+    const local: RoleTarget = { execution: 'api', api: { provider: 'lmstudio', model: 'qwen2.5-coder' } };
+    expect(pairingWarning(on(strong, { execution: 'cli', agent: 'codex' }))).toBeNull();
+    expect(pairingWarning(on(weak, { execution: 'cli', agent: 'codex' }))).toMatch(/Architect is not a model known for planning/);
+    expect(pairingWarning(on(strong, local))).toMatch(/model on this computer/);
+    expect(pairingWarning({ enabled: false, architect: weak, implementer: local, fallback: null })).toBeNull();
   });
 });

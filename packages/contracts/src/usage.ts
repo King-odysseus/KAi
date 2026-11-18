@@ -74,4 +74,5 @@ export const defaultUsageBudget: UsageBudget = {
   dailyUsd: 0,
   monthlyUsd: 0,
   providerDailyUsd: {},
+  compactAtTokens: 60_000,
 };

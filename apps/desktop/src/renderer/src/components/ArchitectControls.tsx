@@ -20,6 +20,7 @@ import {
   readStoredSplit,
   roleModelOptions,
   splitFor,
+  pairingWarning,
   splitProblem,
   tabKeyFor,
   targetFromValue,
@@ -48,6 +49,8 @@ export interface ArchitectSplitState {
   setRole(role: ArchitectRole, target: RoleTarget | null): void;
   /** Why a run cannot start yet, or null. */
   problem: string | null;
+  /** A heads-up about a weak pairing, or null. Never stops a run. */
+  warning: string | null;
   readiness: ReadonlyMap<string, ArchitectReadiness>;
   credentialIds: readonly string[];
   liveModels: ReadonlyMap<string, readonly string[]>;
@@ -149,7 +152,7 @@ export function useArchitectSplit(input: {
     return () => { alive = false; };
   }, [split, credentialIds]);
 
-  return { split, setEnabled, setRole, problem: splitProblem(split), readiness, credentialIds, liveModels, capabilities };
+  return { split, setEnabled, setRole, problem: splitProblem(split), warning: pairingWarning(split), readiness, credentialIds, liveModels, capabilities };
 }
 
 /** The switch, as a row that says what it does. It lives in the run options panel, under its own heading. */
@@ -243,6 +246,7 @@ export function ArchitectRow({ state, disabled }: { state: ArchitectSplitState; 
         );
       })}
       {state.problem && <span className="text-xs text-[var(--waiting)]" role="note">{state.problem}</span>}
+      {!state.problem && state.warning && <span className="text-xs text-[var(--text-muted)]" role="note">{state.warning}</span>}
     </div>
   );
 }
@@ -307,7 +311,12 @@ export function ArchitectStatusLine({ status }: { status: ArchitectStatus | null
   const who = status.role === 'architect' ? `Architect · ${status.architectLabel}` : status.role === 'implementer' ? `Implementer · ${status.implementerLabel}` : 'Architect and Implementer';
   const waiting = status.phase === 'waiting-for-you';
   const bad = status.phase === 'failed';
+  // What each side last said, so the back-and-forth is visible: the Architect's guidance, then what the Implementer answered.
+  const lastBy = (role: 'architect' | 'implementer'): string | null => [...status.log].reverse().find((entry) => entry.role === role)?.text ?? null;
+  const guidance = lastBy('architect');
+  const answer = lastBy('implementer');
   return (
+    <div>
     <div className={`flex flex-wrap items-center gap-2 pt-1.5 text-xs ${bad ? 'text-[var(--failed)]' : waiting ? 'text-[var(--waiting)]' : 'text-[var(--text-muted)]'}`} role="status" aria-live="polite">
       {active && !waiting && <Loader2 size={12} className="spin" aria-hidden="true" />}
       <strong>{who}</strong>
@@ -324,10 +333,30 @@ export function ArchitectStatusLine({ status }: { status: ArchitectStatus | null
           <UiButton type="button" className="secondary-button" onClick={() => void window.kaiDesktop.answerArchitect({ conversationId: status.conversationId, carryOn: false })}>Finish here</UiButton>
         </>
       )}
+      {active && !waiting && status.role === 'implementer' && (
+        <UiButton type="button" className="secondary-button" title="End the Implementer's turn and have the Architect step in, keeping the work done so far" onClick={() => void window.kaiDesktop.handoffArchitect({ conversationId: status.conversationId })}>Hand to Architect</UiButton>
+      )}
       {active && !waiting && (
         <UiButton type="button" className="secondary-button" aria-label="Stop the Architect and Implementer" onClick={() => void window.kaiDesktop.stopArchitect({ conversationId: status.conversationId })}><Square size={11} /> Stop</UiButton>
       )}
       {!active && <UiButton type="button" className="secondary-button" aria-label="Dismiss" onClick={() => setDismissed(status.updatedAt)}><X size={11} /></UiButton>}
+    </div>
+    {(guidance || answer) && (
+      <div className="grid gap-0.5 pt-1 text-xs text-[var(--text-muted)]">
+        {guidance && <span><strong>Architect:</strong> {guidance}</span>}
+        {answer && <span><strong>Implementer:</strong> {answer}</span>}
+      </div>
+    )}
+    {status.log.length > 0 && (
+      <details className="pt-1 text-xs text-[var(--text-muted)]">
+        <summary className="cursor-pointer">Full log ({status.log.length})</summary>
+        <ol className="m-0 grid list-none gap-0.5 p-0 pt-1">
+          {status.log.map((entry, index) => (
+            <li key={`${entry.at}-${index}`}><strong>{entry.role === 'architect' ? 'Architect' : entry.role === 'implementer' ? 'Implementer' : 'KAI'}:</strong> {entry.text}</li>
+          ))}
+        </ol>
+      </details>
+    )}
     </div>
   );
 }

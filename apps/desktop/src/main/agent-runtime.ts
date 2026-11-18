@@ -14,6 +14,7 @@ import type {
   PersistedEvent,
 } from '@kai/contracts';
 import { CLI_API_KEY_ENV, effortFitsAgent } from '@kai/contracts';
+import { withRepeatNotice } from './repeat-watch';
 
 /** How long to keep reading a finished process's output before giving up on pipes a background process still holds. */
 const OUTPUT_DRAIN_GRACE_MS = 1_000;
@@ -501,6 +502,8 @@ export class DesktopAgentRuntime {
     /** Local image files already validated by the desktop IPC layer. */
     imagePaths: readonly string[] = [],
   ): Promise<AgentExecutionResult> {
+    // Says so, once, if the run starts repeating the same paragraph; never touches the run.
+    onEvent = withRepeatNotice(onEvent, request);
     const definition = AGENTS[request.agent];
     const modelKey = model ? `${request.agent}:${model}` : null;
     const rejectedReason = modelKey ? this.rejectedModels.get(modelKey) : undefined;

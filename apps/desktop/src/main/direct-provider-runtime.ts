@@ -12,6 +12,7 @@ import type {
   PersistedEvent,
 } from '@kai/contracts';
 import type { AgentExecutionResult } from './agent-runtime';
+import { withRepeatNotice } from './repeat-watch';
 import { readPlan } from './plan-store';
 import { interjectionImages, steeringInstructionFor, takeInterjectionMessage } from './interjections';
 import {
@@ -970,6 +971,8 @@ export class DesktopDirectProviderRuntime {
     history?: readonly DirectApiHistoryTurn[],
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
   ): Promise<AgentExecutionResult> {
+    // Says so, once, if the run starts repeating the same paragraph; never touches the run.
+    onEvent = withRepeatNotice(onEvent, request);
     // Registered before any `await` below, not after — `cancel(conversationId)` only has something to abort once
     // this exists, and the awaits below (capability, credential, proxy-route lookups) used to run first, so a
     // cancel arriving during any of them found nothing registered and silently did nothing: the run went on to

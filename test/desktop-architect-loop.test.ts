@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   ARCHITECT_BRIEF_SENTINEL,
+  ARCHITECT_REPORT_SENTINEL,
   ARCHITECT_STUCK_SENTINEL,
   ARCHITECT_VERDICT_SENTINEL,
   architectRunInputSchema,
@@ -27,6 +28,14 @@ import {
   extractJsonAfter,
   parseBrief,
   parseVerdict,
+  repeatsItself,
+  implementerAutonomy,
+  parseReport,
+  changedPaths,
+  crossCheckReport,
+  sameStuckReason,
+  stuckReason,
+  namedStuckCause,
   REVISIONS_BEFORE_STEP_IN,
   ROUNDS_BEFORE_ASKING,
   type ArchitectLoopPorts,
@@ -34,6 +43,7 @@ import {
 } from '../apps/desktop/src/main/architect-loop';
 import { DesktopAutoSession, withImplementer, type AutoSessionPorts, type AutoWindowPort } from '../apps/desktop/src/main/auto-session';
 import { resolveApiConnection } from '../apps/desktop/src/main/api-connection';
+import { RepeatWatch, withRepeatNotice } from '../apps/desktop/src/main/repeat-watch';
 
 const BRIEF = { goal: 'Add the parser', files: ['src/parser.ts'], avoid: ['src/legacy.ts'], doneChecks: ['parser.test.ts passes'] };
 const brief = (goal = BRIEF.goal): string => `Here is the plan.\n${ARCHITECT_BRIEF_SENTINEL} ${JSON.stringify({ ...BRIEF, goal })}`;
@@ -62,6 +72,16 @@ interface Script {
   /** What each role's runs cost, in USD. */
   architectCost?: number;
   implementerCost?: number;
+  /** The working tree never changes, whatever the Implementer does. */
+  unchanged?: boolean;
+  /** The review material never changes, but the content fingerprint does (an edit the diff text cannot show). */
+  fingerprintChanges?: boolean;
+  /** The first build turn fails once. */
+  failFirstBuild?: boolean;
+  /** The first build turn does not end until it is cancelled. */
+  hangFirstBuild?: boolean;
+  /** The project's own test command, offered when the brief names none. */
+  suggested?: string;
 }
 
 function scripted(script: Script = {}) {
@@ -71,6 +91,7 @@ function scripted(script: Script = {}) {
   const announced: ArchitectStatus[] = [];
   let reviews = 0;
   let builds = 0;
+  let release: (() => void) | null = null;
   const checkCalls: string[] = [];
   const restored: Array<{ conversationId: string; composer: ComposerRecord }> = [];
   const down = new Set((script.down ?? []).map(roleTargetKey));
@@ -90,6 +111,11 @@ function scripted(script: Script = {}) {
       }
       builds += 1;
       buildPrompts.push(request.prompt);
+      if (script.failFirstBuild && builds === 1) return { conversation: {} as never, status: 'failed', error: 'connection dropped', output: '', costUsd: 0 };
+      if (script.hangFirstBuild && builds === 1) {
+        await new Promise<void>((resolve) => { release = resolve; });
+        return { conversation: {} as never, status: 'completed', cancelled: true, output: 'half done', costUsd: 0 };
+      }
       return { conversation: {} as never, status: 'completed', output: pick(script.built, builds, 'Built it.'), costUsd: script.implementerCost ?? 0 };
     },
     ...(script.checks ? {
@@ -101,8 +127,10 @@ function scripted(script: Script = {}) {
     } : {}),
     restoreComposer: async (conversationId: string, composer: ComposerRecord) => { restored.push({ conversationId, composer }); },
     ready: async (target) => (down.has(roleTargetKey(target)) ? { ready: false, reason: 'signed out' } : { ready: true }),
-    reviewMaterial: async () => '--- src/parser.ts\n+ export function parse() {}',
-    cancelAgent: () => true,
+    reviewMaterial: async () => (script.unchanged ? '--- src/parser.ts\n+ export function parse() {}' : `--- src/parser.ts\n+ export function parse() {} // build ${builds}`),
+    cancelAgent: () => { release?.(); return true; },
+    ...(script.fingerprintChanges ? { fingerprint: async () => `fp-${builds}` } : {}),
+    ...(script.suggested ? { suggestCheck: async () => script.suggested! } : {}),
     announce: (_owner, status) => { announced.push(structuredClone(status)); },
     now: () => Date.now(),
     agentNames: () => ({ claude: 'Claude', codex: 'Codex' }),
@@ -704,5 +732,183 @@ describe('the diff in a review prompt', () => {
     expect(trimmed).toContain('left out');
     // A small diff is left exactly as it is.
     expect(trimReviewMaterial('--- a.ts\n+ one line')).toBe('--- a.ts\n+ one line');
+  });
+});
+
+describe('a run that cannot get anywhere', () => {
+  it('builds in Auto-edit when the composer is on Plan, and keeps the Architect read-only', async () => {
+    const s = scripted();
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split(), { autonomy: 'plan' }), 1);
+    await finish(loop);
+    const builds = s.requests.filter((request) => !request.freshSession);
+    const architects = s.requests.filter((request) => request.freshSession);
+    expect(builds.length).toBeGreaterThan(0);
+    expect(builds.every((request) => request.autonomy === 'autoEdit')).toBe(true);
+    expect(architects.every((request) => request.autonomy === 'plan')).toBe(true);
+  });
+
+  it('gives every Implementer edit access, however the composer is set, except Full which stays Full', async () => {
+    expect(implementerAutonomy('plan')).toBe('autoEdit');
+    expect(implementerAutonomy('ask')).toBe('autoEdit');
+    expect(implementerAutonomy('custom')).toBe('autoEdit');
+    expect(implementerAutonomy('autoEdit')).toBe('autoEdit');
+    expect(implementerAutonomy('full')).toBe('full');
+    for (const [name, implementer] of [['a CLI', CODEX], ['an API', KIMI_API]] as const) {
+      const s = scripted();
+      const loop = new ArchitectLoop(s.ports);
+      await loop.start(input(split({ implementer }), { autonomy: 'ask' }), 1);
+      await finish(loop);
+      const builds = s.requests.filter((request) => !request.freshSession);
+      expect(builds.length, name).toBeGreaterThan(0);
+      expect(builds.every((request) => request.autonomy === 'autoEdit'), name).toBe(true);
+    }
+  });
+
+  it('tells the Implementer it may edit', async () => {
+    const s = scripted();
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split()), 1);
+    await finish(loop);
+    expect(s.buildPrompts[0]).toContain('You may edit files and run commands');
+  });
+
+  it('asks the person at once when the Implementer is stuck on the same thing twice', async () => {
+    const stuck = `${ARCHITECT_STUCK_SENTINEL} I am in plan mode and cannot edit files`;
+    const s = scripted({ built: [stuck, stuck] });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split()), 1);
+    const final = await finish(loop);
+    expect(final.phase).toBe('waiting-for-you');
+    expect(s.builds()).toBe(2);
+    expect(final.log.some((entry) => /not allowed to edit/.test(entry.text))).toBe(true);
+  });
+
+  it('reads the stuck reason and spots a reply that repeats itself', () => {
+    expect(stuckReason(`text\n${ARCHITECT_STUCK_SENTINEL} no loader exists\nmore`)).toBe('no loader exists');
+    expect(stuckReason('fine')).toBeNull();
+    expect(sameStuckReason('I am in plan mode.', 'i am in plan mode')).toBe(true);
+    expect(sameStuckReason('no loader', 'plan mode')).toBe(false);
+    expect(namedStuckCause('Plan mode blocks me')).toMatch(/not allowed/);
+    expect(namedStuckCause('no loader exists')).toBeNull();
+    const paragraph = 'I understand that I am in plan mode and cannot make code changes or run commands.';
+    expect(repeatsItself([paragraph, paragraph, paragraph].join('\n\n'))).toBe(true);
+    expect(repeatsItself([paragraph, 'Something else entirely that is long enough to count as a paragraph here.', paragraph].join('\n\n'))).toBe(false);
+  });
+});
+
+describe('checking before asking, and trusting the diff', () => {
+  const withCheck = (check: string) => brief().replace('"doneChecks"', `"checkCommand":${JSON.stringify(check)},"doneChecks"`);
+
+  it('treats a turn that changed nothing as stuck, without paying for a review', async () => {
+    const s = scripted({ unchanged: true, built: ['I looked at it.'] });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split()), 1);
+    const final = await finish(loop);
+    expect(s.reviews()).toBe(0);
+    expect(final.log.some((entry) => /changed nothing in the project/.test(entry.text))).toBe(true);
+    // The same blocker twice running reaches the person rather than looping.
+    expect(final.phase).toBe('waiting-for-you');
+  });
+
+  it('sends a failing check straight back without an Architect review', async () => {
+    const s = scripted({ planOutput: withCheck('npm test'), checks: [{ passed: false, output: 'expected 1 got 2' }, { passed: true }] });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split()), 1);
+    const final = await finish(loop);
+    // Round 1 failed the check and was never reviewed; round 2 passed it and the Architect approved.
+    expect(s.reviews()).toBe(1);
+    expect(s.builds()).toBe(2);
+    expect(s.buildPrompts[1]).toContain('expected 1 got 2');
+    expect(final.phase).toBe('finished');
+  });
+
+  it('puts the Implementer\'s report beside the diff, and overrules an approval of a claim nothing backs', async () => {
+    const report = `Done.\n${ARCHITECT_REPORT_SENTINEL} ${JSON.stringify({ filesChanged: ['src/ghost.ts'], checksRun: [], unfinished: [] })}`;
+    const s = scripted({ built: [report, 'Done.'] });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split()), 1);
+    const final = await finish(loop);
+    expect(s.architectPrompts.some((prompt) => prompt.includes('src/ghost.ts') && prompt.includes('cross-check'))).toBe(true);
+    // Approved on reading, but the claimed file was not in the project, so round 1 was sent back.
+    expect(s.builds()).toBe(2);
+    expect(final.log.some((entry) => /report names changes that are not in the project/.test(entry.text))).toBe(true);
+  });
+
+  it('reads a report and matches its files to the changed paths', () => {
+    const report = parseReport(`x\n${ARCHITECT_REPORT_SENTINEL} {"filesChanged":["src/parser.ts"],"checksRun":["npm test passed"]}`);
+    expect(report?.filesChanged).toEqual(['src/parser.ts']);
+    expect(parseReport('no report')).toBeNull();
+    expect(changedPaths('--- src/a.ts\n+x\n\n--- b.ts (new or unreadable as a diff)')).toEqual(['src/a.ts', 'b.ts']);
+    expect(crossCheckReport(report, '--- src/parser.ts\n+x').missing).toEqual([]);
+    expect(crossCheckReport(report, '--- other.ts\n+x').missing).toEqual(['src/parser.ts']);
+    expect(crossCheckReport(null, '').lines[0]).toMatch(/no structured report/);
+  });
+});
+
+describe('the repeat watch', () => {
+  it('speaks once, when a paragraph comes back a third time, and never for varied text', () => {
+    const paragraph = 'I understand that I am in plan mode and cannot make code changes or run commands.';
+    const watch = new RepeatWatch();
+    expect(watch.feed(`${paragraph}\n\n`)).toBe(false);
+    expect(watch.feed(`${paragraph}\n\n`)).toBe(false);
+    expect(watch.feed(`${paragraph}\n\n`)).toBe(true);
+    expect(watch.feed(`${paragraph}\n\n`)).toBe(false);
+    const varied = new RepeatWatch();
+    for (let i = 0; i < 5; i += 1) expect(varied.feed(`Step ${i}: a different and reasonably long sentence about something else entirely.\n\n`)).toBe(false);
+  });
+
+  it('adds one notice after the repeating text and leaves every event alone', () => {
+    const seen: Array<{ type: string }> = [];
+    const wrapped = withRepeatNotice((event) => { seen.push(event); }, { agent: 'claude', conversationId: 'c1' })!;
+    const delta = { schemaVersion: 1, id: 'e', taskId: 'c1', timestamp: 't', agent: 'claude', type: 'text.delta', channel: 'assistant', text: 'The very same long paragraph that keeps on coming back again and again.\n\n' } as never;
+    for (let i = 0; i < 4; i += 1) wrapped(delta);
+    expect(seen.filter((event) => event.type === 'text.delta')).toHaveLength(4);
+    expect(seen.filter((event) => event.type === 'notice')).toHaveLength(1);
+  });
+});
+
+describe('the last round of improvements', () => {
+  it('sees an edit the diff text cannot show, through the content fingerprint', async () => {
+    const s = scripted({ unchanged: true, fingerprintChanges: true });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split()), 1);
+    const final = await finish(loop);
+    expect(final.phase).toBe('finished');
+    expect(s.reviews()).toBe(1);
+  });
+
+  it('tries a failed Implementer turn once more, and says so', async () => {
+    const s = scripted({ failFirstBuild: true });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split()), 1);
+    const final = await finish(loop);
+    expect(final.phase).toBe('finished');
+    expect(s.builds()).toBe(2);
+    expect(final.log.some((entry) => /Trying that turn once more/.test(entry.text))).toBe(true);
+  });
+
+  it('hands a turn to the Architect on request instead of stopping the run', async () => {
+    const s = scripted({ hangFirstBuild: true, built: ['x', 'Built it.'] });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split()), 1);
+    await vi.waitFor(() => { if (loop.status('conv-1')?.role !== 'implementer' || s.builds() < 1) throw new Error('not building yet'); }, { timeout: 4_000 });
+    loop.handoff('conv-1');
+    const final = await finish(loop);
+    expect(final.phase).toBe('finished');
+    expect(s.architectPrompts.some((prompt) => prompt.includes('the Implementer is stuck'))).toBe(true);
+    expect(final.log.some((entry) => /going in circles/.test(entry.text))).toBe(true);
+  });
+
+  it('runs the project own test command when the brief names none, for information only', async () => {
+    const s = scripted({ suggested: 'npm test', checks: [{ passed: false, output: 'old failure' }] });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split()), 1);
+    const final = await finish(loop);
+    expect(s.checkCalls).toEqual(['npm test']);
+    // A failing project test is shown to the Architect, but it is not the brief's check: it neither skips the review nor blocks approval.
+    expect(s.architectPrompts.some((prompt) => prompt.includes("KAI ran the project's own: npm test"))).toBe(true);
+    expect(s.reviews()).toBe(1);
+    expect(final.phase).toBe('finished');
   });
 });

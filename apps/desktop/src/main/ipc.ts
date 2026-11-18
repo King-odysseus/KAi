@@ -814,6 +814,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'auto:resume', async ({ conversationId }) => context.auto.resume(conversationId));
   handle(context, 'architect:run', async (input, request) => context.architect.start(input, request.ownerWindowId));
   handle(context, 'architect:stop', async ({ conversationId }) => context.architect.stop(conversationId));
+  handle(context, 'architect:handoff', async ({ conversationId }) => context.architect.handoff(conversationId));
   handle(context, 'architect:answer', async ({ conversationId, carryOn }) => context.architect.answer(conversationId, carryOn));
   handle(context, 'architect:status', async ({ conversationId }) => context.architect.status(conversationId));
   handle(context, 'architect:ready', async ({ target }) => context.architectReadiness(target));

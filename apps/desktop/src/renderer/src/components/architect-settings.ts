@@ -286,3 +286,18 @@ export function splitProblem(split: ArchitectSplit): string | null {
   if (!split.implementer) return 'Choose an Implementer.';
   return null;
 }
+
+/**
+ * A heads-up, never a block, about a pairing that tends to go badly: a weak model planning and reviewing, or a model on
+ * this computer doing the building. Null when nothing stands out. The split still runs either way.
+ */
+export function pairingWarning(split: ArchitectSplit): string | null {
+  if (!split.enabled || !split.architect || !split.implementer) return null;
+  const notes: string[] = [];
+  if (!isPlanningGradeTarget(split.architect)) notes.push('The Architect is not a model known for planning, so its briefs and reviews may be thin. A stronger one usually pays for itself here.');
+  const builder = split.implementer;
+  if (builder.execution === 'api' && builder.api && isLocalProvider(builder.api.provider)) {
+    notes.push('The Implementer is a model on this computer. Those can loop on large tasks, so keep the task small and watch the first round.');
+  }
+  return notes.length ? notes.join(' ') : null;
+}

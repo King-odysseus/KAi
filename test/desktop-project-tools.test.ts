@@ -11,6 +11,17 @@ afterEach(async () => {
 });
 
 describe('desktop project tool runtime', () => {
+  it('will not tick plan steps done after edits were refused for plan mode and none were made', async () => {
+    const root = await fixtureProject();
+    const tools = new DesktopProjectToolRuntime(root);
+    tools.conversationId = 'conv_refused';
+    expect(tools.policy('replace_in_file', 'plan')).toMatchObject({ decision: 'deny' });
+    const refused = await tools.execute('update_plan', { items: [{ text: 'Fix it', state: 'done' }] });
+    expect(refused).toMatchObject({ ok: false });
+    // Reporting a step as still open is always fine.
+    await expect(tools.execute('update_plan', { items: [{ text: 'Fix it', state: 'pending' }] })).resolves.toMatchObject({ ok: true });
+  });
+
   it('views local images and rejects unsupported files and paths outside the project', async () => {
     const root = await fixtureProject();
     const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUg==', 'base64');

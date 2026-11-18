@@ -1561,8 +1561,30 @@ async function startApplication(): Promise<void> {
       await recordVerification(ipcContext!.verification, projectId, projectPath, check).catch(() => null);
       return { passed: check.exitCode === 0, exitCode: check.exitCode, output: check.output };
     },
+    suggestCheck: async (projectId: string) => suggestTestCommand(await projectRootFor(projectId)),
     restoreComposer: restoreComposerRecord,
     ready: roleReadiness,
+    // A fingerprint of every changed file's actual content, for "did this turn change anything". The review material
+    // below cannot answer that: it stops at 30 files, cuts each diff at 6,000 characters, and shows a new file as a bare
+    // name, so editing a new file or the far end of a big diff looked like no change at all.
+    fingerprint: async (projectId: string) => {
+      const root = await projectRootFor(projectId);
+      const changes = (await gitOverview(root)).changes.map((change) => change.path).sort();
+      const hash = createHash('sha1');
+      for (const file of changes) {
+        hash.update(`${file}\0`);
+        try {
+          const info = await stat(path.join(root, file));
+          // A file this large is told apart by size and time; reading it all for a hash is not worth it.
+          if (info.size > 5 * 1024 * 1024) hash.update(`${info.size}:${info.mtimeMs}`);
+          else hash.update(await readFile(path.join(root, file)));
+        } catch {
+          hash.update('missing');
+        }
+        hash.update('\0');
+      }
+      return `${changes.length}:${hash.digest('hex')}`;
+    },
     // What the Architect reads to review: the changed files and their diffs, bounded so a big change cannot flood it.
     reviewMaterial: async (projectId: string) => {
       const root = await projectRootFor(projectId);

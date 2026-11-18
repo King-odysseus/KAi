@@ -6,7 +6,7 @@ import { diffHunks, planItemStateSchema, type AutonomyMode, type PermissionKey, 
 import type { ToolHookRunner } from './automation';
 import { FileConflictError, readProjectFile, writeProjectFile } from './project-files';
 import { RunGuard } from './run-guard';
-import { writePlan } from './plan-store';
+import { readPlan, writePlan } from './plan-store';
 import { isParallelCopy } from './parallel-session';
 import { BACKGROUND_REFUSAL, launchesBackgroundProcess } from './process-cleanup';
 import { findGitBash } from './terminal';
@@ -506,6 +506,11 @@ export class DesktopProjectToolRuntime {
     private readonly web?: WebToolRuntime,
   ) {}
 
+  /** An edit or shell command was refused for plan mode in this run. */
+  private refusedForPlanMode = false;
+  /** An edit tool has succeeded in this run. */
+  private editsMade = 0;
+
   setPolicy(policy: { permissionRules?: readonly PermissionRule[]; toolHook?: ToolHookRunner }): void {
     this.permissionRules = policy.permissionRules ?? [];
     this.toolHook = policy.toolHook;
@@ -557,6 +562,7 @@ export class DesktopProjectToolRuntime {
     }
     if (name === 'run_command') {
       if (autonomy === 'plan') {
+        this.refusedForPlanMode = true;
         return { decision: 'deny', reason: 'Plan mode does not allow shell commands.' };
       }
       if (autonomy === 'full') return { decision: 'allow' };
@@ -572,6 +578,7 @@ export class DesktopProjectToolRuntime {
       return { decision: 'deny', reason: `Unknown project tool: ${name}.` };
     }
     if (autonomy === 'plan') {
+      this.refusedForPlanMode = true;
       return { decision: 'deny', reason: `The current plan mode does not allow ${name}.` };
     }
     // Removing a file is the one edit that cannot be undone by another edit, so only Full access skips the question.
@@ -595,6 +602,12 @@ export class DesktopProjectToolRuntime {
   }
 
   async execute(name: string, rawInput: unknown, signal?: AbortSignal): Promise<ProjectToolExecution> {
+    const result = await this.executeTool(name, rawInput, signal);
+    if (result.ok && (EDIT_TOOLS.has(name) || name === 'run_command')) this.editsMade += 1;
+    return result;
+  }
+
+  private async executeTool(name: string, rawInput: unknown, signal?: AbortSignal): Promise<ProjectToolExecution> {
     try {
       if (name === 'view_image') return await this.viewImage(deleteFileInputSchema.parse(rawInput));
       if (name === 'read_file') return await this.readFile(readFileInputSchema.parse(rawInput));
@@ -658,6 +671,16 @@ export class DesktopProjectToolRuntime {
    */
   private async updatePlan(input: z.infer<typeof updatePlanInputSchema>): Promise<ProjectToolExecution> {
     if (!this.conversationId) return toolFailure('This run has no conversation to keep a plan for.');
+    // A run whose edits were refused for plan mode, and that has made none, cannot honestly report new steps as done.
+    // Refusing it tells the model the truth about where it stands instead of letting it tick everything off.
+    if (this.refusedForPlanMode && this.editsMade === 0) {
+      const before = await readPlan(this.root, this.conversationId);
+      const doneBefore = before?.items.filter((item) => item.state === 'done').length ?? 0;
+      const doneNow = input.items.filter((item) => item.state === 'done').length;
+      if (doneNow > doneBefore) {
+        return toolFailure(`Plan not updated: edits were refused in this run (plan mode) and no file has been changed, so no new step can be marked done. Keep those steps as they were and say what blocked you.`);
+      }
+    }
     const plan = await writePlan(this.root, this.conversationId, input.items, new Date().toISOString());
     const done = plan.items.filter((item) => item.state === 'done').length;
     const open = plan.items.length - done;

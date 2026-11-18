@@ -24,7 +24,12 @@ import {
 } from '@kai/contracts';
 import {
   correctionPrompt,
+  implementerAutonomy,
   implementerIsStuck,
+  namedStuckCause,
+  repeatsItself,
+  sameStuckReason,
+  stuckReason,
   implementPrompt,
   REVISIONS_BEFORE_STEP_IN,
   RunStoppedError,
@@ -408,6 +413,7 @@ export class DesktopAutoSession {
     const startedAt = this.ports.now();
     const deadline = input.maxHours > 0 ? startedAt + input.maxHours * 3_600_000 : Infinity;
     let first = true;
+    let lastStuckReason: string | null = null;
     let prompt = input.prompt;
     /** The plan is read against the task once per run, not once per turn. */
     let reviewed = false;
@@ -465,11 +471,24 @@ export class DesktopAutoSession {
         }
 
         // The Implementer said it cannot make progress: the Architect steps in before anything else is tried.
-        if (active.architect && implementerIsStuck(turn.output)) {
-          this.record(conversationId, owner, 'info', 'The Implementer asked for help.');
-          prompt = await this.architectStepIn(input, conversationId, active, 'The Implementer said it is stuck.');
+        if (active.architect && (implementerIsStuck(turn.output) || repeatsItself(turn.output))) {
+          const asked = implementerIsStuck(turn.output);
+          const reason = asked ? stuckReason(turn.output) : 'its reply repeats the same paragraphs';
+          this.record(conversationId, owner, 'info', asked ? `The Implementer asked for help${reason ? `: ${reason}` : '.'}` : 'The Implementer\'s reply repeats itself, so it is treated as stuck.');
+          const cause = namedStuckCause(reason);
+          if (cause) this.record(conversationId, owner, 'info', cause);
+          // The same blocker twice running means another brief will not help: park on the person instead of looping.
+          if (sameStuckReason(reason, lastStuckReason)) {
+            lastStuckReason = null;
+            await this.pauseForHuman(conversationId, active, 'repeated-failure',
+              `The Implementer is stuck on the same thing again${reason ? ` (${reason})` : ''}, and another brief is unlikely to change that.`);
+            continue;
+          }
+          lastStuckReason = reason;
+          prompt = await this.architectStepIn(input, conversationId, active, reason ? `The Implementer said it is stuck: ${reason}` : 'The Implementer said it is stuck.');
           continue;
         }
+        lastStuckReason = null;
 
         // The model may say the task is bigger than one session can finish. That is a request for help rather than a
         // status, and it is taken before anything else — pushing such a run on with its own plan would be arguing
@@ -747,7 +766,8 @@ export class DesktopAutoSession {
       agent: input.agent,
       execution,
       route: input.route,
-      autonomy: input.autonomy,
+      // A split run's Implementer must be able to edit, whatever agent it is: read-only access would make it report itself stuck forever.
+      autonomy: architectSplitActive(input.architect) ? implementerAutonomy(input.autonomy) : input.autonomy,
       ...(input.goal ? { goal: input.goal } : {}),
       ...(input.model ? { model: input.model } : {}),
       // What gets filed about this turn names the person's task, not the plan reminder, the failure text or the brief.

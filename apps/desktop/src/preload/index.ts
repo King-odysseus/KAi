@@ -198,6 +198,7 @@ const bridge: KaiDesktopBridge = {
   },
   runArchitect: (request) => ipcRenderer.invoke('architect:run', request),
   stopArchitect: (request) => ipcRenderer.invoke('architect:stop', request),
+  handoffArchitect: (request) => ipcRenderer.invoke('architect:handoff', request),
   answerArchitect: (request) => ipcRenderer.invoke('architect:answer', request),
   architectStatus: (request) => ipcRenderer.invoke('architect:status', request),
   architectReady: (target) => ipcRenderer.invoke('architect:ready', { target }),

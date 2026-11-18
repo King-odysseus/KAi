@@ -131,6 +131,19 @@ export type ArchitectVerdict = z.infer<typeof architectVerdictSchema>;
 /** Exact markers, like the Auto split directive: intent is read from a token and JSON, never guessed from prose. */
 export const ARCHITECT_BRIEF_SENTINEL = '<<KAI_BRIEF>>';
 export const ARCHITECT_VERDICT_SENTINEL = '<<KAI_VERDICT>>';
+/** The Implementer's closing report, on its own line followed by JSON of this shape, after every turn. */
+export const ARCHITECT_REPORT_SENTINEL = '<<KAI_REPORT>>';
+export const architectReportSchema = z
+  .object({
+    /** Project-relative paths it says it changed. */
+    filesChanged: z.array(z.string().trim().min(1).max(400)).max(200).default([]),
+    /** Commands it ran, with how they came out. */
+    checksRun: z.array(z.string().trim().min(1).max(400)).max(50).default([]),
+    /** What it did not get to. */
+    unfinished: z.array(z.string().trim().min(1).max(400)).max(50).default([]),
+  })
+  .strict();
+export type ArchitectReport = z.infer<typeof architectReportSchema>;
 /** Printed by the Implementer, on its own line, when it cannot make progress and wants the Architect to step in. */
 export const ARCHITECT_STUCK_SENTINEL = '<<KAI_STUCK>>';
 

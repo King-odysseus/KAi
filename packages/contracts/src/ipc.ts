@@ -669,6 +669,7 @@ export const ipcChannels = [
   'auto:resume',
   'architect:run',
   'architect:stop',
+  'architect:handoff',
   'architect:answer',
   'architect:status',
   'architect:ready',
@@ -1110,6 +1111,7 @@ export const ipcInputSchemas = {
   'auto:resume': autoConversationInputSchema,
   'architect:run': architectRunInputSchema,
   'architect:stop': architectConversationInputSchema,
+  'architect:handoff': architectConversationInputSchema,
   'architect:answer': architectAnswerInputSchema,
   'architect:status': architectConversationInputSchema,
   'architect:ready': architectReadinessInputSchema,
@@ -1771,6 +1773,8 @@ export interface KaiDesktopBridge {
    */
   runArchitect(request: ArchitectRunInput): Promise<IpcResponse<ArchitectStatus>>;
   stopArchitect(request: ArchitectConversationInput): Promise<IpcResponse<ArchitectStatus | null>>;
+  /** Ends the Implementer's turn and has the Architect step in, instead of stopping the run. */
+  handoffArchitect(request: ArchitectConversationInput): Promise<IpcResponse<ArchitectStatus | null>>;
   /** The person's answer to "continue or finish here?" */
   answerArchitect(request: ArchitectAnswerInput): Promise<IpcResponse<ArchitectStatus | null>>;
   architectStatus(request: ArchitectConversationInput): Promise<IpcResponse<ArchitectStatus | null>>;
