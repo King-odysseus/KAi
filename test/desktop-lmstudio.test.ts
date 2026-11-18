@@ -217,7 +217,7 @@ describe('LM Studio as a provider', () => {
     const chat = seen.find((entry) => entry.url === '/v1/chat/completions')!;
     expect(chat.authorization).toBe('Bearer lm-studio');
     expect(chat.body).toMatchObject({ model: 'gpt-oss-20b', stream: true });
-    const cost = result.events.find((event) => event.type === 'cost.update');
+    const cost = result.events.filter((event) => event.type === 'cost.update').at(-1);
     expect(cost).toMatchObject({ provider: 'lmstudio', model: 'gpt-oss-20b', inputTokens: 40, outputTokens: 6, amountUsd: 0 });
   });
 
@@ -265,5 +265,22 @@ describe('a local model on the agent team', () => {
     expect(assignTeam([tests], budget, environment(true)).assignments[0]).toMatchObject({ assignee: 'api', billing: 'local' });
     expect(assignTeam([tests], budget, environment(false)).assignments[0]!.assignee).not.toBe('api');
     expect(assignTeam([tests], balanced, environment(true)).assignments[0]!.assignee).not.toBe('api');
+  });
+});
+
+describe('folding counts the conversation, not what rides along with every request', () => {
+  const big = 'x'.repeat(8_000);
+  const history: ChatMessage[] = [
+    { role: 'system', content: 'y'.repeat(40_000) },
+    { role: 'user', content: big },
+    { role: 'assistant', content: null, tool_calls: [{ id: 'a', type: 'function', function: { name: 'read_file', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 'a', content: big },
+  ];
+  it('leaves the system message and the tool list out of the size', () => {
+    // About 4,000 tokens of conversation under a 10,000-token system message and a 6,000-token tool list.
+    expect(shouldCompactRun(history, 1, 3_000)).toBe(true);
+    expect(shouldCompactRun(history, 1, 6_000)).toBe(false);
+    expect(shouldCompactRun(history, 1, 3_000, 20_000, 16_000)).toBe(true);
+    expect(shouldCompactRun(history, 1, 6_000, 20_000, 16_000)).toBe(false);
   });
 });

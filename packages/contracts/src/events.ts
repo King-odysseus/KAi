@@ -122,6 +122,11 @@ export const costUpdateEventSchema = eventBaseSchema.extend({
    * real size and fall when older activity is folded into a summary.
    */
   contextTokens: z.number().int().nonnegative().optional(),
+  /**
+   * How much of `contextTokens` is fixed for the run: the project instructions and the tool list sent with every request.
+   * Folding older activity cannot shrink it, so the context ring and the auto-compact size count only the rest.
+   */
+  fixedTokens: z.number().int().nonnegative().optional(),
   // Set for runs that cost money: a paid API run, or a CLI run through the Universal Proxy, which reaches a provider
   // the account pays for. A subscription CLI run carries none, which is what keeps it out of the usage budget.
   provider: z.string().min(1).optional(),

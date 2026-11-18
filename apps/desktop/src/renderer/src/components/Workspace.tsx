@@ -1736,7 +1736,8 @@ export function WorkspaceView({
   // instructions and tool output the chat text does not, and it falls when older activity is folded into a summary.
   // A summary made after that report makes it stale, so the chat-text estimate takes over until the next request.
   const reportedContext = activeConversation ? latestReportedContext(activeConversation) : null;
-  const liveTokenEstimate = (reportedContext ?? (activeConversation ? estimateConversationTokens(activeConversation) : 0)) + Math.ceil(streamingText.length / 4);
+  const fixedContext = reportedContext?.fixed ?? 0;
+  const liveTokenEstimate = (reportedContext ? Math.max(0, reportedContext.total - fixedContext) : (activeConversation ? estimateConversationTokens(activeConversation) : 0)) + Math.ceil(streamingText.length / 4);
   const refineBlocked = busy || running || paused || awaitingApproval || refiningPrompt;
   const refineTitle = !prompt.trim()
     ? 'Type a prompt to refine'
@@ -2432,7 +2433,7 @@ export function WorkspaceView({
               <IconButton aria-label="Add context" title="Add files, images, memory, or project context" active={contextPickerOpen} onClick={() => setContextPickerOpen((current) => !current)} icon={<Plus size={15} />} />
               <IconButton aria-label="Saved prompts" title="Saved prompts" active={presetsOpen} onClick={() => setPresetsOpen((current) => !current)} icon={<Hash size={14} />} />
               <IconButton aria-label="Slash commands" title="Commands: type / in the message box" onClick={() => { setPrompt((current) => (current.startsWith('/') ? current : `/${current}`)); window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Task prompt"]')?.focus(), 0); }} icon={<span className="font-mono text-[13px] font-semibold leading-none">/</span>} />
-              {activeConversation && <ContextRing tokens={liveTokenEstimate} limit={compactLimit} busy={busy} running={running} onCompact={onCompactConversation} />}
+              {activeConversation && <ContextRing tokens={liveTokenEstimate} fixed={fixedContext} limit={compactLimit} busy={busy} running={running} onCompact={onCompactConversation} />}
               {activeConversation && <IconButton aria-label="Side question" title="Ask a quick question without derailing this conversation" active={sideOpen} onClick={() => setSideOpen((current) => !current)} icon={<MessageCircleQuestion size={14} />} />}
               <OptionMenu ariaLabel="Access level" disabled={busy} icon={<ShieldCheck size={13} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
               <OptionMenu ariaLabel="Task type" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={PERSONAS.map((persona) => ({ value: persona.id, label: persona.label, description: persona.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
@@ -3096,7 +3097,7 @@ function modelGroup(name: string): string {
  * How full the conversation's context is, as a small ring beside the composer's other tools. Opening it says how much
  * is used and holds the one action that frees room, Compact, so that action sits where the fullness is shown.
  */
-function ContextRing({ tokens, limit, busy, running, onCompact }: { tokens: number; limit: number; busy: boolean; running: boolean; onCompact: () => void }): ReactNode {
+function ContextRing({ tokens, fixed = 0, limit, busy, running, onCompact }: { tokens: number; fixed?: number; limit: number; busy: boolean; running: boolean; onCompact: () => void }): ReactNode {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -3130,7 +3131,8 @@ function ContextRing({ tokens, limit, busy, running, onCompact }: { tokens: numb
         <div role="dialog" aria-label="Context used" className="absolute bottom-[calc(100%+6px)] left-0 z-[60] w-64 rounded-xl border border-[color:var(--border)] bg-[var(--bg-raised)] p-3 shadow-[0_14px_34px_rgba(0,0,0,0.4)]">
           <div className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--text-dim)]">Context</div>
           <div className="mt-1 text-sm text-[var(--text)]">About {Math.round(ratio * 100)}% used</div>
-          <div className="mt-0.5 text-xs text-[var(--text-muted)]">~{formatCompact(tokens)} of ~{formatCompact(limit)} tokens before KAI suggests compacting.</div>
+          <div className="mt-0.5 text-xs text-[var(--text-muted)]">~{formatCompact(tokens)} of ~{formatCompact(limit)} tokens of conversation before KAI compacts.</div>
+          {fixed > 0 && <div className="mt-1 text-xs text-[var(--text-dim)]">Another ~{formatCompact(fixed)} tokens are the project instructions and tool list sent with every request. Compacting cannot shrink those.</div>}
           <UiButton type="button" className="secondary-button mt-2.5" disabled={busy} onClick={() => { setOpen(false); onCompact(); }}>{running ? 'Compact before the next step' : 'Compact conversation'}</UiButton>
         </div>
       )}
@@ -3139,12 +3141,12 @@ function ContextRing({ tokens, limit, busy, running, onCompact }: { tokens: numb
 }
 
 /** The size the model reported for its latest request in this conversation, unless a summary was made after it. */
-function latestReportedContext(conversation: { events: readonly PersistedEvent[]; compaction?: { createdAt: string } | undefined }): number | null {
+function latestReportedContext(conversation: { events: readonly PersistedEvent[]; compaction?: { createdAt: string } | undefined }): { total: number; fixed: number } | null {
   for (let index = conversation.events.length - 1; index >= 0; index -= 1) {
     const event = conversation.events[index]!;
     if (event.type !== 'cost.update' || event.contextTokens === undefined) continue;
     if (conversation.compaction && event.timestamp < conversation.compaction.createdAt) return null;
-    return event.contextTokens;
+    return { total: event.contextTokens, fixed: event.fixedTokens ?? 0 };
   }
   return null;
 }

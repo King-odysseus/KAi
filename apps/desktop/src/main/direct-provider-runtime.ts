@@ -217,8 +217,14 @@ function textWithImages(
 const IMAGE_REMOVED_NOTE = '[KAI removed the attached image from this request because the model could not accept it. You cannot see it. Say so plainly and ask the person to switch to a model that accepts images; do not search the file system for it.]';
 
 /** The size the model reported for its latest request, with no cost or totals, so nothing is counted twice. */
-function contextSizeEvent(request: AgentRunRequest, contextTokens: number): PersistedEvent {
-  return { schemaVersion: 1, id: eventId(), taskId: request.conversationId, timestamp: nowIso(), agent: request.agent, type: 'cost.update', contextTokens: Math.max(0, Math.round(contextTokens)) };
+function contextSizeEvent(request: AgentRunRequest, contextTokens: number, fixedTokens: number): PersistedEvent {
+  const total = Math.max(0, Math.round(contextTokens));
+  return { schemaVersion: 1, id: eventId(), taskId: request.conversationId, timestamp: nowIso(), agent: request.agent, type: 'cost.update', contextTokens: total, fixedTokens: Math.min(total, Math.max(0, Math.round(fixedTokens))) };
+}
+
+/** The size of what is sent with every request whatever the conversation holds: the tool list, as the provider receives it. */
+function toolListTokens(...lists: ReadonlyArray<readonly unknown[]>): number {
+  return Math.ceil(JSON.stringify(lists.flat()).length / 4);
 }
 
 function noticeEvent(request: AgentRunRequest, message: string): PersistedEvent {
@@ -280,10 +286,13 @@ export function estimateChatTokens(messages: readonly ChatMessage[]): number {
  * size the person chose, and this block is a real share of it (so a long starting history that cannot shrink does not
  * make every round fold on its own). Zero turns it off.
  */
-export function shouldCompactRun(messages: readonly ChatMessage[], segmentStart: number, compactAt: number, reportedTokens = 0): boolean {
+export function shouldCompactRun(messages: readonly ChatMessage[], segmentStart: number, compactAt: number, reportedTokens = 0, fixedTokens = 0): boolean {
   if (compactAt <= 0 || messages.length - segmentStart < 2) return false;
+  // What can be folded is the conversation and the run's own activity, not the instructions and the tool list that go
+  // with every request: counting those made a small limit unreachable, so a local model never folded or always did.
   // The size the model itself reported for its last request beats our estimate, which cannot see everything it was sent.
-  return Math.max(estimateChatTokens(messages), reportedTokens) >= compactAt && estimateChatTokens(messages.slice(segmentStart)) >= Math.max(1_000, compactAt / 5);
+  const history = Math.max(estimateChatTokens(messages) - estimateChatTokens(messages.filter((message) => message.role === 'system')), reportedTokens - fixedTokens);
+  return history >= compactAt && estimateChatTokens(messages.slice(segmentStart)) >= Math.max(1_000, compactAt / 5);
 }
 
 /** Rough size of an Anthropic-shaped history in tokens: text, tool calls and tool results, never the bytes of an image. */
@@ -306,9 +315,9 @@ function anthropicBlocksText(content: AnthropicMessage['content']): string {
 }
 
 /** The same decision as `shouldCompactRun`, for an Anthropic-shaped history. */
-export function shouldCompactAnthropicRun(messages: readonly AnthropicMessage[], segmentStart: number, compactAt: number, reportedTokens = 0): boolean {
+export function shouldCompactAnthropicRun(messages: readonly AnthropicMessage[], segmentStart: number, compactAt: number, reportedTokens = 0, fixedTokens = 0): boolean {
   if (compactAt <= 0 || messages.length - segmentStart < 2) return false;
-  return Math.max(estimateAnthropicTokens(messages), reportedTokens) >= compactAt && estimateAnthropicTokens(messages.slice(segmentStart)) >= Math.max(1_000, compactAt / 5);
+  return Math.max(estimateAnthropicTokens(messages), reportedTokens - fixedTokens) >= compactAt && estimateAnthropicTokens(messages.slice(segmentStart)) >= Math.max(1_000, compactAt / 5);
 }
 
 /** The tool activity of an Anthropic-shaped run so far, as the same short plain-text list the chat shape uses. */
@@ -1452,6 +1461,9 @@ export class DesktopDirectProviderRuntime {
 
     // `controller` is the caller's own, already registered in `activeRuns` — not re-created here.
     const messages = chatMessages(request, contextText, history);
+    // Instructions and the tool list ride along with every request; folding cannot shrink them.
+    const toolTokens = toolListTokens(externalToolDefinitions, toolRuntime.toolDefinitions());
+    const fixedTokens = (): number => toolTokens + estimateChatTokens(messages.filter((message) => message.role === 'system'));
     const outputParts: string[] = [];
     const errors: string[] = [];
     let inputTokens: number | undefined;
@@ -1527,7 +1539,7 @@ export class DesktopDirectProviderRuntime {
           const usage = asRecord(value.usage);
           const roundInputTokens = integerValue(usage?.prompt_tokens) ?? integerValue(usage?.input_tokens);
           const roundOutputTokens = integerValue(usage?.completion_tokens) ?? integerValue(usage?.output_tokens);
-          if (roundInputTokens !== undefined) { inputTokens = (inputTokens ?? 0) + roundInputTokens; lastContextTokens = roundInputTokens; emit(contextSizeEvent(request, lastContextTokens)); }
+          if (roundInputTokens !== undefined) { inputTokens = (inputTokens ?? 0) + roundInputTokens; lastContextTokens = roundInputTokens; emit(contextSizeEvent(request, lastContextTokens, fixedTokens())); }
           if (roundOutputTokens !== undefined) outputTokens = (outputTokens ?? 0) + roundOutputTokens;
 
           const choice = firstRecord(value.choices);
@@ -1666,7 +1678,7 @@ export class DesktopDirectProviderRuntime {
             forceFinalAnswer = true;
             messages.push({ role: 'user', content: WRAP_UP_MESSAGE });
           }
-        } else if (!forceFinalAnswer && toolRounds < totalToolRoundLimit && shouldCompactRun(messages, segmentStart, compactAt, lastContextTokens)) {
+        } else if (!forceFinalAnswer && toolRounds < totalToolRoundLimit && shouldCompactRun(messages, segmentStart, compactAt, lastContextTokens, fixedTokens())) {
           // The history reached the size chosen for auto-compact: the same fold as above, triggered by size.
           const summary = compactChatToolHistory(messages.slice(segmentStart));
           messages.length = segmentStart;
@@ -1774,6 +1786,7 @@ export class DesktopDirectProviderRuntime {
 
     // `controller` is the caller's own, already registered in `activeRuns` — not re-created here.
     const messages = anthropicMessages(request, history);
+    const fixedTokens = (): number => toolListTokens(externalToolDefinitions, toolRuntime.toolDefinitions()) + Math.ceil((contextText ?? '').length / 4);
     // The part of the prompt the provider served from its cache, which costs a fraction of a fresh one.
     let cachedReadTokens = 0;
     const outputParts: string[] = [];
@@ -1847,7 +1860,7 @@ export class DesktopDirectProviderRuntime {
             const roundInputTokens = integerValue(usage?.input_tokens);
             // Cached prompt tokens are reported separately; count them so budgets never undercount the prompt.
             const cachedTokens = (integerValue(usage?.cache_read_input_tokens) ?? 0) + (integerValue(usage?.cache_creation_input_tokens) ?? 0);
-            if (roundInputTokens !== undefined) { inputTokens = (inputTokens ?? 0) + roundInputTokens + cachedTokens; lastContextTokens = roundInputTokens + cachedTokens; emit(contextSizeEvent(request, lastContextTokens)); }
+            if (roundInputTokens !== undefined) { inputTokens = (inputTokens ?? 0) + roundInputTokens + cachedTokens; lastContextTokens = roundInputTokens + cachedTokens; emit(contextSizeEvent(request, lastContextTokens, fixedTokens())); }
             cachedReadTokens += integerValue(usage?.cache_read_input_tokens) ?? 0;
             continue;
           }
@@ -1985,7 +1998,7 @@ export class DesktopDirectProviderRuntime {
           anthropicToolOutput,
         );
         messages.push({ role: 'user', content: toolResults as Array<Record<string, unknown>> });
-        if (!forceFinalAnswer && toolRounds < toolRoundLimit && shouldCompactAnthropicRun(messages, segmentStart, compactAt, lastContextTokens)) {
+        if (!forceFinalAnswer && toolRounds < toolRoundLimit && shouldCompactAnthropicRun(messages, segmentStart, compactAt, lastContextTokens, fixedTokens())) {
           // The history reached the size chosen for auto-compact: fold this block of tool activity into a summary.
           const summary = compactAnthropicToolHistory(messages.slice(segmentStart));
           messages.length = segmentStart;
