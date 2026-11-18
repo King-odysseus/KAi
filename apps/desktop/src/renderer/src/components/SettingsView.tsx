@@ -224,16 +224,21 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
   };
   const directPreset = directProviderPreset(draft.directApi.provider);
   const learningPreset = directProviderPreset(draft.learningTutor.provider);
+  // Before a refresh, a local provider shows the models it has been seen with rather than the bundled guesses.
+  const modelsBeforeRefresh = (provider: AppSettings['directApi']['provider'], preset: readonly string[]): readonly string[] => {
+    const remembered = isLocalProvider(provider) ? draft.savedLocalModels[provider] : undefined;
+    return remembered && remembered.length > 0 ? remembered : preset;
+  };
   const directModels = providerModels.direct?.provider === draft.directApi.provider
     ? providerModels.direct.models
-    : directPreset.models;
+    : modelsBeforeRefresh(draft.directApi.provider, directPreset.models);
   const learningModels = providerModels.learning?.provider === draft.learningTutor.provider
     ? providerModels.learning.models
-    : learningPreset.models;
+    : modelsBeforeRefresh(draft.learningTutor.provider, learningPreset.models);
   const guidePreset = directProviderPreset(draft.promptGuide.provider);
   const guideModels = providerModels.guide?.provider === draft.promptGuide.provider
     ? providerModels.guide.models
-    : guidePreset.models;
+    : modelsBeforeRefresh(draft.promptGuide.provider, guidePreset.models);
   const webSearch = draft.webSearch;
   const nativeSearchSource = nativeSearchProvider(webSearch.source);
   // Blank override means: the matching Direct API key when it is the same provider, otherwise the provider's preset key.

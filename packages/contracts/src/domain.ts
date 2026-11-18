@@ -353,6 +353,17 @@ export const cliModelNameSchema = z
   .max(100)
   .regex(/^[A-Za-z0-9][\w.:/@[\]-]*$/, 'Use a model name such as gpt-5.6-sol or claude-sonnet-5.');
 
+/** The local models this machine already uses, so the first refresh adds to them instead of starting from nothing. */
+export const DEFAULT_SAVED_LOCAL_MODELS: Record<string, string[]> = {
+  lmstudio: [
+    'huihui-qwen3-coder-next-abliterated-mlx',
+    'gpt-oss-120b-heretic-v2-hi-mlx',
+    'huihui-glm-4.7-flash-abliterated-mlx',
+    'huihui-qwen3-vl-32b-instruct-abliterated-mlx',
+  ],
+  ollama: ['qwen3-coder:30b'],
+};
+
 export const DEFAULT_DESKTOP_SHORTCUTS: Readonly<Record<string, string>> = {
   'workbench': 'Ctrl+1',
   'code': 'Ctrl+2',
@@ -379,6 +390,9 @@ export const appSettingsV1Schema = z
     logRetentionEntries: z.number().int().min(100).max(100_000),
     diagnosticsEnabled: z.boolean(),
     installedFeatures: z.array(z.string().min(1).max(100)).max(200).default([]),
+    // Local models KAI has seen, per local provider. A refresh adds to this list and never replaces it, so a model
+    // that is not loaded right now (or a server that is stopped) does not drop out of the pickers.
+    savedLocalModels: z.record(z.string().min(1).max(40), z.array(z.string().min(1).max(300)).max(500)).default(() => Object.fromEntries(Object.entries(DEFAULT_SAVED_LOCAL_MODELS).map(([id, models]) => [id, [...models]]))),
     directApi: directApiSettingsSchema,
     // Web search and URL fetching are separate from the model connection: any model can use an external source.
     webSearch: webSearchSettingsSchema.default({}),

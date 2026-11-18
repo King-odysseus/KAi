@@ -119,7 +119,7 @@ import { windowBriefing } from './window-control';
 import { runSecurityPrepass } from './security-prepass';
 import { boardCardSchema, type ImportReport } from '@kai/contracts';
 import type { ExecutionMode } from '@kai/contracts';
-import { estimateConversationTokens } from '@kai/contracts';
+import { estimateConversationTokens, isLocalProvider } from '@kai/contracts';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
 import { gitCheckout, gitCloneTeamRepository, gitCommit, gitCreateBranch, gitCreatePullRequest, gitCreateRepository, gitBlameFile, gitChangedHunks, gitDiffAgainstHead, scanTodos, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitPullTeamBranch, gitStage, gitSync } from './git-tools';
@@ -143,7 +143,7 @@ import type { TeachingLibraryStore } from './teaching-library';
 import type { SecurityFindingsStore } from './security-findings-store';
 import { recordLearningLesson } from './learning-records';
 import type { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
-import { listProviderModels } from './provider-models';
+import { listProviderModels, mergeLocalModels } from './provider-models';
 import { testSearchSource } from './web-search';
 import { branchedConversation, rewoundConversation } from './conversation-branching';
 import { connectorServer, listConnectorCatalog } from './connector-catalog';
@@ -445,7 +445,16 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       context.learningBudget.release(reservation.id);
     }
   });
-  handle(context, 'providers:list-models', async (request) => listProviderModels(request, context.credentials));
+  handle(context, 'providers:list-models', async (request) => {
+    const catalog = await listProviderModels(request, context.credentials);
+    if (!isLocalProvider(request.provider)) return catalog;
+    const settings = await context.settings.load();
+    const merged = mergeLocalModels(catalog, settings.savedLocalModels[request.provider] ?? []);
+    if (catalog.source === 'live' && merged.remembered.length !== (settings.savedLocalModels[request.provider] ?? []).length) {
+      await context.settings.update((current) => ({ ...current, savedLocalModels: { ...current.savedLocalModels, [request.provider]: merged.remembered } }));
+    }
+    return merged.catalog;
+  });
   handle(context, 'catalog:list', async () => listConnectorCatalog());
   handle(context, 'catalog:install', async ({ id }) => {
     const server = connectorServer(id);

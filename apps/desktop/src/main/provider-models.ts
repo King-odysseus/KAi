@@ -60,6 +60,23 @@ export async function listProviderModels(
   }
 }
 
+/**
+ * A local server only lists what is loaded or installed right now, so a refresh used to replace the list and drop
+ * every model that was not there at that moment. Local providers keep what they have seen: the answer is the
+ * remembered models plus whatever the server returned, and a live answer adds to the remembered list.
+ */
+export function mergeLocalModels(
+  catalog: ProviderModelCatalog,
+  remembered: readonly string[],
+): { catalog: ProviderModelCatalog; remembered: string[] } {
+  const union = (...lists: readonly (readonly string[])[]): string[] =>
+    [...new Set(lists.flat())].sort((left, right) => left.localeCompare(right));
+  const seen = catalog.source === 'live' ? union(remembered, catalog.models) : union(remembered);
+  // An unreachable server answers with the bundled preset; keep it only as a fallback when nothing is remembered.
+  const models = catalog.source === 'live' || seen.length === 0 ? union(seen, catalog.models) : seen;
+  return { catalog: { ...catalog, models }, remembered: seen };
+}
+
 export function parseModelIds(value: unknown): string[] {
   const records = Array.isArray(value)
     ? value

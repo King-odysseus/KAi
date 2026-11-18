@@ -1,11 +1,33 @@
 import * as http from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import { listProviderModels, parseModelIds } from '../apps/desktop/src/main/provider-models';
+import { listProviderModels, mergeLocalModels, parseModelIds } from '../apps/desktop/src/main/provider-models';
 
 const servers: http.Server[] = [];
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+});
+
+describe('local model memory', () => {
+  const at = '2026-01-01T00:00:00.000Z';
+  it('adds a new local model to the remembered ones instead of replacing them', () => {
+    const live = { provider: 'lmstudio' as const, models: ['new-model'], source: 'live' as const, fetchedAt: at, error: null };
+    const result = mergeLocalModels(live, ['old-a', 'old-b']);
+    expect(result.catalog.models).toEqual(['new-model', 'old-a', 'old-b']);
+    expect(result.remembered).toEqual(['new-model', 'old-a', 'old-b']);
+  });
+
+  it('keeps the remembered models when the server is stopped, and does not remember the bundled guesses', () => {
+    const preset = { provider: 'ollama' as const, models: ['qwen2.5-coder'], source: 'preset' as const, fetchedAt: at, error: 'not reachable' };
+    const result = mergeLocalModels(preset, ['qwen3-coder:30b']);
+    expect(result.catalog.models).toEqual(['qwen3-coder:30b']);
+    expect(result.remembered).toEqual(['qwen3-coder:30b']);
+  });
+
+  it('falls back to the bundled list when nothing has been remembered yet', () => {
+    const preset = { provider: 'ollama' as const, models: ['qwen2.5-coder'], source: 'preset' as const, fetchedAt: at, error: 'not reachable' };
+    expect(mergeLocalModels(preset, []).catalog.models).toEqual(['qwen2.5-coder']);
+  });
 });
 
 describe('desktop provider model catalogs', () => {
