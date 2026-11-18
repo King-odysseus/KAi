@@ -1,6 +1,6 @@
 {
   "name": "@kai/desktop",
-  "version": "1.2.31",
+  "version": "1.2.32",
   "private": true,
   "type": "module",
   "description": "KAI standalone desktop workbench",

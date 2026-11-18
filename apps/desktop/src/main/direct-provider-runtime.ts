@@ -1698,7 +1698,7 @@ export class DesktopDirectProviderRuntime {
           messages.push({ role: 'user', content: continuationMessage(summary) });
           segmentStart = messages.length;
           segmentRounds = 0;
-          emit(lifecycleEvent(request, 'starting', `This run reached ${compactAt.toLocaleString()} tokens, so KAI summarised its earlier steps and is carrying on.`));
+          emit(noticeEvent(request, `Compacted this run: its conversation reached the ${compactAt.toLocaleString()} tokens you set, so its earlier steps became a summary and it carried on.`));
         }
       }
     } catch (error) {
@@ -2017,7 +2017,7 @@ export class DesktopDirectProviderRuntime {
           messages.length = segmentStart;
           pushUserText(messages, continuationMessage(summary));
           segmentStart = messages.length;
-          emit(lifecycleEvent(request, 'starting', `This run reached ${compactAt.toLocaleString()} tokens, so KAI summarised its earlier steps and is carrying on.`));
+          emit(noticeEvent(request, `Compacted this run: its conversation reached the ${compactAt.toLocaleString()} tokens you set, so its earlier steps became a summary and it carried on.`));
         }
       }
     } catch (error) {

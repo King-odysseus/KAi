@@ -2006,9 +2006,15 @@ export async function runConversationAgent(
   // first. A failure never blocks the run; it simply goes ahead with the full history.
   const compactAt = compactThresholdFor(settings.usageBudget, request.execution === 'api' ? settings.directApi.provider : null);
   const askedToCompact = compactBeforeNextRun.delete(conversation.id);
+  // Said in the conversation when it happens: a fold nobody could see looked exactly like one that never ran.
+  let compactionNotice: string | null = null;
   if (conversation.turns.length > 0 && (askedToCompact || (compactAt > 0 && estimateConversationTokens(conversation) >= compactAt))) {
     try {
+      const before = estimateConversationTokens(conversation);
       Object.assign(conversation, await compactConversation(context, conversation.id));
+      const after = estimateConversationTokens(conversation);
+      compactionNotice = `Compacted this conversation before the run: ${conversation.compaction?.originalTurns ?? 0} earlier turns became a summary, about ${before.toLocaleString()} down to ${after.toLocaleString()} tokens${askedToCompact ? '' : ` (it reached the ${compactAt.toLocaleString()} you set)`}.`;
+      context.logger.info('internal', compactionNotice);
     } catch (error) {
       context.logger.error('agent_crash', 'Automatic context compaction failed; running with the full history', undefined, error);
     }
@@ -2594,7 +2600,11 @@ ${BRAIN_TOOLS_GUIDANCE}`
     });
     if (ended) execution.events.push(ended);
   }
-  execution.events.unshift(rulesNotice, ...memoryEvents);
+  execution.events.unshift(
+    rulesNotice,
+    ...(compactionNotice ? [{ schemaVersion: 1 as const, id: `evt_${crypto.randomUUID()}`, taskId: conversation.id, timestamp: new Date().toISOString(), agent: request.agent, type: 'notice' as const, message: compactionNotice }] : []),
+    ...memoryEvents,
+  );
   resolvePendingApprovals(context, conversation.id, false);
   // Files may have changed, so the next run's project outline must be rebuilt.
   invalidateRepoMap(workRoot);
