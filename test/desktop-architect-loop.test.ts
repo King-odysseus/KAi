@@ -30,6 +30,8 @@ import {
   parseVerdict,
   repeatsItself,
   implementerAutonomy,
+  limitKey,
+  failedOnLimit,
   parseReport,
   changedPaths,
   crossCheckReport,
@@ -43,7 +45,7 @@ import {
 } from '../apps/desktop/src/main/architect-loop';
 import { DesktopAutoSession, withImplementer, type AutoSessionPorts, type AutoWindowPort } from '../apps/desktop/src/main/auto-session';
 import { resolveApiConnection } from '../apps/desktop/src/main/api-connection';
-import { RepeatWatch, withRepeatNotice } from '../apps/desktop/src/main/repeat-watch';
+import { RepeatWatch, onRepeatDetected, withRepeatNotice } from '../apps/desktop/src/main/repeat-watch';
 
 const BRIEF = { goal: 'Add the parser', files: ['src/parser.ts'], avoid: ['src/legacy.ts'], doneChecks: ['parser.test.ts passes'] };
 const brief = (goal = BRIEF.goal): string => `Here is the plan.\n${ARCHITECT_BRIEF_SENTINEL} ${JSON.stringify({ ...BRIEF, goal })}`;
@@ -82,6 +84,8 @@ interface Script {
   hangFirstBuild?: boolean;
   /** The project's own test command, offered when the brief names none. */
   suggested?: string;
+  /** Agents whose subscription has hit its usage limit: every run on them fails with that message. */
+  limitAgents?: string[];
 }
 
 function scripted(script: Script = {}) {
@@ -100,6 +104,9 @@ function scripted(script: Script = {}) {
   const ports: ArchitectLoopPorts = {
     runAgent: async (request): Promise<AgentRunResult> => {
       requests.push(request);
+      if (script.limitAgents?.includes(request.agent as string) && request.execution !== 'api') {
+        return { conversation: {} as never, status: 'failed', error: 'You have hit your usage limit. It resets at 3pm.', output: '', costUsd: 0 };
+      }
       if (request.freshSession) {
         architectPrompts.push(request.prompt);
         if (request.prompt.includes('reviewing the Implementer')) {
@@ -363,17 +370,16 @@ describe('the Architect / Implementer loop', () => {
     expect(s.requests.filter((request) => request.freshSession).every((request) => request.agent === 'codex')).toBe(true);
   });
 
-  it('fails up front, naming both, when neither the Architect nor its stand-in can run', async () => {
+  it('moves on to the next available model when the Architect and its chosen fallback are both unavailable', async () => {
     const s = scripted({ down: [CLAUDE, KIMI_API] });
     const loop = new ArchitectLoop(s.ports);
     await loop.start(input(split({ fallback: KIMI_API })), 1);
     const final = await finish(loop);
-    expect(final.phase).toBe('failed');
-    expect(final.message).toContain('Claude · opus');
-    expect(final.message).toContain('Moonshot (Kimi) · kimi-k3');
-    expect(final.message).toMatch(/signed out/);
-    // The Implementer was fine, so nothing was built: the plan is the first thing that could not happen.
-    expect(s.requests).toHaveLength(0);
+    // The Implementer is the next one in the split that can run, so it plans and reviews instead of the run failing.
+    expect(final.phase).toBe('finished');
+    expect(final.fallbackUsed).toBe(true);
+    expect(s.requests.filter((request) => request.freshSession).every((request) => request.agent === 'codex')).toBe(true);
+    expect(final.log.some((entry) => /Claude · opus.*unavailable/.test(entry.text))).toBe(true);
   });
 
   it('fails before any planning is paid for when the Implementer is unavailable', async () => {
@@ -910,5 +916,130 @@ describe('the last round of improvements', () => {
     expect(s.architectPrompts.some((prompt) => prompt.includes("KAI ran the project's own: npm test"))).toBe(true);
     expect(s.reviews()).toBe(1);
     expect(final.phase).toBe('finished');
+  });
+});
+
+describe('a turn that keeps repeating itself', () => {
+  it('is ended and handed to the Architect with a smaller first step, not left to run', async () => {
+    const s = scripted({ hangFirstBuild: true, built: ['x', 'Built it.'] });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split()), 1);
+    await vi.waitFor(() => { if (loop.status('conv-1')?.role !== 'implementer' || s.builds() < 1) throw new Error('not building yet'); }, { timeout: 4_000 });
+    // What the runtime does when the Implementer's text repeats a paragraph a third time.
+    const paragraph = 'Let me read the rest of the file to understand the complete implementation of the thing.\n\n';
+    const wrapped = withRepeatNotice(() => undefined, { agent: 'codex', conversationId: 'conv-1' })!;
+    for (let i = 0; i < 3; i += 1) wrapped({ schemaVersion: 1, id: 'e', taskId: 'conv-1', timestamp: 't', agent: 'codex', type: 'text.delta', channel: 'assistant', text: paragraph } as never);
+    const final = await finish(loop);
+    expect(final.phase).toBe('finished');
+    expect(final.log.some((entry) => /kept repeating itself, so KAI ended it/.test(entry.text))).toBe(true);
+    expect(s.architectPrompts.some((prompt) => prompt.includes('the Implementer is stuck') && prompt.includes('single file and the exact change'))).toBe(true);
+  });
+
+  it('stops listening once the turn is over', () => {
+    let told = 0;
+    const off = onRepeatDetected('conv-x', () => { told += 1; });
+    off();
+    const wrapped = withRepeatNotice(() => undefined, { agent: 'codex', conversationId: 'conv-x' })!;
+    const paragraph = 'The very same long paragraph that keeps on coming back again and again and again.\n\n';
+    for (let i = 0; i < 3; i += 1) wrapped({ schemaVersion: 1, id: 'e', taskId: 'conv-x', timestamp: 't', agent: 'codex', type: 'text.delta', channel: 'assistant', text: paragraph } as never);
+    expect(told).toBe(0);
+  });
+});
+
+describe('the Worker', () => {
+  const WORKER: RoleTarget = { execution: 'api', api: { provider: 'lmstudio', model: 'qwen3-coder-30b' } };
+  const briefWithRoutine = (steps: string[]): string => `Plan.\n${ARCHITECT_BRIEF_SENTINEL} ${JSON.stringify({ ...BRIEF, routine: steps })}`;
+  const workerTurns = (s: ReturnType<typeof scripted>) => s.requests.filter((request) => !request.freshSession && request.prompt.includes('[Worker'));
+  const implementerTurns = (s: ReturnType<typeof scripted>) => s.requests.filter((request) => !request.freshSession && request.prompt.includes('[Implementer'));
+
+  it('does the routine steps after the Implementer, and the Implementer is told to leave them', async () => {
+    const s = scripted({ planOutput: briefWithRoutine(['Rename parse to parseConfig in src/parser.ts', 'Add a doc comment to parseConfig']) });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split({ worker: WORKER }), { autonomy: 'ask' }), 1);
+    const final = await finish(loop);
+    expect(final.phase).toBe('finished');
+    expect(implementerTurns(s)).toHaveLength(1);
+    expect(workerTurns(s)).toHaveLength(1);
+    expect(implementerTurns(s)[0]!.prompt).toContain('Do not do them yourself');
+    expect(implementerTurns(s)[0]!.prompt).toContain('Rename parse to parseConfig');
+    expect(workerTurns(s)[0]!.prompt).toContain('1. Rename parse to parseConfig in src/parser.ts');
+    // The Worker is its own target: here an API model on this computer, in Auto-edit like any builder.
+    expect(workerTurns(s)[0]!.execution).toBe('api');
+    expect(workerTurns(s)[0]!.autonomy).toBe('autoEdit');
+    // The Architect was told a Worker exists, so it could write routine steps.
+    expect(s.architectPrompts[0]).toContain('"routine"');
+  });
+
+  it('sends mechanical corrections to the Worker and the rest to the Implementer', async () => {
+    const s = scripted({
+      planOutput: briefWithRoutine(['Add a doc comment']),
+      verdicts: [verdict('revise', { routine: true }), verdict('revise'), verdict('approve')],
+    });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split({ worker: WORKER })), 1);
+    const final = await finish(loop);
+    expect(final.phase).toBe('finished');
+    // Round 1: Implementer then Worker. Round 2 (mechanical): Worker only. Round 3 (judgement): Implementer only.
+    expect(s.requests.filter((request) => !request.freshSession).map((request) => (request.prompt.includes('[Worker') ? 'W' : 'I')).join('')).toBe('IWWI');
+    expect(workerTurns(s)[1]!.prompt).toContain('mechanical');
+  });
+
+  it('is left out, and the Implementer does everything, when there is no Worker', async () => {
+    const s = scripted({ planOutput: briefWithRoutine(['Rename it']) });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split()), 1);
+    await finish(loop);
+    expect(workerTurns(s)).toHaveLength(0);
+    expect(implementerTurns(s)[0]!.prompt).not.toContain('Do not do them yourself');
+    expect(s.architectPrompts[0]).not.toContain('"routine"');
+  });
+
+  it('is dropped with a note when it cannot run, so the plan does not ask for it', async () => {
+    const s = scripted({ down: [WORKER], planOutput: briefWithRoutine(['Rename it']) });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split({ worker: WORKER })), 1);
+    const final = await finish(loop);
+    expect(final.phase).toBe('finished');
+    expect(workerTurns(s)).toHaveLength(0);
+    expect(final.log.some((entry) => /Worker .* is unavailable/.test(entry.text))).toBe(true);
+    expect(s.architectPrompts[0]).not.toContain('"routine"');
+  });
+});
+
+describe('a usage limit', () => {
+  const WORKER: RoleTarget = { execution: 'api', api: { provider: 'lmstudio', model: 'qwen3-coder-30b' } };
+
+  it('moves the Architect to the next available model and carries on', async () => {
+    // Claude is the Architect and its subscription window is spent; Codex is the Implementer and is fine.
+    const s = scripted({ limitAgents: ['claude'] });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split()), 1);
+    const final = await finish(loop);
+    expect(final.phase).toBe('finished');
+    expect(final.log.some((entry) => /reached its usage limit/.test(entry.text))).toBe(true);
+    // After the first refusal Claude is never asked again: planning, review and any step-in all ran on Codex.
+    const architectRuns = s.requests.filter((request) => request.freshSession);
+    expect(architectRuns.filter((request) => request.agent === 'claude')).toHaveLength(1);
+    expect(architectRuns.filter((request) => request.agent === 'codex').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('moves the Implementer to the Worker when its account is spent, instead of failing', async () => {
+    // Claude builds and its window is spent mid-run; the local Worker is the next available builder.
+    const s = scripted({ limitAgents: ['claude'] });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split({ architect: CODEX, implementer: CLAUDE, worker: WORKER })), 1);
+    const final = await finish(loop);
+    expect(final.phase).toBe('finished');
+    expect(final.log.some((entry) => /has reached its usage limit, so .* carries on from here/.test(entry.text))).toBe(true);
+    const builds = s.requests.filter((request) => !request.freshSession);
+    expect(builds[0]!.agent).toBe('claude');
+    expect(builds.slice(1).every((request) => request.execution === 'api')).toBe(true);
+  });
+
+  it('shares one limit across every model on the same account', () => {
+    expect(limitKey({ execution: 'cli', agent: 'claude', model: 'opus' })).toBe(limitKey({ execution: 'cli', agent: 'claude', model: 'sonnet' }));
+    expect(limitKey({ execution: 'cli', agent: 'claude' })).not.toBe(limitKey({ execution: 'cli', agent: 'codex' }));
+    expect(failedOnLimit({ error: 'You have hit your usage limit. It resets at 3pm.' })).toBe(true);
+    expect(failedOnLimit({ error: 'connection dropped' })).toBe(false);
   });
 });

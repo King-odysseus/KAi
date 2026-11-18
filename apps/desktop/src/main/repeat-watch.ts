@@ -30,6 +30,17 @@ export function repeatsItself(output: string): boolean {
   return false;
 }
 
+const repeatListeners = new Map<string, () => void>();
+
+/**
+ * Asks to be told when the run in a conversation starts repeating itself. One listener per conversation; returns the
+ * function that stops listening. The split loop uses it to hand a circling Implementer turn to the Architect.
+ */
+export function onRepeatDetected(conversationId: string, listener: () => void): () => void {
+  repeatListeners.set(conversationId, listener);
+  return () => { if (repeatListeners.get(conversationId) === listener) repeatListeners.delete(conversationId); };
+}
+
 /** Fed a run's text as it streams; says `true` once, the first time the text starts repeating itself. */
 export class RepeatWatch {
   private buffer = '';
@@ -68,5 +79,6 @@ export function withRepeatNotice(
       type: 'notice',
       message: 'This run is repeating the same paragraph. It may be going in circles. Press Stop to end it, or leave it if it is still making progress.',
     });
+    repeatListeners.get(request.conversationId)?.();
   };
 }

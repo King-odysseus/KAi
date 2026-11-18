@@ -1,4 +1,4 @@
-import { Compass, Hammer, LifeBuoy, Loader2, Square, X } from 'lucide-react';
+import { Compass, Hammer, LifeBuoy, Loader2, Square, Wrench, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   directProviderPreset,
@@ -60,6 +60,7 @@ export interface ArchitectSplitState {
 const ROLES: ReadonlyArray<{ role: ArchitectRole; label: string; short: string; hint: string }> = [
   { role: 'architect', label: 'Architect', short: 'Plans and reviews', hint: 'Plans the work, reviews it, and sends it back until it is right. Never writes the code.' },
   { role: 'implementer', label: 'Implementer', short: 'Builds', hint: 'Builds what the Architect planned.' },
+  { role: 'worker', label: 'Worker', short: 'Routine edits (optional)', hint: 'A second builder, often a model on this computer, for the mechanical steps the Architect hands it and the mechanical fixes after a review. The Implementer keeps the hard parts. Left empty, the Implementer does everything.' },
   { role: 'fallback', label: 'Fallback', short: 'If the Architect is down', hint: 'Takes the Architect\'s place if the Architect is not available. Left empty, the Implementer does.' },
 ];
 
@@ -123,7 +124,7 @@ export function useArchitectSplit(input: {
   }, []);
 
   // The models each chosen API reports, asked for once per connection. A failure leaves the shipped list in place.
-  const wanted = useMemo(() => [split.architect, split.implementer, split.fallback].filter((target): target is RoleTarget => target?.execution === 'api' && Boolean(target.api)), [split]);
+  const wanted = useMemo(() => [split.architect, split.implementer, split.worker, split.fallback].filter((target): target is RoleTarget => target?.execution === 'api' && Boolean(target.api)), [split]);
   useEffect(() => {
     for (const target of wanted) {
       const key = modelCacheKey(target);
@@ -144,7 +145,7 @@ export function useArchitectSplit(input: {
   useEffect(() => {
     if (!split.enabled) return;
     let alive = true;
-    const targets = [split.architect, split.implementer, split.fallback].filter((target): target is RoleTarget => target !== null);
+    const targets = [split.architect, split.implementer, split.worker, split.fallback].filter((target): target is RoleTarget => target != null);
     void Promise.all(targets.map(async (target) => {
       const result = await window.kaiDesktop.architectReady(target).then(unwrap).catch((): ArchitectReadiness => ({ ready: true, label: '' }));
       return [roleTargetKey(target), result] as const;
@@ -176,7 +177,7 @@ export function ArchitectToggle({ state, disabled }: { state: ArchitectSplitStat
 export function ArchitectChip({ state, onOpen }: { state: ArchitectSplitState; onOpen: () => void }): ReactNode {
   if (!state.split.enabled) return null;
   const names = Object.fromEntries(state.capabilities.map((capability) => [capability.id, capability.displayName]));
-  const notReady = [state.split.architect, state.split.implementer, state.split.fallback].flatMap((target) => {
+  const notReady = [state.split.architect, state.split.implementer, state.split.worker, state.split.fallback].flatMap((target) => {
     const result = target ? state.readiness.get(roleTargetKey(target)) : undefined;
     return result && !result.ready ? [`${result.label || 'A role'} is not ready${result.reason ? `: ${result.reason}` : ''}`] : [];
   });
@@ -197,21 +198,23 @@ export function ArchitectChip({ state, onOpen }: { state: ArchitectSplitState; o
   );
 }
 
-/** The three pickers: who plans and reviews, who builds, and who stands in for the Architect. */
+/** The pickers: who plans and reviews, who builds, the optional Worker for routine edits, and who stands in for the Architect. */
 export function ArchitectRow({ state, disabled }: { state: ArchitectSplitState; disabled?: boolean }): ReactNode {
   if (!state.split.enabled) return null;
-  const current = [state.split.architect, state.split.implementer, state.split.fallback];
+  const current = [state.split.architect, state.split.implementer, state.split.worker ?? null, state.split.fallback];
   return (
     <div className="flex w-full flex-col gap-2.5">
       {ROLES.map(({ role, label, short, hint }) => {
-        const target = state.split[role];
+        const target = state.split[role] ?? null;
         const ready = target ? state.readiness.get(roleTargetKey(target)) : undefined;
         const live = target?.execution === 'api' && target.api ? state.liveModels.get(modelCacheKey(target)) : undefined;
         const targets = targetOptions(role, { capabilities: state.capabilities, credentialIds: state.credentialIds, current });
         const options = role === 'fallback'
           ? [{ value: '', label: 'Same as Implementer' }, ...targets]
-          : [{ value: '', label: 'Choose…' }, ...targets];
-        const icon = role === 'architect' ? <Compass size={13} /> : role === 'implementer' ? <Hammer size={13} /> : <LifeBuoy size={13} />;
+          : role === 'worker'
+            ? [{ value: '', label: 'None' }, ...targets]
+            : [{ value: '', label: 'Choose…' }, ...targets];
+        const icon = role === 'architect' ? <Compass size={13} /> : role === 'implementer' ? <Hammer size={13} /> : role === 'worker' ? <Wrench size={13} /> : <LifeBuoy size={13} />;
         return (
           <div key={role} className="flex flex-wrap items-center gap-1.5" role="group" aria-label={label}>
             <span className="flex w-[8.5rem] shrink-0 flex-col" title={hint}>
@@ -259,7 +262,7 @@ export function splitSummary(split: ArchitectSplit, names: Readonly<Record<strin
     const preset = directProviderPreset(target.api!.provider);
     return `${preset.displayName}${target.api!.model ? ` · ${target.api!.model}` : ''}`;
   };
-  return `Architect ${name(split.architect)} · Implementer ${name(split.implementer)}`;
+  return `Architect ${name(split.architect)} · Implementer ${name(split.implementer)}${split.worker ? ` · Worker ${name(split.worker)}` : ''}`;
 }
 
 /** Phases where the split run is still going or is parked on the person. */

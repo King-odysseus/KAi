@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentCapability, ArchitectSplit, RoleTarget } from '@kai/contracts';
+import { architectSplitSchema, splitWorker, type AgentCapability, type ArchitectSplit, type RoleTarget } from '@kai/contracts';
 import {
   NEW_TAB,
   adoptSplit,
@@ -239,5 +239,26 @@ describe('pairingWarning', () => {
     expect(pairingWarning(on(weak, { execution: 'cli', agent: 'codex' }))).toMatch(/Architect is not a model known for planning/);
     expect(pairingWarning(on(strong, local))).toMatch(/model on this computer/);
     expect(pairingWarning({ enabled: false, architect: weak, implementer: local, fallback: null })).toBeNull();
+  });
+});
+
+describe('the Worker role', () => {
+  const worker: RoleTarget = { execution: 'api', api: { provider: 'lmstudio', model: 'qwen3-coder-30b' } };
+  const base: ArchitectSplit = { enabled: true, architect: { execution: 'cli', agent: 'claude' }, implementer: { execution: 'cli', agent: 'claude', model: 'sonnet' }, fallback: null };
+
+  it('is optional: an older saved split without one is still a valid split', () => {
+    expect(architectSplitSchema.safeParse(base).success).toBe(true);
+    expect(architectSplitSchema.safeParse({ ...base, worker }).success).toBe(true);
+    expect(architectSplitSchema.safeParse({ ...base, worker: null }).success).toBe(true);
+  });
+
+  it('is set through withRole, kept by the schema and named in the summary', () => {
+    const next = withRole(base, 'worker', worker);
+    expect(next.worker).toEqual(worker);
+    expect(architectSplitSchema.parse(next).worker).toEqual(worker);
+    expect(splitWorker(next)).toEqual(worker);
+    expect(splitWorker({ ...next, enabled: false })).toBeNull();
+    expect(splitWorker(base)).toBeNull();
+    expect(withRole(next, 'worker', null).worker).toBeNull();
   });
 });

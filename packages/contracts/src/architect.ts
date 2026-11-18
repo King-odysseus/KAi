@@ -51,7 +51,7 @@ export const roleTargetSchema = z
   });
 export type RoleTarget = z.infer<typeof roleTargetSchema>;
 
-export const ARCHITECT_ROLES = ['architect', 'implementer', 'fallback'] as const;
+export const ARCHITECT_ROLES = ['architect', 'implementer', 'worker', 'fallback'] as const;
 export type ArchitectRole = (typeof ARCHITECT_ROLES)[number];
 
 export const architectSplitSchema = z
@@ -61,6 +61,12 @@ export const architectSplitSchema = z
     implementer: roleTargetSchema.nullable(),
     /** Stands in when the Architect is unavailable. Null means "the Implementer". */
     fallback: roleTargetSchema.nullable(),
+    /**
+     * An optional second builder, usually a model on this computer, for the routine edits: the steps the Architect
+     * marks mechanical and the corrections it says are mechanical. The Implementer keeps the hard parts. Left out, the
+     * Implementer does everything, exactly as before.
+     */
+    worker: roleTargetSchema.nullable().optional(),
   })
   .strict();
 export type ArchitectSplit = z.infer<typeof architectSplitSchema>;
@@ -71,6 +77,11 @@ export function defaultArchitectSplit(): ArchitectSplit {
 
 /** A split that is on and has both main roles chosen. */
 export type ActiveArchitectSplit = ArchitectSplit & { enabled: true; architect: RoleTarget; implementer: RoleTarget };
+
+/** The Worker, when the split is active and one is chosen. */
+export function splitWorker(split: ArchitectSplit | null | undefined): RoleTarget | null {
+  return architectSplitActive(split) ? (split.worker ?? null) : null;
+}
 
 /** The split only does anything once it is on and both main roles are chosen. */
 export function architectSplitActive(split: ArchitectSplit | null | undefined): split is ActiveArchitectSplit {
@@ -109,6 +120,11 @@ export const architectBriefSchema = z
      * a command it writes must not be a way round that.
      */
     checkCommand: z.string().trim().max(300).optional(),
+    /**
+     * Mechanical steps for the Worker, when there is one: renames, boilerplate, tests, docs, applying a listed edit.
+     * Each must be specific enough to do without judgement. Left out, the Implementer does all the work.
+     */
+    routine: z.array(z.string().trim().min(1).max(500)).max(30).optional(),
   })
   .strict();
 export type ArchitectBrief = z.infer<typeof architectBriefSchema>;
@@ -124,6 +140,8 @@ export const architectVerdictSchema = z
     corrections: z.array(z.string().trim().min(1).max(600)).max(30).default([]),
     /** A replacement brief, for `replan`. */
     brief: architectBriefSchema.optional(),
+    /** For `revise`: true when every correction is mechanical, so the Worker can apply them instead of the Implementer. */
+    routine: z.boolean().optional(),
   })
   .strict();
 export type ArchitectVerdict = z.infer<typeof architectVerdictSchema>;

@@ -1,5 +1,6 @@
 import { lenient } from '@kai/contracts';
-import { normalizeText, repeatsItself } from './repeat-watch';
+import { normalizeText, onRepeatDetected, repeatsItself } from './repeat-watch';
+import { detectRateLimit } from './rate-limit';
 import {
   ARCHITECT_BRIEF_SENTINEL,
   ARCHITECT_REPORT_SENTINEL,
@@ -11,6 +12,8 @@ import {
   architectBriefSchema,
   architectSplitActive,
   architectVerdictSchema,
+  roleTargetKey,
+  splitWorker,
   directProviderPreset,
   type AgentId,
   type AgentRunRequest,
@@ -209,6 +212,11 @@ export function fallbackBrief(task: string): ArchitectBrief {
 
 const BRIEF_SHAPE = `{"goal": "one or two sentences", "files": ["path/to/touch"], "avoid": ["things to leave alone"], "doneChecks": ["a checkable statement that must be true when done"], "checkCommand": "optional: one plain test or typecheck command, for example npm test"}`;
 const VERDICT_SHAPE = `{"verdict": "approve" | "revise" | "replan", "summary": "one or two sentences", "corrections": ["a specific fix"], "brief": <a new brief, only for "replan">}`;
+/** The brief and verdict shapes when a Worker is in the split: the brief may list routine steps, and a verdict may say its fixes are mechanical. */
+const BRIEF_SHAPE_WITH_WORKER = BRIEF_SHAPE.replace('"checkCommand"', '"routine": ["a mechanical step for the Worker, specific enough to do without judgement"], "checkCommand"');
+const VERDICT_SHAPE_WITH_WORKER = VERDICT_SHAPE.replace('"brief"', '"routine": true only when every correction is mechanical and the Worker may apply it, "brief"');
+const WORKER_PLAN_NOTE = (workerLabel: string): string =>
+  `A second builder, the Worker (${workerLabel}), is a smaller model for routine edits. Put in "routine" only mechanical steps it can do without judgement: renames, boilerplate, tests, docs, applying an edit you describe exactly. Leave the hard parts out of it: they stay with the Implementer. Leave "routine" out if nothing qualifies.`;
 
 export function briefText(brief: ArchitectBrief): string {
   const lines = [`Goal: ${brief.goal}`];
@@ -219,13 +227,14 @@ export function briefText(brief: ArchitectBrief): string {
   return lines.join('\n\n');
 }
 
-export function planPrompt(task: string, label: string): string {
+export function planPrompt(task: string, label: string, workerLabel?: string): string {
   return [
     `[Architect · ${label}]`,
     'You are the Architect. Another agent, the Implementer, will write the code; you only plan. You are read-only: do not edit files or run commands that change anything. Read what you need to plan well.',
     `Task:\n${task}`,
-    `Write a brief the Implementer can work from without asking you anything. Keep it short and concrete. Finish your reply with its own line:\n${ARCHITECT_BRIEF_SENTINEL} ${BRIEF_SHAPE}`,
+    `Write a brief the Implementer can work from without asking you anything. Keep it short and concrete. Finish your reply with its own line:\n${ARCHITECT_BRIEF_SENTINEL} ${workerLabel ? BRIEF_SHAPE_WITH_WORKER : BRIEF_SHAPE}`,
     'Every item in "doneChecks" must be something a reviewer can check against the files or a command, not a feeling.',
+    ...(workerLabel ? [WORKER_PLAN_NOTE(workerLabel)] : []),
   ].join('\n\n');
 }
 
@@ -235,15 +244,31 @@ const BUILD_ACCESS_LINE = 'This is a build run, not a planning run. You may edit
 /** The structured report every Implementer turn ends with, so the Architect can check the claim against the diff. */
 const REPORT_LINE = `When you finish a turn, end your reply with its own line: ${ARCHITECT_REPORT_SENTINEL} {"filesChanged": ["path"], "checksRun": ["command and how it came out"], "unfinished": ["what you did not get to"]}. Report only what is true.`;
 
-export function implementPrompt(brief: ArchitectBrief, task: string, label: string): string {
+export function implementPrompt(brief: ArchitectBrief, task: string, label: string, workerLabel?: string): string {
+  const routine = workerLabel ? (brief.routine ?? []) : [];
   return [
     `[Implementer · ${label}]`,
     'You are the Implementer. The Architect planned this work; build exactly what the brief says, no more and no less. A reviewer will judge your work against the "Done when" list.',
     `Original request:\n${task}`,
     `Brief:\n${briefText(brief)}`,
+    ...(routine.length ? [`A second builder, the Worker (${workerLabel}), will do these routine steps after you. Do not do them yourself:\n${routine.map((step) => `- ${step}`).join('\n')}`] : []),
     BUILD_ACCESS_LINE,
     REPORT_LINE,
     `If you cannot make progress, stop and end your reply with its own line: ${ARCHITECT_STUCK_SENTINEL} followed by one sentence on what blocks you. The Architect will step in.`,
+  ].join('\n\n');
+}
+
+/** The Worker's turn: the brief's routine steps, done exactly as written, and nothing else. */
+export function workerPrompt(brief: ArchitectBrief, task: string, label: string, steps: readonly string[]): string {
+  return [
+    `[Worker · ${label}]`,
+    'You are the Worker. A stronger model planned this work and another builder has done the hard part. Do exactly the routine steps below, as written. Do not redesign anything and do not touch other files.',
+    `Original request:\n${task}`,
+    `Goal of the whole job: ${brief.goal}`,
+    `Your steps:\n${steps.map((step, index) => `${index + 1}. ${step}`).join('\n')}`,
+    BUILD_ACCESS_LINE,
+    REPORT_LINE,
+    `If a step is not possible as written, stop and end your reply with its own line: ${ARCHITECT_STUCK_SENTINEL} followed by one sentence on why. The Architect will step in.`,
   ].join('\n\n');
 }
 
@@ -281,7 +306,7 @@ export function checkFailedVerdict(check: BriefCheck, summary: string): Architec
   };
 }
 
-export function reviewPrompt(brief: ArchitectBrief, task: string, material: string, implementerNote: string, label: string, check?: BriefCheck | null): string {
+export function reviewPrompt(brief: ArchitectBrief, task: string, material: string, implementerNote: string, label: string, check?: BriefCheck | null, withWorker = false): string {
   return [
     `[Architect · ${label}]`,
     'You are the Architect, reviewing the Implementer\'s work. You are read-only: do not edit files. Judge the work against the brief\'s "Done when" list and the original request. Be strict and specific: name what is wrong, not that it "could be better".',
@@ -295,7 +320,8 @@ export function reviewPrompt(brief: ArchitectBrief, task: string, material: stri
       '- "approve": every "Done when" item holds.',
       '- "revise": the approach is right but specific things are wrong; list them in "corrections", each one fixable on its own.',
       '- "replan": the approach itself is wrong or the Implementer is going in circles; give a new "brief".',
-      `Finish your reply with its own line:\n${ARCHITECT_VERDICT_SENTINEL} ${VERDICT_SHAPE}`,
+      ...(withWorker ? ['A Worker model is available for mechanical fixes. For "revise", set "routine": true only if every correction is mechanical (a rename, a missing line, a listed edit); anything needing judgement stays with the Implementer.'] : []),
+      `Finish your reply with its own line:\n${ARCHITECT_VERDICT_SENTINEL} ${withWorker ? VERDICT_SHAPE_WITH_WORKER : VERDICT_SHAPE}`,
     ].join('\n'),
   ].join('\n\n');
 }
@@ -315,7 +341,21 @@ export function correctionPrompt(verdict: ArchitectVerdict, brief: ArchitectBrie
   ].join('\n\n');
 }
 
-export function stepInPrompt(brief: ArchitectBrief, task: string, why: string, material: string, label: string): string {
+/** The review's mechanical corrections, handed to the Worker instead of the Implementer. */
+export function workerCorrectionPrompt(verdict: ArchitectVerdict, brief: ArchitectBrief, label: string): string {
+  const fixes = verdict.corrections.length ? verdict.corrections.map((item, index) => `${index + 1}. ${item}`).join('\n') : verdict.summary;
+  return [
+    `[Worker · ${label}]`,
+    'You are the Worker. The Architect reviewed the work and found fixes that are mechanical. Make exactly these, then stop. Do not redo what already passes and do not change anything else.',
+    `Fixes:\n${fixes}`,
+    `Goal of the whole job: ${brief.goal}`,
+    BUILD_ACCESS_LINE,
+    REPORT_LINE,
+    `If a fix is not possible as written, end your reply with its own line: ${ARCHITECT_STUCK_SENTINEL} followed by one sentence on why.`,
+  ].join('\n\n');
+}
+
+export function stepInPrompt(brief: ArchitectBrief, task: string, why: string, material: string, label: string, workerLabel?: string): string {
   return [
     `[Architect · ${label}]`,
     'You are the Architect, and the Implementer is stuck. You are read-only: do not edit files and do not write the code yourself. Work out what is going wrong, then either give a corrected brief or point the Implementer in the right direction.',
@@ -323,7 +363,8 @@ export function stepInPrompt(brief: ArchitectBrief, task: string, why: string, m
     `Original request:\n${task}`,
     `Current brief:\n${briefText(brief)}`,
     `What changed in the project so far:\n${material || '(nothing yet)'}`,
-    `Finish your reply with its own line, a new brief that includes whatever the Implementer was missing:\n${ARCHITECT_BRIEF_SENTINEL} ${BRIEF_SHAPE}`,
+    `Finish your reply with its own line, a new brief that includes whatever the Implementer was missing:\n${ARCHITECT_BRIEF_SENTINEL} ${workerLabel ? BRIEF_SHAPE_WITH_WORKER : BRIEF_SHAPE}`,
+    ...(workerLabel ? [WORKER_PLAN_NOTE(workerLabel)] : []),
   ].join('\n\n');
 }
 
@@ -352,6 +393,12 @@ export function targetLabel(target: RoleTarget, agentNames: Readonly<Record<stri
  */
 export function implementerAutonomy(autonomy: AutonomyMode): AutonomyMode {
   return autonomy === 'full' ? 'full' : 'autoEdit';
+}
+
+/** One builder's turn in a round: who builds, and what it is told. */
+interface BuildTurn {
+  role: 'implementer' | 'worker';
+  prompt: string;
 }
 
 export interface RunBase {
@@ -424,6 +471,24 @@ export interface CoachContext {
   firstTurn?: Partial<AgentRunRequest>;
   /** Told when the Architect's stand-in works instead, so the person is never left guessing. */
   onFallback?: (message: string) => void;
+  /** Accounts that have hit a usage limit in this run, by `limitKey`; every role on one is skipped from then on. */
+  exhausted?: Set<string>;
+  /** Told each time a role moves to another model because of a limit, so a switch is never silent. */
+  onSwitch?: (message: string) => void;
+}
+
+/**
+ * The account a target spends from. A usage limit belongs to the account, not to a model: Claude on opus and Claude on
+ * sonnet share one subscription window, so a limit on one is a limit on both.
+ */
+export function limitKey(target: RoleTarget): string {
+  if (target.execution === 'cli') return `cli:${target.agent ?? ''}`;
+  return `api:${target.api?.provider ?? ''}:${target.api?.credentialId ?? ''}:${target.api?.baseUrl ?? ''}`;
+}
+
+/** Whether a failed run's message reads as a usage or rate limit. */
+export function failedOnLimit(result: { error?: string | undefined; output?: string | undefined }): boolean {
+  return detectRateLimit(result.error ?? result.output ?? '') !== null;
 }
 
 export class ArchitectUnavailableError extends Error {}
@@ -447,6 +512,20 @@ export class ArchitectCoach {
     return targetLabel(target, this.names());
   }
 
+  /** The Worker's label for prompts, or undefined when the split has none. */
+  workerLabel(context: CoachContext): string | undefined {
+    const worker = splitWorker(context.split);
+    return worker ? this.label(worker) : undefined;
+  }
+
+  /** The Worker, when there is one and it can run now; null otherwise (the Implementer then does everything). */
+  async workerTarget(context: CoachContext): Promise<{ target: RoleTarget | null; why?: string }> {
+    const worker = splitWorker(context.split);
+    if (!worker) return { target: null };
+    const ready = await this.ports.ready(worker);
+    return ready.ready ? { target: worker } : { target: null, why: `The Worker (${this.label(worker)}) is unavailable${ready.reason ? `: ${ready.reason}` : ''}, so the Implementer does the routine steps too.` };
+  }
+
   /**
    * Who plays the Architect right now: the chosen one, else the fallback, else the Implementer. Said every time the
    * stand-in is used, because a silent swap would be exactly the thing the person asked KAI not to do.
@@ -454,19 +533,41 @@ export class ArchitectCoach {
   async architectTarget(context: CoachContext): Promise<{ target: RoleTarget; fallbackUsed: boolean }> {
     const { split } = context;
     if (!architectSplitActive(split)) throw new ArchitectUnavailableError('The Architect / Implementer split is not set up.');
-    const chosen = await this.ports.ready(split.architect);
+    const spent = (target: RoleTarget): boolean => context.exhausted?.has(limitKey(target)) === true;
+    const limitReason = 'its usage limit is reached';
+    const chosen = spent(split.architect) ? { ready: false, reason: limitReason } : await this.ports.ready(split.architect);
     if (chosen.ready) return { target: split.architect, fallbackUsed: false };
+    // Next available, in order: the fallback the person chose (else the Implementer), then whoever else is in the split.
     const standIn = split.fallback ?? split.implementer;
-    const standInReady = await this.ports.ready(standIn);
-    if (!standInReady.ready) {
+    const others = [split.implementer, splitWorker(split)].filter((target): target is RoleTarget => target !== null && roleTargetKey(target) !== roleTargetKey(standIn));
+    const first = spent(standIn) ? { ready: false, reason: limitReason } : await this.ports.ready(standIn);
+    let chosenStandIn: RoleTarget | null = first.ready ? standIn : null;
+    for (const other of chosenStandIn ? [] : others) {
+      if (spent(other)) continue;
+      if ((await this.ports.ready(other)).ready) { chosenStandIn = other; break; }
+    }
+    if (!chosenStandIn) {
       throw new ArchitectUnavailableError(
-        `The Architect (${this.label(split.architect)}) is unavailable${chosen.reason ? `: ${chosen.reason}` : ''}, and so is its stand-in (${this.label(standIn)})${standInReady.reason ? `: ${standInReady.reason}` : ''}.`,
+        `The Architect (${this.label(split.architect)}) is unavailable${chosen.reason ? `: ${chosen.reason}` : ''}, and so is its stand-in (${this.label(standIn)})${first.reason ? `: ${first.reason}` : ''}.`,
       );
     }
     context.onFallback?.(
-      `The Architect (${this.label(split.architect)}) is unavailable${chosen.reason ? `: ${chosen.reason}` : ''}. ${this.label(standIn)} is standing in.`,
+      `The Architect (${this.label(split.architect)}) is unavailable${chosen.reason ? `: ${chosen.reason}` : ''}. ${this.label(chosenStandIn)} is standing in.`,
     );
-    return { target: standIn, fallbackUsed: true };
+    return { target: chosenStandIn, fallbackUsed: true };
+  }
+
+  /**
+   * Who builds next when the current builder has hit a usage limit: the Worker, else the fallback, whichever is ready and
+   * not itself spent. Null when there is nobody, and the run then fails or asks as it did before.
+   */
+  async nextBuilder(context: CoachContext, current: RoleTarget): Promise<RoleTarget | null> {
+    const candidates = [splitWorker(context.split), context.split.fallback ?? null, context.split.architect]
+      .filter((target): target is RoleTarget => target !== null && limitKey(target) !== limitKey(current) && !context.exhausted?.has(limitKey(target)));
+    for (const candidate of candidates) {
+      if ((await this.ports.ready(candidate)).ready) return candidate;
+    }
+    return null;
   }
 
   async implementerTarget(context: CoachContext): Promise<RoleTarget> {
@@ -488,23 +589,32 @@ export class ArchitectCoach {
     buildPrompt: (label: string) => string,
     extra: Partial<AgentRunRequest> = {},
   ): Promise<{ output: string; label: string; fallbackUsed: boolean; costUsd: number }> {
-    const { target, fallbackUsed } = await this.architectTarget(context);
-    const request = requestForTarget(
-      target,
-      { ...context.base, autonomy: 'plan' },
-      buildPrompt(this.label(target)),
-      { freshSession: true, ...extra },
-    );
-    const result = await this.ports.runAgent(request, context.ownerWindowId);
-    if (result.cancelled) throw new RunStoppedError();
-    if (result.status === 'failed' || result.error) {
-      throw new Error(`The Architect (${this.label(target)}) could not answer: ${(result.error ?? result.output ?? '').slice(-400) || 'the run failed'}`);
+    // A usage limit moves the work to the next available model and the answer is asked for again; any other failure,
+    // or running out of models, is reported as it always was. At most one switch per model in the split.
+    for (let attempt = 0; ; attempt += 1) {
+      const { target, fallbackUsed } = await this.architectTarget(context);
+      const request = requestForTarget(
+        target,
+        { ...context.base, autonomy: 'plan' },
+        buildPrompt(this.label(target)),
+        { freshSession: true, ...extra },
+      );
+      const result = await this.ports.runAgent(request, context.ownerWindowId);
+      if (result.cancelled) throw new RunStoppedError();
+      if (result.status === 'failed' || result.error) {
+        if (context.exhausted && attempt < 4 && failedOnLimit(result)) {
+          context.exhausted.add(limitKey(target));
+          context.onSwitch?.(`The Architect (${this.label(target)}) has reached its usage limit, so the next available model takes over.`);
+          continue;
+        }
+        throw new Error(`The Architect (${this.label(target)}) could not answer: ${(result.error ?? result.output ?? '').slice(-400) || 'the run failed'}`);
+      }
+      return { output: result.output ?? '', label: this.label(target), fallbackUsed, costUsd: result.costUsd ?? 0 };
     }
-    return { output: result.output ?? '', label: this.label(target), fallbackUsed, costUsd: result.costUsd ?? 0 };
   }
 
   async plan(context: CoachContext, task: string): Promise<{ brief: ArchitectBrief; readable: boolean; label: string; fallbackUsed: boolean; costUsd: number }> {
-    const answer = await this.ask(context, (label) => planPrompt(task, label), { ...(context.firstTurn ?? {}), splitRole: 'architect', taskText: task });
+    const answer = await this.ask(context, (label) => planPrompt(task, label, this.workerLabel(context)), { ...(context.firstTurn ?? {}), splitRole: 'architect', taskText: task });
     const brief = parseBrief(answer.output);
     return { brief: brief ?? fallbackBrief(task), readable: brief !== null, label: answer.label, fallbackUsed: answer.fallbackUsed, costUsd: answer.costUsd };
   }
@@ -548,7 +658,7 @@ export class ArchitectCoach {
     // What the Implementer says it did, set beside what the working tree shows. The diff wins.
     const crossCheck = crossCheckReport(parseReport(implementerNote), rawMaterial);
     const note = `${implementerNote.slice(-2_500) || '(none)'}\n\n${crossCheck.lines.join('\n')}`;
-    const answer = await this.ask(context, (label) => reviewPrompt(brief, task, material, note, label, check), { splitRole: 'architect', taskText: task });
+    const answer = await this.ask(context, (label) => reviewPrompt(brief, task, material, note, label, check, splitWorker(context.split) !== null), { splitRole: 'architect', taskText: task });
     const parsed = parseVerdict(answer.output);
     // A failing check overrules an approval: the Architect read the diff, but the work does not do what the brief said.
     // So does a report that names changes the working tree does not have: an approval cannot rest on a claim nothing backs.
@@ -583,7 +693,7 @@ export class ArchitectCoach {
     why: string,
   ): Promise<{ brief: ArchitectBrief; readable: boolean; label: string; fallbackUsed: boolean; costUsd: number }> {
     const material = trimReviewMaterial(await this.ports.reviewMaterial(context.projectId).catch(() => ''));
-    const answer = await this.ask(context, (label) => stepInPrompt(brief, task, why, material, label), { splitRole: 'architect', taskText: task });
+    const answer = await this.ask(context, (label) => stepInPrompt(brief, task, why, material, label, this.workerLabel(context)), { splitRole: 'architect', taskText: task });
     const next = parseBrief(answer.output);
     return { brief: next ?? brief, readable: next !== null, label: answer.label, fallbackUsed: answer.fallbackUsed, costUsd: answer.costUsd };
   }
@@ -629,6 +739,8 @@ interface ActiveLoop {
   waiting: ((carryOn: boolean) => void) | null;
   /** The person ended the Implementer's turn on purpose, to hand the work to the Architect rather than stop the run. */
   handoff: boolean;
+  /** What the hand-off says about why the turn ended. */
+  handoffReason: string;
 }
 
 /** Plan → implement → review → correct, for a normal send. The same Architect that Auto uses, without Auto's check loop. */
@@ -667,6 +779,7 @@ export class ArchitectLoop {
       done: Promise.resolve(),
       waiting: null,
       handoff: false,
+      handoffReason: '',
     };
     const status = this.fresh(input);
     this.runs.set(input.conversationId, active);
@@ -690,10 +803,11 @@ export class ArchitectLoop {
    * Ends the Implementer's current turn and has the Architect step in, instead of stopping the whole run. For a turn that
    * is going in circles: the work done so far stays, and the Architect reads it. Does nothing when no turn is running.
    */
-  handoff(conversationId: string): ArchitectStatus | null {
+  handoff(conversationId: string, reason = 'you ended this turn because it was going in circles'): ArchitectStatus | null {
     const active = this.runs.get(conversationId);
     if (active && !active.waiting && this.status(conversationId)?.role === 'implementer') {
       active.handoff = true;
+      active.handoffReason = reason;
       this.ports.cancelAgent(conversationId);
     }
     return this.status(conversationId);
@@ -798,6 +912,68 @@ export class ArchitectLoop {
     }
   }
 
+  /**
+   * One builder turn (the Implementer's or the Worker's). A turn that starts repeating itself is ended and handed to the
+   * Architect; one that fails is tried once more; and one that fails on a usage limit moves to the next available model,
+   * which then carries the rest of the run. Returns who ended up running it.
+   */
+  private async buildTurn(args: {
+    context: CoachContext;
+    input: ResolvedRun;
+    active: ActiveLoop;
+    owner: number;
+    base: RunBase;
+    prompt: string;
+    target: RoleTarget;
+    first: boolean;
+  }): Promise<{ built: AgentRunResult; target: RoleTarget }> {
+    const { context, input, active, owner, base, prompt } = args;
+    const { conversationId } = input;
+    const stopped = (): boolean => active.controller.signal.aborted;
+    let target = args.target;
+    for (let switches = 0; ; switches += 1) {
+      const request = requestForTarget(target, base, prompt, { ...(args.first ? (context.firstTurn ?? {}) : {}), splitRole: 'implementer', taskText: input.prompt });
+      // A turn that starts repeating the same paragraph is going in circles: it is ended and handed to the Architect, who
+      // keeps the work so far and gives it a smaller first step. Said in the log; the same blocker twice asks the person.
+      const stopListening = onRepeatDetected(conversationId, () => {
+        this.record(conversationId, owner, null, 'The builder turn kept repeating itself, so KAI ended it and handed the work to the Architect.');
+        this.handoff(conversationId, 'it kept repeating itself without making progress, so KAI ended the turn');
+      });
+      let built: AgentRunResult;
+      try {
+        built = await this.ports.runAgent(request, owner);
+        // Ended on purpose, by the person or by the repeat watch, to hand the turn to the Architect: that is a stuck turn, not a stop.
+        if (active.handoff && built.cancelled && !stopped()) {
+          active.handoff = false;
+          built = { ...built, cancelled: false, status: 'completed', output: `${built.output ?? ''}\n${ARCHITECT_STUCK_SENTINEL} ${active.handoffReason}` };
+        }
+        active.handoff = false;
+        const failed = (): boolean => !stopped() && !built.cancelled && (built.status === 'failed' || Boolean(built.error));
+        // A usage limit is the account's, not the work's: the next available model takes over instead of the run failing.
+        if (failed() && failedOnLimit(built) && switches < 3) {
+          context.exhausted?.add(limitKey(target));
+          const next = await this.coach.nextBuilder(context, target);
+          if (next) {
+            this.addCost(conversationId, 'implementer', built.costUsd);
+            this.record(conversationId, owner, null, `${this.coach.label(target)} has reached its usage limit, so ${this.coach.label(next)} carries on from here.`);
+            target = next;
+            continue;
+          }
+        }
+        // A server that dropped or a CLI that hiccuped fails the turn without the work being wrong. One more go, said in
+        // the log, before the whole run is given up; a stop is never retried.
+        if (failed() && !failedOnLimit(built)) {
+          this.record(conversationId, owner, null, `The turn failed (${(built.error ?? built.output ?? '').slice(-200).trim() || 'no reason given'}). Trying that turn once more.`);
+          this.addCost(conversationId, 'implementer', built.costUsd);
+          built = await this.ports.runAgent(request, owner);
+        }
+      } finally {
+        stopListening();
+      }
+      return { built, target };
+    }
+  }
+
   private async drive(input: ResolvedRun, active: ActiveLoop): Promise<void> {
     const { conversationId } = input;
     const owner = active.ownerWindowId;
@@ -814,6 +990,8 @@ export class ArchitectLoop {
         ...(input.selectedPaths?.length ? { selectedPaths: input.selectedPaths } : {}),
         ...(input.contextChips?.length ? { contextChips: input.contextChips } : {}),
       },
+      exhausted: new Set<string>(),
+      onSwitch: (message) => this.record(conversationId, owner, null, message),
       // Said the first time and not on every round; the status keeps showing that a stand-in is working.
       onFallback: (message) => {
         const state = this.state(conversationId);
@@ -825,8 +1003,16 @@ export class ArchitectLoop {
     const stopped = (): boolean => active.controller.signal.aborted;
     try {
       // The Implementer must be ready before any planning is paid for.
-      const implementer = await this.coach.implementerTarget(context);
-      const implementerLabel = this.coach.label(implementer);
+      let implementer = await this.coach.implementerTarget(context);
+      let implementerLabel = this.coach.label(implementer);
+      // The Worker only takes part if it can run now; otherwise the Implementer does the routine steps too, and the log says so.
+      const workerChoice = await this.coach.workerTarget(context);
+      let worker = workerChoice.target;
+      if (workerChoice.why) {
+        this.record(conversationId, owner, null, workerChoice.why);
+        context.split = { ...context.split, worker: null };
+      }
+      let workerLabel = worker ? this.coach.label(worker) : undefined;
 
       this.phase(conversationId, owner, 'planning', 'architect', 'The Architect is planning.');
       const planned = await this.coach.plan(context, input.prompt);
@@ -838,7 +1024,14 @@ export class ArchitectLoop {
         ? `Brief ready (${planned.label}): ${brief.goal}`
         : `${planned.label} did not return a readable brief, so the task itself is the brief.`);
 
-      let prompt = implementPrompt(brief, input.prompt, implementerLabel);
+      // What one round builds: the Implementer first, then the Worker for the brief's routine steps when there are any.
+      const turnsFor = (forBrief: ArchitectBrief): BuildTurn[] => {
+        const steps = worker ? (forBrief.routine ?? []) : [];
+        const planned: BuildTurn[] = [{ role: 'implementer', prompt: implementPrompt(forBrief, input.prompt, implementerLabel, steps.length ? workerLabel : undefined) }];
+        if (worker && workerLabel && steps.length) planned.push({ role: 'worker', prompt: workerPrompt(forBrief, input.prompt, workerLabel, steps) });
+        return planned;
+      };
+      let turns = turnsFor(brief);
       let revisionsInARow = 0;
       let roundsSinceAsk = 0;
       let steppedInSinceApproval = false;
@@ -850,36 +1043,35 @@ export class ArchitectLoop {
         state.round += 1;
         roundsSinceAsk += 1;
 
-        this.phase(conversationId, owner, state.round === 1 ? 'implementing' : 'correcting', 'implementer',
-          state.round === 1 ? 'The Implementer is building from the brief.' : 'The Implementer is fixing what the Architect sent back.', implementerLabel);
         // The Implementer's whole job is to write code. Plan autonomy (the composer's setting, or the Architect's own
         // read-only one) would deny every edit, it would report itself stuck, and the Architect's new brief could never
-        // fix that: an endless loop. So it builds in Auto-edit whatever the composer says.
-        const implementerBase: RunBase = { ...base, autonomy: implementerAutonomy(base.autonomy) };
-        // What the project looked like before this turn, so a turn that changed nothing is seen as that.
+        // fix that: an endless loop. So every builder works in Auto-edit whatever the composer says.
+        const builderBase: RunBase = { ...base, autonomy: implementerAutonomy(base.autonomy) };
+        // What the project looked like before this round, so a round that changed nothing is seen as that.
         const treeBefore = await this.treeSnapshot(input.projectId);
-        const buildRequest = requestForTarget(implementer, implementerBase, prompt, { ...(state.round === 1 ? (context.firstTurn ?? {}) : {}), splitRole: 'implementer', taskText: input.prompt });
-        let built = await this.ports.runAgent(buildRequest, owner);
-        // Ended by the person on purpose, to hand the turn to the Architect: that is a stuck turn, not a stop.
-        if (active.handoff && built.cancelled && !stopped()) {
-          active.handoff = false;
-          built = { ...built, cancelled: false, status: 'completed', output: `${built.output ?? ''}
-${ARCHITECT_STUCK_SENTINEL} you ended this turn because it was going in circles` };
-        }
-        active.handoff = false;
-        // A server that dropped or a CLI that hiccuped fails the turn without the work being wrong. One more go, said in
-        // the log, before the whole run is given up; a stop is never retried.
-        if (!stopped() && !built.cancelled && (built.status === 'failed' || built.error)) {
-          this.record(conversationId, owner, null, `The Implementer's turn failed (${(built.error ?? built.output ?? '').slice(-200).trim() || 'no reason given'}). Trying that turn once more.`);
+        const outputs: string[] = [];
+        for (const [index, turn] of turns.entries()) {
+          const isWorker = turn.role === 'worker' && worker !== null;
+          const label = isWorker ? (workerLabel ?? 'Worker') : implementerLabel;
+          this.phase(conversationId, owner, state.round === 1 && index === 0 ? 'implementing' : 'correcting', 'implementer',
+            isWorker ? 'The Worker is doing the routine steps.' : state.round === 1 ? 'The Implementer is building from the brief.' : 'The Implementer is fixing what the Architect sent back.', label);
+          const outcome = await this.buildTurn({
+            context, input, active, owner, base: builderBase, prompt: turn.prompt,
+            target: isWorker ? worker! : implementer, first: state.round === 1 && index === 0,
+          });
+          const built = outcome.built;
           this.addCost(conversationId, 'implementer', built.costUsd);
-          built = await this.ports.runAgent(buildRequest, owner);
+          // A switch because of a usage limit holds for the rest of the run.
+          if (isWorker) { worker = outcome.target; workerLabel = this.coach.label(outcome.target); } else { implementer = outcome.target; implementerLabel = this.coach.label(outcome.target); }
+          if (stopped() || built.cancelled) return this.settle(conversationId, owner, 'stopped', 'Stopped.');
+          if (built.status === 'failed' || built.error) {
+            return this.settle(conversationId, owner, 'failed', `The ${isWorker ? 'Worker' : 'Implementer'} (${this.coach.label(outcome.target)}) failed: ${(built.error ?? built.output ?? '').slice(-300) || 'the run failed'}`);
+          }
+          outputs.push(built.output ?? '');
+          // A turn that asked for help or went round in circles ends the round: the Architect steps in, not the next builder.
+          if (implementerIsStuck(built.output ?? '') || repeatsItself(built.output ?? '')) break;
         }
-        this.addCost(conversationId, 'implementer', built.costUsd);
-        if (stopped() || built.cancelled) return this.settle(conversationId, owner, 'stopped', 'Stopped.');
-        if (built.status === 'failed' || built.error) {
-          return this.settle(conversationId, owner, 'failed', `The Implementer (${implementerLabel}) failed: ${(built.error ?? built.output ?? '').slice(-300) || 'the run failed'}`);
-        }
-        const builtOutput = built.output ?? '';
+        const builtOutput = outputs.join('\n\n');
         const asked = implementerIsStuck(builtOutput);
         const looping = !asked && repeatsItself(builtOutput);
         // A turn that left the working tree exactly as it was has built nothing, whatever its closing note says. That is
@@ -914,7 +1106,7 @@ ${ARCHITECT_STUCK_SENTINEL} you ended this turn because it was going in circles`
           reviewed = { verdict: checkFailedVerdict(precheck, 'The brief\'s check command failed, so the work went back without a review.'), readable: true, label: 'KAI check', fallbackUsed: false, costUsd: 0, check: precheck };
         } else {
           this.phase(conversationId, owner, 'reviewing', 'architect', 'The Architect is reviewing the work.');
-          reviewed = await this.coach.review(context, brief, input.prompt, built.output ?? '', active.controller.signal, precheck);
+          reviewed = await this.coach.review(context, brief, input.prompt, builtOutput, active.controller.signal, precheck);
         }
         this.addCost(conversationId, 'architect', reviewed.costUsd);
         if (reviewed.check) {
@@ -959,8 +1151,9 @@ ${ARCHITECT_STUCK_SENTINEL} you ended this turn because it was going in circles`
             revisionsInARow = 0;
           }
           this.phase(conversationId, owner, 'replanning', 'architect', 'The Architect is stepping in.');
+          const circling = stuck && /repeat|circles|changed nothing/i.test(reason ?? '');
           const why = stuck
-            ? 'The Implementer said it is stuck.'
+            ? `The Implementer is stuck${reason ? `: ${reason}` : '.'}${circling ? ' It keeps re-reading and describing the work instead of editing. A small model needs one concrete first step: name the single file and the exact change to make first, and tell it to make that edit before reading anything else.' : ''}`
             : verdict.verdict === 'replan'
               ? `Your review found the approach is wrong: ${verdict.summary}`
               : `The Implementer has failed review ${revisionsInARow} times in a row. Latest problems: ${verdict.corrections.join('; ') || verdict.summary}`;
@@ -977,11 +1170,14 @@ ${ARCHITECT_STUCK_SENTINEL} you ended this turn because it was going in circles`
           }
           steppedInSinceApproval = true;
           revisionsInARow = 0;
-          prompt = implementPrompt(brief, input.prompt, implementerLabel);
+          turns = turnsFor(brief);
           continue;
         }
 
-        prompt = correctionPrompt(verdict, brief, implementerLabel);
+        // Corrections the Architect calls mechanical go to the Worker; anything needing judgement stays with the Implementer.
+        turns = worker && workerLabel && verdict.verdict === 'revise' && verdict.routine
+          ? [{ role: 'worker', prompt: workerCorrectionPrompt(verdict, brief, workerLabel) }]
+          : [{ role: 'implementer', prompt: correctionPrompt(verdict, brief, implementerLabel) }];
       }
     } catch (error) {
       if (active.controller.signal.aborted || error instanceof RunStoppedError) return this.settle(conversationId, owner, 'stopped', 'Stopped.');
