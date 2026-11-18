@@ -12,6 +12,19 @@ afterEach(async () => {
 });
 
 describe('desktop project context builder', () => {
+  it('puts what changes with every message after what stays the same', async () => {
+    // A local server reuses the start of a request it has already processed only while that start is identical.
+    const root = await fixtureProject();
+    await writeFile(path.join(root, 'AGENTS.md'), 'Always run the checks.', 'utf8');
+    const memories: BrainEntry[] = [{ date: '2026-11-18', title: 'Use zod', agent: 'kai', type: 'decisions', tags: '', project: 'p', fields: { note: 'validate at the boundary' }, status: null }];
+    const built = await buildProjectContext(root, { memories, history: ['- today: changed src/app.ts.'], includeRepoMap: true });
+    const at = (needle: string): number => built.text.indexOf(needle);
+    expect(at('## Project instructions')).toBeGreaterThan(-1);
+    expect(at('## Project instructions')).toBeLessThan(at('## Recalled memories'));
+    expect(at('## Repository map')).toBeLessThan(at('## Recalled memories'));
+    expect(at('## Recalled memories')).toBeLessThan(at('## Earlier runs here'));
+  });
+
   it('carries what earlier runs did here, framed as a record rather than instructions', async () => {
     const root = await fixtureProject();
     const built = await buildProjectContext(root, {

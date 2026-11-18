@@ -1693,6 +1693,8 @@ async function startApplication(): Promise<void> {
   mirrorLoop.start();
   // Direct API runs read and write the project's memory in C1 through two tools of their own.
   directApi.setBrainAccess(projectBrainAccess(ipcContext));
+  // Runs read earlier turns of their conversation on request, including turns already folded into a summary.
+  directApi.setHistoryAccess({ turns: async (conversationId) => (await ipcContext!.conversations.get(conversationId))?.turns ?? [] });
   const registry = registerIpc(ipcContext);
   remote = new RemoteGateway({
     credentials,

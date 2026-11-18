@@ -83,7 +83,7 @@ function toolSearchDefinition(tools: readonly Described[]): unknown {
  * One run's view of the outside tools. Call `definitions()` once at the start of the run and keep sending the array
  * it returns: loading a tool adds to that same array, so later rounds offer it without another lookup.
  */
-export function deferExternalTools(port: ExternalToolPort | undefined): ExternalToolPort | undefined {
+export function deferExternalTools(port: ExternalToolPort | undefined, force = false): ExternalToolPort | undefined {
   if (!port) return port;
   let live: unknown[] | undefined;
   let catalog: Described[] = [];
@@ -92,7 +92,8 @@ export function deferExternalTools(port: ExternalToolPort | undefined): External
   return {
     async definitions() {
       const all = await port.definitions();
-      if (!shouldDefer(all)) return all;
+      // `force` is for a small model, which pays for every schema it is sent: it sees one search tool and loads the rest by name.
+      if (!force && !shouldDefer(all)) return all;
       catalog = all.map(describe).filter((entry): entry is Described => Boolean(entry));
       live = [toolSearchDefinition(catalog)];
       loaded.clear();

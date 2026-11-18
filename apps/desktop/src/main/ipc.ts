@@ -120,6 +120,7 @@ import { runSecurityPrepass } from './security-prepass';
 import { boardCardSchema, type ImportReport } from '@kai/contracts';
 import type { ExecutionMode } from '@kai/contracts';
 import { BRAIN_TOOLS_GUIDANCE, type BrainAccess } from './brain-tools';
+import { windowedHistory } from './history-tools';
 import { brainMemoryReviewPrompt, type BrainMemoryReviewInput, type BrainMemoryReviewResult } from '@kai/contracts';
 import { compactThresholdFor, estimateConversationTokens, isLocalProvider } from '@kai/contracts';
 import type { UpdateController } from './updater';
@@ -2388,8 +2389,18 @@ ${BRAIN_TOOLS_GUIDANCE}`
       ? `Standing execution rules (${(authoritativeRules.match(/^\d+\.\s+\*\*/gm) ?? []).length} rules from Cognitive1) were included in this turn.`
       : 'Standing execution rules are already carried in this turn’s context, so they were not sent twice.',
   };
-  const apiHistory = executionMode === 'api' && historyTurns.length > 0
-    ? [
+  // Each Architect and Implementer step is built from the brief, the task and the corrections, all in its prompt, so it
+  // starts clean: the earlier steps' transcript was only ever noise to it, and cost tokens on every round.
+  const stepOnly = executionMode === 'api' && Boolean(request.splitRole) && historyTurns.length > 0;
+  // A local model is slowed by every token it is sent, so it is given the recent turns that fit a budget and reads the
+  // rest with read_history. The budget is a share of the size it compacts at, since that is what it can comfortably hold.
+  const windowBudget = executionMode === 'api' && !request.splitRole && isLocalProvider(settings.directApi.provider)
+    ? Math.max(2_000, Math.floor(compactThresholdFor(settings.usageBudget, settings.directApi.provider) * 0.4))
+    : 0;
+  const apiHistory = stepOnly
+    ? [{ ...historyTurns[historyTurns.length - 1], text: effectivePrompt }]
+    : executionMode === 'api' && historyTurns.length > 0
+    ? windowedHistory([
         // Earlier turns carry what they actually did, not just what they said — see `buildTurnDigest`. Without
         // this a follow-up message only ever saw the previous turn's closing prose and had no idea which files
         // were already read or changed, or what a command it ran had printed.
@@ -2398,7 +2409,7 @@ ${BRAIN_TOOLS_GUIDANCE}`
           text: turn.toolDigest ? `${turn.text}\n\n[What this turn actually did]\n${turn.toolDigest}` : turn.text,
         })),
         { ...historyTurns[historyTurns.length - 1], text: effectivePrompt },
-      ]
+      ], windowBudget)
     : undefined;
   // A model picked for this run wins; otherwise KAI sizes the request, and the Settings model is the last resort.
   // An agent that keeps getting a level of work wrong is handed that level's work one tier up.
@@ -3112,11 +3123,12 @@ async function buildConversationContext(
   // What KAI has learned about this project leads, on the turns that carry the outline: it is the part an agent would
   // otherwise spend its first minutes working out for itself.
   const learned = includeRepoMap ? await knowledgeBriefing(projectPath, undefined, prompt).catch(() => '') : '';
-  const withKnowledge = learned ? { ...projectContext, text: `${learned}\n\n${projectContext.text}` } : projectContext;
+  // Both come after the project context, which is what stays the same from one message to the next; see renderContext.
+  const withKnowledge = learned ? { ...projectContext, text: `${projectContext.text}\n\n${learned}` } : projectContext;
   if (!compaction) return withKnowledge;
   return {
     ...withKnowledge,
-    text: `${renderCompactionContext(compaction)}\n\n${withKnowledge.text}`,
+    text: `${withKnowledge.text}\n\n${renderCompactionContext(compaction)}`,
   };
 }
 

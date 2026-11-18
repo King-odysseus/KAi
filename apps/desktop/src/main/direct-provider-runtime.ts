@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { trimAnthropicToolResults, trimChatToolResults, trimGeminiToolResults } from './context-trimming';
 import { withBrainTools, type BrainAccess } from './brain-tools';
+import { withHistoryTools, type HistoryAccess } from './history-tools';
 import { compactThresholdFor, directProviderPreset, helperLimitOf, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, openPlanReminder, pickLocalModel, planIsUnfinished, type ApiConnection, type ProviderId } from '@kai/contracts';
 import { localServerHint, resolveApiConnection } from './api-connection';
 import type {
@@ -839,14 +840,26 @@ export class DesktopDirectProviderRuntime {
    * others) does not get KAI's terminal: its sessions open in the project's own folder, so agents in copies used it
    * to run builds and edit files in the project itself, under the other agents' feet and outside the merge.
    */
-  private externalFor(projectRoot: string): ExternalToolPort | undefined {
-    const outside = this.externalTools && isParallelCopy(projectRoot) ? withoutTerminalTools(this.externalTools) : this.externalTools;
+  private externalFor(projectRoot: string, request?: AgentRunRequest, smallModel = false): ExternalToolPort | undefined {
+    const reachable = this.externalTools && isParallelCopy(projectRoot) ? withoutTerminalTools(this.externalTools) : this.externalTools;
+    // A local model is offered the outside (MCP) tools through tool_search, whatever their number. The brain and history
+    // tools are added after this, so they stay in view.
+    const base = smallModel ? deferExternalTools(reachable, true) : reachable;
+    // A run reads its earlier turns when it needs them rather than being sent them all; a helper's own short-lived
+    // conversation has none to read.
+    const outside = this.history && request && !request.conversationId.startsWith('sub_') ? withHistoryTools(base, request.conversationId, this.history) : base;
     // The project brain is offered to every run that can reach it, in a copy of the project as well: what a helper
     // learns belongs to the project, not to the copy.
     return this.brain ? withBrainTools(outside, projectRoot, this.brain) : outside;
   }
 
   private brain: BrainAccess | undefined;
+  private history: HistoryAccess | undefined;
+
+  /** Lets runs read earlier turns of their conversation with `read_history`. Set once conversations exist. */
+  setHistoryAccess(access: HistoryAccess | undefined): void {
+    this.history = access;
+  }
 
   /** Gives runs the project brain's two tools. Set once the brain's service exists; without it, runs have no such tools. */
   setBrainAccess(access: BrainAccess | undefined): void {
@@ -1162,7 +1175,7 @@ export class DesktopDirectProviderRuntime {
     const cancelledDuringToolRuntime = checkCancelledEarly();
     if (cancelledDuringToolRuntime) return cancelledDuringToolRuntime;
     // One outside-tool view per run: large tool sets are offered through tool_search instead of all at once.
-    const externalPort = deferExternalTools(this.externalFor(projectRoot));
+    const externalPort = deferExternalTools(this.externalFor(projectRoot, request, isLocalProvider(capability.provider)));
     let externalToolDefinitions: readonly unknown[] = [];
     try {
       externalToolDefinitions = await externalPort?.definitions() ?? [];
@@ -1445,7 +1458,7 @@ export class DesktopDirectProviderRuntime {
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId);
     if (controller.signal.aborted) return cancelledEarly(request);
     // One outside-tool view per run: large tool sets are offered through tool_search instead of all at once.
-    const externalPort = deferExternalTools(this.externalFor(projectRoot));
+    const externalPort = deferExternalTools(this.externalFor(projectRoot, request, isLocalProvider(capability.provider)));
     let externalToolDefinitions: readonly unknown[] = [];
     try {
       externalToolDefinitions = await externalPort?.definitions() ?? [];
@@ -1770,7 +1783,7 @@ export class DesktopDirectProviderRuntime {
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId);
     if (controller.signal.aborted) return cancelledEarly(request);
     // One outside-tool view per run: large tool sets are offered through tool_search instead of all at once.
-    const externalPort = deferExternalTools(this.externalFor(projectRoot));
+    const externalPort = deferExternalTools(this.externalFor(projectRoot, request, isLocalProvider(capability.provider)));
     let externalToolDefinitions: readonly unknown[] = [];
     try {
       externalToolDefinitions = await externalPort?.definitions() ?? [];
@@ -2050,7 +2063,7 @@ export class DesktopDirectProviderRuntime {
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId);
     if (controller.signal.aborted) return cancelledEarly(request);
     // One outside-tool view per run: large tool sets are offered through tool_search instead of all at once.
-    const externalPort = deferExternalTools(this.externalFor(projectRoot));
+    const externalPort = deferExternalTools(this.externalFor(projectRoot, request, isLocalProvider(capability.provider)));
     let externalToolDefinitions: readonly unknown[] = [];
     try {
       externalToolDefinitions = await externalPort?.definitions() ?? [];

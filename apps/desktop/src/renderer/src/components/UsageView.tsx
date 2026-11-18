@@ -1,6 +1,6 @@
 import { AlertTriangle, Check, RefreshCw, Wallet } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { DIRECT_PROVIDER_ORDER, directProviderPreset } from '@kai/contracts';
+import { DIRECT_PROVIDER_ORDER, directProviderPreset, isLocalProvider } from '@kai/contracts';
 import type { AppSettings, SettingsUpdate, UsageBudget, UsageLimitStatus, UsageSummary } from '@kai/contracts';
 import { unwrap } from '../types';
 
@@ -83,6 +83,9 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
 
   const totalIn = (summary?.byProvider ?? []).reduce((sum, row) => sum + row.inputTokens, 0);
   const totalOut = (summary?.byProvider ?? []).reduce((sum, row) => sum + row.outputTokens, 0);
+  // Tokens that ran on this machine or the home network: they cost nothing, which is the point of running them there.
+  const localRows = (summary?.byProvider ?? []).filter((row) => isLocalProvider(row.provider as Parameters<typeof isLocalProvider>[0]));
+  const localTokens = localRows.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0);
   const paidProviders = DIRECT_PROVIDER_ORDER;
   const maxDay = Math.max(...(summary?.byDay.map((day) => day.usd) ?? [0]), 0.000001);
   const setLimit = (key: 'perRunUsd' | 'perConversationUsd' | 'dailyUsd' | 'monthlyUsd', value: number): void =>
@@ -105,6 +108,7 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
         <div className="metric"><span className="metric-icon"><Wallet size={16} /></span><div><small>This month (estimate)</small><strong>{formatUsd(summary?.monthUsd ?? 0)}</strong></div></div>
         <div className="metric"><span className="metric-icon"><Wallet size={16} /></span><div><small>Active conversation</small><strong>{summary?.conversationUsd == null ? 'None open' : formatUsd(summary.conversationUsd)}</strong></div></div>
         <div className="metric"><span className="metric-icon"><Wallet size={16} /></span><div><small>Tokens used</small><strong title={`${totalIn.toLocaleString()} in / ${totalOut.toLocaleString()} out`}>{formatTokens(totalIn + totalOut)}</strong></div></div>
+        <div className="metric"><span className="metric-icon"><Wallet size={16} /></span><div><small>Kept on this machine</small><strong title="Tokens from local models: LM Studio, Ollama and the like. They cost nothing.">{localTokens >= 1_000_000 ? `${(localTokens / 1_000_000).toFixed(1)}M` : localTokens >= 1_000 ? `${Math.round(localTokens / 1_000)}k` : localTokens}</strong></div></div>
         <div className="metric"><span className="metric-icon"><Wallet size={16} /></span><div><small>Unpriced runs</small><strong>{summary?.unpricedRuns ?? 0}</strong></div></div>
       </div>
       {summary && summary.unpricedRuns > 0 && (
