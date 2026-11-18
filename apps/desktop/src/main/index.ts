@@ -42,7 +42,7 @@ import { DesktopEvals, EvalStore } from './evals';
 import { RunScoreStore } from './run-scores';
 import { AgentExperienceStore } from './experience-store';
 import { DesktopScheduler, ScheduleStore } from './scheduler';
-import { cancelConversationRun, closeCompareRuns, closeMemorySessions, confirmEditorNavigation, ensureStudioDesktopProject, handleRendererWindowClosed, importBrainFromDirectory, cognitive1Ready, mirrorBrainNow, registerIpc, runConversationAgent, runInteractiveAgent, runScheduledGoal, type IpcContext } from './ipc';
+import { projectBrainAccess, cancelConversationRun, closeCompareRuns, closeMemorySessions, confirmEditorNavigation, ensureStudioDesktopProject, handleRendererWindowClosed, importBrainFromDirectory, cognitive1Ready, mirrorBrainNow, registerIpc, runConversationAgent, runInteractiveAgent, runScheduledGoal, type IpcContext } from './ipc';
 import { createDesktopPaths } from './paths';
 import { setBundledSkillsRoot } from './skills';
 import { configureProjectKnowledge, stopProjectKnowledge } from './project-knowledge';
@@ -82,6 +82,7 @@ import { DesktopTeamPlanner } from './team-planner';
 import { DesktopAutopilot } from './autopilot';
 import { DesktopAutoSession } from './auto-session';
 import { ArchitectCoach, ArchitectLoop, targetLabel } from './architect-loop';
+import { appendArchitectNote, type ArchitectNote } from './architect-notes';
 import { AutoWindowStore } from './auto-session-store';
 import { AutopilotRunStore } from './autopilot-store';
 import { BrainMirrorLoop } from './brain-mirror';
@@ -1597,6 +1598,20 @@ async function startApplication(): Promise<void> {
       return parts.join('\n\n');
     },
     agentNames: () => agentNames,
+    // The Architect's plans and verdicts are kept in the project, in a file every run reads, and as decisions in C1.
+    // Either may fail (a read-only folder, the brain stopped) without stopping the work.
+    record: async (projectId: string, note: ArchitectNote) => {
+      const root = await projectRootFor(projectId);
+      await appendArchitectNote(root, note).catch(() => undefined);
+      if (note.kind !== 'revise') {
+        await projectBrainAccess(ipcContext!).remember(root, {
+          title: `${note.kind === 'approved' ? 'Done' : 'Direction'}: ${note.title}`.slice(0, 160),
+          type: 'decisions',
+          note: note.lines.join('\n'),
+          tags: 'architect',
+        }).catch(() => undefined);
+      }
+    },
     // A task started with no conversation gets one, shown in the window, exactly as Auto does for its own.
     openNewConversation: async (projectId: string, title: string, ownerWindowId: number) => {
       const created = await createBlankConversation(projectId, title);
@@ -1676,6 +1691,8 @@ async function startApplication(): Promise<void> {
   await importLocalCognitive1Brain(ipcContext, kaiRoot);
   // Started once the context is complete: the first pass waits a little so it does not race the app's own startup.
   mirrorLoop.start();
+  // Direct API runs read and write the project's memory in C1 through two tools of their own.
+  directApi.setBrainAccess(projectBrainAccess(ipcContext));
   const registry = registerIpc(ipcContext);
   remote = new RemoteGateway({
     credentials,

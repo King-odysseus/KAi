@@ -223,6 +223,9 @@ import {
   brainGitStatusSchema,
   brainGitSyncResultSchema,
   brainImportResultSchema,
+  brainMemoryReviewInputSchema,
+  type BrainMemoryReviewInput,
+  type BrainMemoryReviewResult,
   brainOverviewSchema,
   brainSearchInputSchema,
   cognitive1McpToolInputSchema,
@@ -545,6 +548,7 @@ export const ipcChannels = [
   'learning:save-security-finding',
   'learning:update-security-finding-status',
   'learning:security-scan',
+  'brain:review-memory',
   'code:format',
   'code:install-formatter',
   'code:guide-read',
@@ -982,6 +986,7 @@ export const ipcInputSchemas = {
   'learning:save-security-finding': securityFindingSaveInputSchema,
   'learning:update-security-finding-status': securityFindingStatusUpdateInputSchema,
   'learning:security-scan': securityScanInputSchema,
+  'brain:review-memory': brainMemoryReviewInputSchema,
   'code:format': codeFormatInputSchema,
   'code:install-formatter': codeInstallFormatterInputSchema,
   'code:guide-read': studioProjectInputSchema,
@@ -1602,6 +1607,8 @@ export interface KaiDesktopBridge {
   updateSecurityFindingStatus(input: SecurityFindingStatusUpdateInput): Promise<IpcResponse<SecurityFinding | null>>;
   /** Runs one audit recipe as a real agent task, then returns the whole findings log. Local only. */
   runSecurityScan(input: SecurityScanInput): Promise<IpcResponse<SecurityScanResult>>;
+  /** Has one agent check a project's memory in C1 against its code, correct what is wrong and add what is missing. Local only. */
+  reviewProjectMemory(input: BrainMemoryReviewInput): Promise<IpcResponse<BrainMemoryReviewResult>>;
   formatCode(input: CodeFormatInput): Promise<IpcResponse<CodeFormatResult>>;
   installCodeFormatter(input: CodeInstallFormatterInput): Promise<IpcResponse<{ message: string }>>;
   /**

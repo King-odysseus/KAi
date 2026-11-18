@@ -116,6 +116,12 @@ export const costUpdateEventSchema = eventBaseSchema.extend({
   cacheSavedUsd: z.number().nonnegative().optional(),
   sessionId: z.string().optional(),
   estimateProvenance: z.enum(['measured', 'estimated', 'unknown']).optional(),
+  /**
+   * How large the model said its latest request was, in tokens: everything it was sent, not what the run has spent in
+   * total. A run reports it after every round, in an event with no amount or totals, so the context ring can follow the
+   * real size and fall when older activity is folded into a summary.
+   */
+  contextTokens: z.number().int().nonnegative().optional(),
   // Set for runs that cost money: a paid API run, or a CLI run through the Universal Proxy, which reaches a provider
   // the account pays for. A subscription CLI run carries none, which is what keeps it out of the usage budget.
   provider: z.string().min(1).optional(),

@@ -104,7 +104,7 @@ import type {
   VerificationOverview,
   WorkbenchGoal,
 } from '@kai/contracts';
-import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, HELPER_CHOICES, HELPER_CHOICE_DESCRIPTION, HELPER_CHOICE_LABEL, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, isLocalProvider, estimateConversationTokens, estimateResponseCostUsd, experienceProfile, MAX_SAVED_RECIPES, SAVED_RECIPE_INTENTS, architectSplitActive } from '@kai/contracts';
+import { compactThresholdFor, ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, HELPER_CHOICES, HELPER_CHOICE_DESCRIPTION, HELPER_CHOICE_LABEL, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, isLocalProvider, estimateConversationTokens, estimateResponseCostUsd, experienceProfile, MAX_SAVED_RECIPES, SAVED_RECIPE_INTENTS, architectSplitActive } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
 import { HunkReview, canReviewHunks } from './HunkReview';
 import { ToolCallCard, toolCallStatus } from './ToolCallCard';
@@ -1664,7 +1664,7 @@ export function WorkspaceView({
   const timelineSummary = runDetails.reduce((summary, event) => {
     if (event.type === 'tool.call') summary.tools += 1;
     else if (event.type === 'file.edit.applied' || event.type === 'file.change' || event.type === 'diff.proposal') summary.edits += 1;
-    else if (event.type === 'cost.update') summary.usage += 1;
+    else if (event.type === 'cost.update' && event.contextTokens === undefined) summary.usage += 1;
     return summary;
   }, { tools: 0, edits: 0, usage: 0 });
   const activity = deriveAgentActivity(recentEvents, running, paused, awaitingApproval, autoWaiting);
@@ -1731,8 +1731,12 @@ export function WorkspaceView({
     }
   }
   // The size the person chose for compacting; with auto-compact off the old warning size still marks "getting long".
-  const compactLimit = settings.usageBudget.compactAtTokens > 0 ? settings.usageBudget.compactAtTokens : COMPACTION_WARNING_TOKENS;
-  const liveTokenEstimate = (activeConversation ? estimateConversationTokens(activeConversation) : 0) + Math.ceil(streamingText.length / 4);
+  const compactLimit = compactThresholdFor(settings.usageBudget, apiRun ? directApiCapability?.provider : null) || COMPACTION_WARNING_TOKENS;
+  // What the model itself said its last request held, when this conversation has one: that counts the project
+  // instructions and tool output the chat text does not, and it falls when older activity is folded into a summary.
+  // A summary made after that report makes it stale, so the chat-text estimate takes over until the next request.
+  const reportedContext = activeConversation ? latestReportedContext(activeConversation) : null;
+  const liveTokenEstimate = (reportedContext ?? (activeConversation ? estimateConversationTokens(activeConversation) : 0)) + Math.ceil(streamingText.length / 4);
   const refineBlocked = busy || running || paused || awaitingApproval || refiningPrompt;
   const refineTitle = !prompt.trim()
     ? 'Type a prompt to refine'
@@ -3132,6 +3136,17 @@ function ContextRing({ tokens, limit, busy, running, onCompact }: { tokens: numb
       )}
     </div>
   );
+}
+
+/** The size the model reported for its latest request in this conversation, unless a summary was made after it. */
+function latestReportedContext(conversation: { events: readonly PersistedEvent[]; compaction?: { createdAt: string } | undefined }): number | null {
+  for (let index = conversation.events.length - 1; index >= 0; index -= 1) {
+    const event = conversation.events[index]!;
+    if (event.type !== 'cost.update' || event.contextTokens === undefined) continue;
+    if (conversation.compaction && event.timestamp < conversation.compaction.createdAt) return null;
+    return event.contextTokens;
+  }
+  return null;
 }
 
 function positiveLine(value: string): string | null {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { agentIdSchema } from './primitives';
 
 export const brainEntryTypeSchema = z.enum(['bugs', 'decisions', 'gotchas', 'patterns']);
 export const brainSearchModeSchema = z.enum(['lexical', 'semantic']);
@@ -280,3 +281,49 @@ export type Cognitive1McpTool = z.infer<typeof cognitive1McpToolSchema>;
 export type Cognitive1McpToolInput = z.input<typeof cognitive1McpToolInputSchema>;
 export type NormalizedCognitive1McpToolInput = z.output<typeof cognitive1McpToolInputSchema>;
 export type Cognitive1McpToolResult = z.infer<typeof cognitive1McpToolResultSchema>;
+
+/** Asks one agent to review a project's memory in C1: check it against the code, correct what is wrong, add what is missing. */
+export const brainMemoryReviewInputSchema = z
+  .object({
+    projectId: z.string().min(1).max(200),
+    agent: agentIdSchema,
+    /** `api` runs the review on the connection set up in Settings (a local model, DeepSeek and the like) instead of a signed-in CLI. */
+    execution: z.enum(['cli', 'api']).default('cli'),
+  })
+  .strict();
+export type BrainMemoryReviewInput = z.infer<typeof brainMemoryReviewInputSchema>;
+
+export const brainMemoryReviewResultSchema = z
+  .object({
+    conversationId: z.string().min(1),
+    status: z.enum(['completed', 'failed']),
+    output: z.string(),
+    error: z.string().optional(),
+  })
+  .strict();
+export type BrainMemoryReviewResult = z.infer<typeof brainMemoryReviewResultSchema>;
+
+/**
+ * The instruction for a memory review. The agent is a bigger model teaching the smaller ones that will work on this
+ * project later, so the entries it files are written for them: specific, with paths, one fact each. `current` is what
+ * the brain holds now, as short lines, so the agent can check each against the code without asking for it first.
+ */
+export function brainMemoryReviewPrompt(input: { projectName: string; current: readonly string[] }): string {
+  return [
+    `Review the project memory for "${input.projectName}" and make it better.`,
+    'The project memory (C1, the brain) is what every agent that works on this project reads first, including small local models that cannot work things out for themselves. Wrong or vague entries mislead them; missing ones leave them guessing. Your job is to make it accurate and complete.',
+    input.current.length
+      ? `What the brain holds for this project now:\n${input.current.map((line) => `- ${line}`).join('\n')}`
+      : 'The brain holds nothing for this project yet, so most of the work is adding what is missing.',
+    [
+      'Do this, in order:',
+      '1. Read the entries above, and look up more by topic with your memory tools (brain_recall or recall).',
+      '2. Check each against the real project: open the files it names, read the package scripts, run read-only commands. Do not trust an entry because it is there.',
+      '3. For an entry that is wrong or out of date, file a corrected entry (brain_learn or brain_remember) whose title begins "Correction:" and says which entry it replaces and what was wrong. Remove a stale entry only with a tool meant for that.',
+      '4. Add what is missing, one fact per entry, specific and with file paths: how the project is laid out and what each main part does; the decisions made and why; how to build, test and run it; rules the code must follow; traps that cost time. Prefer decisions, patterns and gotchas a newcomer could not read from the code.',
+      '5. Never record secrets, and do not restate what a file plainly says. The brain turns vague entries away: make them concrete and try again.',
+      '6. Keep to the twenty most useful additions; quality over volume.',
+    ].join('\n'),
+    'Finish with a short report: what you checked, what you corrected, what you added, and what you could not verify.',
+  ].join('\n\n');
+}

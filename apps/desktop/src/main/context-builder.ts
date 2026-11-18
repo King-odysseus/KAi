@@ -13,6 +13,8 @@ const INSTRUCTION_FILES = [
   '.github/copilot-instructions.md',
   'Instruct.md',
   '.kai/instructions.md',
+  // The Architect's plans and decisions, written by KAI; see architect-notes.ts.
+  '.kai/ARCHITECT.md',
 ];
 const SKILL_DIRECTORIES = ['.codex/skills', '.claude/skills', '.agents/skills', '.kai/skills'];
 const MAX_INSTRUCTION_BYTES = 64 * 1024;

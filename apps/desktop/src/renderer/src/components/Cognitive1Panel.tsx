@@ -23,7 +23,8 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+
 import { Switch } from './ui/Switch';
 import { Markdown } from './Markdown';
 import { Pill } from './Pill';
@@ -39,6 +40,7 @@ import {
   type SettingsUpdate,
 } from '@kai/contracts';
 import { confirmDialog, messageDialog } from './AppDialog';
+import type { AgentId } from '@kai/contracts';
 import { unwrap } from '../types';
 import { BrainPanel } from './BrainView';
 import { KnowledgeMap } from './KnowledgeMap';
@@ -928,6 +930,65 @@ function OverwatchPanel({ data, disabled, onRun, autoApprove, onAutoApprove }: P
 }
 
 /** Memory: what C1 knows, how to add to it, and how to take things out. */
+/** Has a chosen agent check a project's memory against its code, correct it and add to it, so the smaller models that read it do better. */
+function MemoryReviewCard({ projects, disabled, onNotice }: { projects: ProjectRecord[]; disabled: boolean; onNotice: (message: string) => void }): ReactNode {
+  const [projectId, setProjectId] = useState(projects[0]?.id ?? '');
+  const [choice, setChoice] = useState('');
+  const [agents, setAgents] = useState<Array<{ id: AgentId; name: string }>>([]);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<{ conversationId: string; status: string; output: string; error?: string } | null>(null);
+  useEffect(() => { if (!projectId && projects[0]) setProjectId(projects[0].id); }, [projects, projectId]);
+  useEffect(() => {
+    void window.kaiDesktop.agentCapabilities().then(unwrap).then((capabilities) => {
+      const available = capabilities.filter((capability) => capability.available).map((capability) => ({ id: capability.id, name: capability.displayName }));
+      setAgents(available);
+      setChoice((current) => current || (available[0] ? `cli:${available[0].id}` : ''));
+    }).catch(() => undefined);
+  }, []);
+
+  async function review(): Promise<void> {
+    if (!projectId || !choice) return;
+    const [execution, agent] = choice.split(':') as ['cli' | 'api', AgentId];
+    setRunning(true);
+    setResult(null);
+    try {
+      const outcome = unwrap(await window.kaiDesktop.reviewProjectMemory({ projectId, agent, execution }));
+      setResult(outcome);
+      onNotice(outcome.status === 'completed' ? 'Project memory reviewed.' : 'The memory review did not finish.');
+    } catch (caught) {
+      setResult({ conversationId: '', status: 'failed', output: '', error: caught instanceof Error ? caught.message : String(caught) });
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <section className="cognitive1-card">
+      <SectionHeading eyebrow="Teach the brain" title="Review project memory" icon={<Brain size={16} />} />
+      <p className="cognitive1-copy">Pick a stronger agent to check what the brain knows about a project against its code, correct what is wrong and add what is missing. Local models read this memory, so what it learns here makes them better on the project.</p>
+      <div className="cognitive1-inline-form">
+        <label className="field"><span>Project</span>
+          <select value={projectId} disabled={disabled || running} onChange={(event) => setProjectId(event.target.value)}>
+            {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+          </select>
+        </label>
+        <label className="field"><span>Agent</span>
+          <select value={choice} disabled={disabled || running} onChange={(event) => setChoice(event.target.value)}>
+            {agents.map((agent) => <option key={agent.id} value={`cli:${agent.id}`}>{agent.name}</option>)}
+            <option value="api:claude">The API connection set up in Settings</option>
+          </select>
+        </label>
+        <UiButton type="button" className="primary-button" disabled={disabled || running || !projectId || !choice} onClick={() => void review()}>{running ? 'Reviewing…' : 'Review and improve'}</UiButton>
+      </div>
+      {result && (
+        <div className="cognitive1-copy" role="status">
+          {result.status === 'completed' ? <Markdown text={result.output || 'The review finished with no report.'} /> : <p>The review did not finish{result.error ? `: ${result.error}` : '.'}</p>}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function MemoryPanel({ data, projects, disabled, onRun, onNotice, service }: PanelProps & { service: ServiceState; onNotice: (message: string) => void }): ReactNode {
   const prunePreview = recordOf(data['brain-prune']);
   const prunableTotal = (Number(prunePreview.handoffs ?? 0)) + (Number(prunePreview.dailyLogs ?? 0)) + (Number(prunePreview.resolvedEntries ?? 0));
@@ -938,6 +999,7 @@ function MemoryPanel({ data, projects, disabled, onRun, onNotice, service }: Pan
       <KnowledgeMap disabled={disabled} onNotice={onNotice} />
       <div className="cognitive1-grid two">
         <BrainLearnCard projects={projects} disabled={disabled} onRun={onRun} />
+        <MemoryReviewCard projects={projects} disabled={disabled} onNotice={onNotice} />
 
         <section className="cognitive1-card">
           <SectionHeading eyebrow="Retention" title="Prune and audit" icon={<Trash2 size={16} />} />

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { trimAnthropicToolResults, trimChatToolResults, trimGeminiToolResults } from './context-trimming';
-import { directProviderPreset, helperLimitOf, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, openPlanReminder, pickLocalModel, planIsUnfinished, type ApiConnection, type ProviderId } from '@kai/contracts';
+import { withBrainTools, type BrainAccess } from './brain-tools';
+import { compactThresholdFor, directProviderPreset, helperLimitOf, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, openPlanReminder, pickLocalModel, planIsUnfinished, type ApiConnection, type ProviderId } from '@kai/contracts';
 import { localServerHint, resolveApiConnection } from './api-connection';
 import type {
   AppSettings,
@@ -214,6 +215,11 @@ function textWithImages(
 
 /** Said to the model when a provider would not take an image, so it tells the person instead of searching for the file. */
 const IMAGE_REMOVED_NOTE = '[KAI removed the attached image from this request because the model could not accept it. You cannot see it. Say so plainly and ask the person to switch to a model that accepts images; do not search the file system for it.]';
+
+/** The size the model reported for its latest request, with no cost or totals, so nothing is counted twice. */
+function contextSizeEvent(request: AgentRunRequest, contextTokens: number): PersistedEvent {
+  return { schemaVersion: 1, id: eventId(), taskId: request.conversationId, timestamp: nowIso(), agent: request.agent, type: 'cost.update', contextTokens: Math.max(0, Math.round(contextTokens)) };
+}
 
 function noticeEvent(request: AgentRunRequest, message: string): PersistedEvent {
   return { schemaVersion: 1, id: eventId(), taskId: request.conversationId, timestamp: nowIso(), agent: request.agent, type: 'notice', message };
@@ -825,7 +831,22 @@ export class DesktopDirectProviderRuntime {
    * to run builds and edit files in the project itself, under the other agents' feet and outside the merge.
    */
   private externalFor(projectRoot: string): ExternalToolPort | undefined {
-    return this.externalTools && isParallelCopy(projectRoot) ? withoutTerminalTools(this.externalTools) : this.externalTools;
+    const outside = this.externalTools && isParallelCopy(projectRoot) ? withoutTerminalTools(this.externalTools) : this.externalTools;
+    // The project brain is offered to every run that can reach it, in a copy of the project as well: what a helper
+    // learns belongs to the project, not to the copy.
+    return this.brain ? withBrainTools(outside, projectRoot, this.brain) : outside;
+  }
+
+  private brain: BrainAccess | undefined;
+
+  /** Gives runs the project brain's two tools. Set once the brain's service exists; without it, runs have no such tools. */
+  setBrainAccess(access: BrainAccess | undefined): void {
+    this.brain = access;
+  }
+
+  /** Whether runs on this runtime are offered the brain tools, so a caller can say so in the context it builds. */
+  hasBrainAccess(): boolean {
+    return this.brain !== undefined;
   }
 
   private taskRunner(request: AgentRunRequest, projectRoot: string, contextText: string | undefined): TaskRun {
@@ -864,6 +885,8 @@ export class DesktopDirectProviderRuntime {
       allowSubagents: false,
       allowedToolNames: write ? SUBAGENT_WRITER_TOOLS : SUBAGENT_READ_ONLY_TOOLS,
     });
+    // A helper reads and writes the same project memory its parent does.
+    nested.setBrainAccess(this.brain);
     const childRequest: AgentRunRequest = {
       ...request,
       conversationId: `sub_${request.conversationId}_${randomUUID()}`,
@@ -1450,7 +1473,7 @@ export class DesktopDirectProviderRuntime {
     let reasoningOnly = false;
     // The size the person chose in Settings: a long run folds its older tool activity into a summary at this point,
     // so one run does not keep growing past it. Zero (or no setting) leaves the history alone.
-    const compactAt = (await this.settings.load().catch(() => undefined))?.usageBudget?.compactAtTokens ?? 0;
+    const compactAt = compactThresholdFor((await this.settings.load().catch(() => undefined))?.usageBudget ?? { compactAtTokens: 0, compactAtTokensLocal: 0 }, capability.provider);
     let lastContextTokens = 0;
 
     try {
@@ -1504,7 +1527,7 @@ export class DesktopDirectProviderRuntime {
           const usage = asRecord(value.usage);
           const roundInputTokens = integerValue(usage?.prompt_tokens) ?? integerValue(usage?.input_tokens);
           const roundOutputTokens = integerValue(usage?.completion_tokens) ?? integerValue(usage?.output_tokens);
-          if (roundInputTokens !== undefined) { inputTokens = (inputTokens ?? 0) + roundInputTokens; lastContextTokens = roundInputTokens; }
+          if (roundInputTokens !== undefined) { inputTokens = (inputTokens ?? 0) + roundInputTokens; lastContextTokens = roundInputTokens; emit(contextSizeEvent(request, lastContextTokens)); }
           if (roundOutputTokens !== undefined) outputTokens = (outputTokens ?? 0) + roundOutputTokens;
 
           const choice = firstRecord(value.choices);
@@ -1767,7 +1790,7 @@ export class DesktopDirectProviderRuntime {
     const toolRoundLimit = this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
     // The size chosen for auto-compact (zero leaves the history alone), and where the part of this run that can be
     // folded into a summary begins.
-    const compactAt = (await this.settings.load().catch(() => undefined))?.usageBudget?.compactAtTokens ?? 0;
+    const compactAt = compactThresholdFor((await this.settings.load().catch(() => undefined))?.usageBudget ?? { compactAtTokens: 0, compactAtTokensLocal: 0 }, capability.provider);
     let segmentStart = messages.length;
     let lastContextTokens = 0;
 
@@ -1824,7 +1847,7 @@ export class DesktopDirectProviderRuntime {
             const roundInputTokens = integerValue(usage?.input_tokens);
             // Cached prompt tokens are reported separately; count them so budgets never undercount the prompt.
             const cachedTokens = (integerValue(usage?.cache_read_input_tokens) ?? 0) + (integerValue(usage?.cache_creation_input_tokens) ?? 0);
-            if (roundInputTokens !== undefined) { inputTokens = (inputTokens ?? 0) + roundInputTokens + cachedTokens; lastContextTokens = roundInputTokens + cachedTokens; }
+            if (roundInputTokens !== undefined) { inputTokens = (inputTokens ?? 0) + roundInputTokens + cachedTokens; lastContextTokens = roundInputTokens + cachedTokens; emit(contextSizeEvent(request, lastContextTokens)); }
             cachedReadTokens += integerValue(usage?.cache_read_input_tokens) ?? 0;
             continue;
           }

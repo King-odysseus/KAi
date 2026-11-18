@@ -119,7 +119,9 @@ import { windowBriefing } from './window-control';
 import { runSecurityPrepass } from './security-prepass';
 import { boardCardSchema, type ImportReport } from '@kai/contracts';
 import type { ExecutionMode } from '@kai/contracts';
-import { estimateConversationTokens, isLocalProvider } from '@kai/contracts';
+import { BRAIN_TOOLS_GUIDANCE, type BrainAccess } from './brain-tools';
+import { brainMemoryReviewPrompt, type BrainMemoryReviewInput, type BrainMemoryReviewResult } from '@kai/contracts';
+import { compactThresholdFor, estimateConversationTokens, isLocalProvider } from '@kai/contracts';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
 import { gitCheckout, gitCloneTeamRepository, gitCommit, gitCreateBranch, gitCreatePullRequest, gitCreateRepository, gitBlameFile, gitChangedHunks, gitDiffAgainstHead, scanTodos, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitPullTeamBranch, gitStage, gitSync } from './git-tools';
@@ -384,6 +386,44 @@ function trackIpcCall<T>(channel: string, work: () => Promise<T>): Promise<T> {
     current.count -= 1;
     if (current.count <= 0) inFlightIpc.delete(channel);
   });
+}
+
+/**
+ * How a direct API run reads and writes the project's memory in C1. The project is found from the folder the run works
+ * in, the same way the recall at the start of a run finds it, so both look in one place. Every failure comes back as
+ * a reason the model can read rather than an exception that would end its turn.
+ */
+export function projectBrainAccess(context: IpcContext): BrainAccess {
+  const resolve = async (projectRoot: string) => {
+    const projects = await context.projects.list();
+    const project = projects.find((candidate) => projectRoot.startsWith(candidate.path)) ?? null;
+    return resolveProjectMemoryName(context, project?.path ?? projectRoot, project?.name ?? path.basename(projectRoot));
+  };
+  return {
+    async recall(projectRoot, query) {
+      if (!(await cognitive1Ready(context))) return { ok: false, reason: 'The brain is not running right now. Carry on without it.' };
+      try {
+        const resolution = await resolve(projectRoot);
+        return { ok: true, entries: await context.cognitive1.search({ query, project: resolution.name, maxResults: 6 }) };
+      } catch (error) {
+        return { ok: false, reason: `The brain could not be read: ${messageOf(error)}` };
+      }
+    },
+    async remember(projectRoot, entry) {
+      if (!(await cognitive1Ready(context))) return { ok: false, reason: 'The brain is not running right now, so this was not kept. Put it in your reply instead.' };
+      try {
+        const resolution = await resolve(projectRoot);
+        const answer = (await context.cognitive1.operation({
+          operation: 'brain-learn',
+          payload: { title: entry.title, type: entry.type, project: resolution.name, agent: 'kai', note: entry.note, ...(entry.why ? { why: entry.why } : {}), ...(entry.how ? { how: entry.how } : {}), ...(entry.tags ? { tags: entry.tags } : {}) },
+        })) as { ok?: boolean; rejected?: boolean; reason?: string } | null;
+        if (answer?.rejected || answer?.ok === false) return { ok: false, reason: `The brain turned this entry away: ${answer.reason || 'it did not pass the quality gate'}. Make it more specific and try again.` };
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, reason: `The brain could not be written: ${messageOf(error)}` };
+      }
+    },
+  };
 }
 
 export function registerIpc(context: IpcContext): IpcRegistry {
@@ -1302,6 +1342,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'learning:save-security-finding', async (input) => context.securityFindings.add(input));
   handle(context, 'learning:update-security-finding-status', async (input) => context.securityFindings.updateStatus(input));
   handle(context, 'learning:security-scan', async (input, request) => runSecurityScan(context, input, request.ownerWindowId));
+  handle(context, 'brain:review-memory', async (input, request) => reviewProjectMemory(context, input, request.ownerWindowId));
   handle(context, 'learning:generate-teaching-draft', async (input, request) => {
     const settings = await context.settings.load();
     const learningProjectId = request.session
@@ -1749,6 +1790,56 @@ export async function runScheduledGoal(context: IpcContext, schedule: Schedule):
  * saved through the `save_security_finding` tool are already in the log; the report block is what makes the same
  * promise true for a provider that has no MCP tools.
  */
+/**
+ * A real agent run that audits what the brain holds for a project against the project itself. The agent is the person's
+ * choice, so a bigger model (Claude, Codex, DeepSeek through a route) can teach what the smaller local ones will read.
+ */
+async function reviewProjectMemory(
+  context: IpcContext,
+  input: BrainMemoryReviewInput,
+  ownerWindowId: number,
+): Promise<BrainMemoryReviewResult> {
+  const project = (await context.projects.list()).find((candidate) => candidate.id === input.projectId);
+  if (!project) throw new NotFoundError('Project not found.');
+  if (!(await cognitive1Ready(context))) throw new Error('The brain is not running. Start Cognitive1 and try again.');
+  const settings = await context.settings.load();
+  const resolution = await resolveProjectMemoryName(context, project.path, project.name);
+  const current = (await context.cognitive1.search({ query: resolution.name, project: resolution.name, maxResults: 40 }).catch(() => []))
+    .map((entry) => `[${entry.type}] ${entry.title}${entry.fields.note ? `: ${entry.fields.note.slice(0, 200)}` : ''}`);
+  const now = new Date().toISOString();
+  const conversation: ConversationRecord = {
+    schemaVersion: 1,
+    id: `conv_${crypto.randomUUID()}`,
+    projectId: project.id,
+    title: `Review project memory — ${project.name}`.slice(0, 120),
+    createdAt: now,
+    updatedAt: now,
+    archived: false,
+    unread: false,
+    activeAgent: input.agent,
+    route: settings.defaultRoute,
+    autonomy: 'autoEdit',
+    execution: input.execution,
+    turns: [],
+    events: [],
+  };
+  await context.conversations.save(conversation);
+  const result = await runConversationAgent(context, {
+    conversationId: conversation.id,
+    prompt: brainMemoryReviewPrompt({ projectName: project.name, current }),
+    agent: input.agent,
+    execution: input.execution,
+    route: settings.defaultRoute,
+    autonomy: 'autoEdit',
+  }, ownerWindowId);
+  return {
+    conversationId: conversation.id,
+    status: result.status,
+    output: result.output,
+    ...(result.error ? { error: result.error } : {}),
+  };
+}
+
 async function runSecurityScan(
   context: IpcContext,
   input: SecurityScanInput,
@@ -1912,7 +2003,7 @@ export async function runConversationAgent(
   if (!project) throw new NotFoundError('Open a project before sending a message.');
   // One place for every agent run (composer, Crew, Studio, workflows): a history past the chosen size is summarised
   // first. A failure never blocks the run; it simply goes ahead with the full history.
-  const compactAt = settings.usageBudget.compactAtTokens;
+  const compactAt = compactThresholdFor(settings.usageBudget, request.execution === 'api' ? settings.directApi.provider : null);
   const askedToCompact = compactBeforeNextRun.delete(conversation.id);
   if (conversation.turns.length > 0 && (askedToCompact || (compactAt > 0 && estimateConversationTokens(conversation) >= compactAt))) {
     try {
@@ -2210,7 +2301,13 @@ export async function runConversationAgent(
         // session already has it.
         !resumeSessionId,
       );
-  const contextText = builtProjectContext.text;
+  // A direct API run holds the brain tools, so it is told what they are for: the Architect keeps decisions there and a
+  // local model, which compacts early, reads them back instead of depending on a summary.
+  const contextText = executionMode === 'api' && context.directApi.hasBrainAccess?.()
+    ? `${builtProjectContext.text}
+
+${BRAIN_TOOLS_GUIDANCE}`
+    : builtProjectContext.text;
   let snapshotProjectContext = builtProjectContext;
   const snapshotSupplementalSources = [
     ...selectedSkills.map((skill) => `Skill: ${skill.name}`),

@@ -30,6 +30,7 @@ import {
   type RouteMode,
 } from '@kai/contracts';
 
+import type { ArchitectNote } from './architect-notes';
 export { repeatsItself };
 
 /**
@@ -460,6 +461,12 @@ export interface ArchitectCoachPorts {
   /** Runs a command in the project and says whether it passed. Only ever given a command that passed `isSafeCheckCommand`. */
   runCheck?(projectId: string, command: string, signal: AbortSignal): Promise<{ passed: boolean; exitCode: number | null; output: string }>;
   agentNames?(): Record<string, string>;
+  /**
+   * Told every plan and every verdict the Architect gives, so the project keeps its direction and decisions outside
+   * the conversation. KAI calls it, not the Architect, so it happens whether or not the model remembers to. A failure
+   * here never stops the run.
+   */
+  record?(projectId: string, note: ArchitectNote): Promise<void>;
 }
 
 export interface CoachContext {
@@ -613,9 +620,15 @@ export class ArchitectCoach {
     }
   }
 
+  /** Hands a note to the port without waiting for it: the notes are a record, and a slow or failed write must not hold up the run. */
+  private note(projectId: string, note: ArchitectNote): void {
+    void Promise.resolve(this.ports.record?.(projectId, note)).catch(() => undefined);
+  }
+
   async plan(context: CoachContext, task: string): Promise<{ brief: ArchitectBrief; readable: boolean; label: string; fallbackUsed: boolean; costUsd: number }> {
     const answer = await this.ask(context, (label) => planPrompt(task, label, this.workerLabel(context)), { ...(context.firstTurn ?? {}), splitRole: 'architect', taskText: task });
     const brief = parseBrief(answer.output);
+    if (brief) this.note(context.projectId, { kind: 'plan', title: brief.goal, lines: [briefText(brief)] });
     return { brief: brief ?? fallbackBrief(task), readable: brief !== null, label: answer.label, fallbackUsed: answer.fallbackUsed, costUsd: answer.costUsd };
   }
 
@@ -671,7 +684,14 @@ export class ArchitectCoach {
             corrections: [`Your report says ${crossCheck.missing.join(', ')} changed, but nothing in the project shows it. Make the change, or correct the report.`],
           }
         : parsed;
-    if (verdict) return { verdict, readable: true, label: answer.label, fallbackUsed: answer.fallbackUsed, costUsd: answer.costUsd, check };
+    if (verdict) {
+      this.note(context.projectId, {
+        kind: verdict.verdict === 'approve' ? 'approved' : verdict.verdict === 'replan' ? 'replan' : 'revise',
+        title: brief.goal,
+        lines: [verdict.summary, ...verdict.corrections.map((correction) => `- ${correction}`)],
+      });
+      return { verdict, readable: true, label: answer.label, fallbackUsed: answer.fallbackUsed, costUsd: answer.costUsd, check };
+    }
     // An unreadable verdict is not an approval. Sending it back with the Architect's own words is firmer than letting
     // unreviewed work through, and it is said in the log.
     const words = answer.output.trim().slice(-600) || 'The Architect gave no readable verdict.';
@@ -695,6 +715,7 @@ export class ArchitectCoach {
     const material = trimReviewMaterial(await this.ports.reviewMaterial(context.projectId).catch(() => ''));
     const answer = await this.ask(context, (label) => stepInPrompt(brief, task, why, material, label, this.workerLabel(context)), { splitRole: 'architect', taskText: task });
     const next = parseBrief(answer.output);
+    if (next) this.note(context.projectId, { kind: 'step-in', title: next.goal, lines: [`Why: ${why.slice(0, 400)}`, briefText(next)] });
     return { brief: next ?? brief, readable: next !== null, label: answer.label, fallbackUsed: answer.fallbackUsed, costUsd: answer.costUsd };
   }
 }

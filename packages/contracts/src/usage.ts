@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isLocalProvider } from './direct-providers';
 
 const usdSchema = z.number().finite().nonnegative();
 
@@ -15,6 +16,9 @@ export const usageBudgetSchema = z
     // When a conversation's history reaches about this many tokens, KAI summarises the older turns before the next
     // request. It applies to every place an agent runs (composer, Crew, Studio, workflows). Zero turns it off.
     compactAtTokens: z.number().int().min(0).max(2_000_000).default(60_000),
+    // The same, for a model running on this machine or the home network (LM Studio, Ollama and the like). Those have
+    // small context windows and slow prompt processing, so they fold much earlier. Zero uses the size above instead.
+    compactAtTokensLocal: z.number().int().min(0).max(2_000_000).default(20_000),
   })
   .strict();
 
@@ -75,4 +79,16 @@ export const defaultUsageBudget: UsageBudget = {
   monthlyUsd: 0,
   providerDailyUsd: {},
   compactAtTokens: 60_000,
+  compactAtTokensLocal: 20_000,
 };
+
+/**
+ * The history size at which a run for this provider is summarised. Hosted models use the main setting; a local one
+ * uses its own, smaller, setting. Turning the main setting off turns every automatic compaction off, so the person's
+ * "never compact on my own" is honoured whichever model runs.
+ */
+export function compactThresholdFor(budget: Pick<UsageBudget, 'compactAtTokens' | 'compactAtTokensLocal'>, provider: string | null | undefined): number {
+  if (budget.compactAtTokens <= 0) return 0;
+  if (provider && isLocalProvider(provider as Parameters<typeof isLocalProvider>[0]) && budget.compactAtTokensLocal > 0) return budget.compactAtTokensLocal;
+  return budget.compactAtTokens;
+}
