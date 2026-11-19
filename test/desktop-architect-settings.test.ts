@@ -6,6 +6,7 @@ import {
   apiChoices,
   modelOf,
   readLastSplit,
+  readStudioArchitectSplit,
   readStoredSplit,
   roleModelOptions,
   splitFor,
@@ -97,6 +98,15 @@ describe('remembering the split', () => {
     // The newest choice is the next new tab's start, but conv-a still has its own.
     expect(splitFor({ stored: readStoredSplit('conv-a', 1, storage) , last: readLastSplit(1, storage) }).architect).toEqual(KIMI);
     expect(splitFor({ last: readLastSplit(1, storage) }).architect).toEqual(CODEX);
+  });
+
+  it('uses the configured last active pair in Studio when the stored new-tab choice is disabled', () => {
+    const storage = memory();
+    writeStoredSplit(NEW_TAB, split({ enabled: false }), 1, storage);
+    const configured = split({ participation: 'handsOn' });
+    writeStoredSplit('configured-conversation', configured, 1, storage);
+
+    expect(readStudioArchitectSplit(1, storage)).toEqual(configured);
   });
 
   it('puts the person\'s choice for this tab first, then the conversation\'s record, then the window\'s last', () => {

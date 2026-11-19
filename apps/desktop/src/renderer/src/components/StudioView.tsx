@@ -72,7 +72,8 @@ import { UiTextInput } from './UiTextInput';
 import { Select } from './ui/Select';
 import { PageHeader } from './ui/PageHeader';
 import { FIRST_RUN_PROJECT_TYPES, firstRunIdea } from '../first-run-onboarding';
-import { NEW_TAB, readLastSplit, readStoredSplit, writeStoredSplit } from './architect-settings';
+import { NEW_TAB, readStudioArchitectSplit, writeStoredSplit } from './architect-settings';
+import { ArchitectParticipation } from './ArchitectControls';
 
 /**
  * The board's column headings in words. The status is a camelCase identifier, so printing it raw gave "INPROGRESS" as
@@ -170,8 +171,8 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const [artifacts, setArtifacts] = useState<StudioArtifacts | null>(null);
   const [board, setBoard] = useState<StudioBoard | null>(null);
   const [architectMode, setArchitectMode] = useState<'automatic' | 'handsOn'>(() =>
-    (readStoredSplit(NEW_TAB, windowId) ?? readLastSplit(windowId))?.participation === 'handsOn' ? 'handsOn' : 'automatic');
-  const configuredArchitect = readStoredSplit(NEW_TAB, windowId) ?? readLastSplit(windowId);
+    readStudioArchitectSplit(windowId)?.participation === 'handsOn' ? 'handsOn' : 'automatic');
+  const configuredArchitect = readStudioArchitectSplit(windowId);
   const [idea, setIdea] = useState('');
   const [firstRunMode, setFirstRunMode] = useState(false);
   const [firstRunProjectType, setFirstRunProjectType] = useState('Web app');
@@ -696,10 +697,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     return (
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] p-3">
         <div><strong className="text-sm">Architect workflow</strong><p className="studio-note">Choose automatic handoffs or approve each block before it goes to the Implementer.</p></div>
-        <div className="flex flex-wrap gap-2" role="group" aria-label="Project Studio Architect workflow mode">
-          <UiButton type="button" className={architectMode === 'automatic' ? 'active' : 'secondary-button'} aria-pressed={architectMode === 'automatic'} onClick={() => { setArchitectMode('automatic'); writeStoredSplit(NEW_TAB, { ...configuredArchitect, participation: 'automatic' }, windowId); }}>Automatic</UiButton>
-          <UiButton type="button" className={architectMode === 'handsOn' ? 'active' : 'secondary-button'} aria-pressed={architectMode === 'handsOn'} onClick={() => { setArchitectMode('handsOn'); writeStoredSplit(NEW_TAB, { ...configuredArchitect, participation: 'handsOn' }, windowId); }}>Ask me each block</UiButton>
-        </div>
+        <ArchitectParticipation mode={architectMode} onChange={(mode) => { setArchitectMode(mode); writeStoredSplit(NEW_TAB, { ...configuredArchitect, participation: mode }, windowId); }} />
       </div>
     );
   }

@@ -161,14 +161,20 @@ export function useArchitectSplit(input: {
   return { split, setEnabled, setParticipation, setRole, problem: splitProblem(split), warning: pairingWarning(split), readiness, credentialIds, liveModels, capabilities };
 }
 
-export function ArchitectParticipation({ state, disabled }: { state: ArchitectSplitState; disabled?: boolean }): ReactNode {
-  const mode = state.split.participation ?? 'automatic';
+export function ArchitectParticipation({ mode, onChange, disabled }: { mode: 'automatic' | 'handsOn'; onChange: (mode: 'automatic' | 'handsOn') => void; disabled?: boolean }): ReactNode {
   return (
-    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Architect workflow mode">
-      <span className="text-xs text-[var(--text-dim)]">Handoffs</span>
-      <UiButton type="button" className={mode === 'automatic' ? 'active' : ''} aria-pressed={mode === 'automatic'} disabled={disabled} onClick={() => state.setParticipation('automatic')}>Automatic</UiButton>
-      <UiButton type="button" className={mode === 'handsOn' ? 'active' : ''} aria-pressed={mode === 'handsOn'} disabled={disabled} onClick={() => state.setParticipation('handsOn')}>Ask me each block</UiButton>
-    </div>
+    <label className="flex w-full cursor-pointer items-center gap-2.5 text-xs text-[var(--text)]">
+      <Switch
+        checked={mode === 'handsOn'}
+        disabled={disabled}
+        aria-label="Ask me before each implementation block"
+        onChange={(event) => onChange(event.target.checked ? 'handsOn' : 'automatic')}
+      />
+      <span className="flex min-w-0 flex-col">
+        <span>Ask me before each block</span>
+        <small className="text-[11px] leading-snug text-[var(--text-dim)]">On: approve each block before the Implementer starts it. Off: the Architect hands approved blocks over automatically.</small>
+      </span>
+    </label>
   );
 }
 

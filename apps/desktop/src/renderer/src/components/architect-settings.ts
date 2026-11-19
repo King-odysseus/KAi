@@ -1,6 +1,7 @@
 import {
   CLI_MODEL_SUGGESTIONS,
   DIRECT_PROVIDER_ORDER,
+  architectSplitActive,
   architectSplitSchema,
   defaultArchitectSplit,
   directProviderPreset,
@@ -88,6 +89,15 @@ export function readLastSplit(windowId?: number, storage: SplitStorage | null = 
   } catch {
     return undefined;
   }
+}
+
+/** The Studio follows the configured active pair when a stale disabled new-tab choice would otherwise mask it. */
+export function readStudioArchitectSplit(windowId?: number, storage: SplitStorage | null = browserStorage()): ArchitectSplit | undefined {
+  const stored = readStoredSplit(NEW_TAB, windowId, storage);
+  const last = readLastSplit(windowId, storage);
+  if (architectSplitActive(stored)) return stored;
+  if (architectSplitActive(last)) return last;
+  return stored ?? last;
 }
 
 /** Moves a new tab's choice to its conversation once one exists, so it is not lost when the tab gets its id. */

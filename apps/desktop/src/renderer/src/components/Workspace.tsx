@@ -2494,7 +2494,7 @@ export function WorkspaceView({
             </OptionSection>
             <OptionSection title="Architect and Implementer" className="!items-start !gap-3">
               <ArchitectToggle state={architect} disabled={busy || running} />
-              {architect.split.enabled && <ArchitectParticipation state={architect} disabled={busy || running} />}
+              {architect.split.enabled && <ArchitectParticipation mode={architect.split.participation ?? 'automatic'} onChange={architect.setParticipation} disabled={busy || running} />}
               <ArchitectRow state={architect} disabled={busy || running} />
             </OptionSection>
           </div>}
