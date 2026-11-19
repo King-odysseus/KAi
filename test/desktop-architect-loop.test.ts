@@ -553,7 +553,7 @@ function memoryWindows(): AutoWindowPort {
   };
 }
 
-function autoHarness(script: Script = {}) {
+function autoHarness(script: Script = {}, extra: Partial<AutoSessionPorts> = {}) {
   const s = scripted(script);
   const conversations = new Map<string, ConversationRecord>([['conv-1', { id: 'conv-1', projectId: 'p1', title: 't', turns: [] } as unknown as ConversationRecord]]);
   const announced: AutoStatus[] = [];
@@ -577,6 +577,7 @@ function autoHarness(script: Script = {}) {
     announce: (_o, status) => { announced.push(structuredClone(status)); },
     restoreComposer: async (conversationId, composer) => { restored.push({ conversationId, composer }); },
     now: () => Date.now(),
+    ...extra,
   };
   const coach = new ArchitectCoach(s.ports);
   return { s, announced, restored, session: new DesktopAutoSession(ports, memoryWindows(), coach), plain: new DesktopAutoSession(ports, memoryWindows()) };
@@ -1126,5 +1127,43 @@ ${ARCHITECT_STUCK_SENTINEL} src/parser.ts is missing.`, 'Did it.'] });
     expect(s.architectPrompts[0]).not.toContain('"steps"');
     expect(s.buildPrompts).toHaveLength(1);
     expect(s.requests.filter((request) => !request.freshSession)[0]!.toolRoundLimit).toBeUndefined();
+  });
+});
+
+describe('Auto with a local builder works in short steps too', () => {
+  const STEPS = ['In src/parser.ts, add an empty parse() export.', 'In src/parser.ts, make parse() split lines on "=".', 'In src/parser.test.ts, add a test for two lines.'];
+  const stepped = `Plan.
+${ARCHITECT_BRIEF_SENTINEL} ${JSON.stringify({ ...BRIEF, steps: STEPS })}`;
+
+  it('asks for steps, runs each as a budgeted turn, ticks it, and has the Architect read the notes once at the end', async () => {
+    const written: string[] = [];
+    const ticked: number[] = [];
+    const h = autoHarness({ planOutput: stepped }, {
+      writeSteps: async (_p, conversationId, brief) => { written.push(brief.goal); return `.kai/steps/${conversationId}.md`; },
+      tickStep: async (_p, _c, index) => { ticked.push(index); },
+      stepNotes: async () => '- parse() lives in src/core/parse.ts',
+    });
+    await h.session.start(autoInput({ architect: split({ implementer: LOCAL }) }), 1);
+    const final = await autoSettled(h.session);
+    expect(final.phase).toBe('finished');
+    expect(h.s.architectPrompts[0]).toContain('"steps"');
+    expect(h.s.architectPrompts[0]).toContain('Do not call update_plan');
+    expect(written).toEqual(['Add the parser']);
+    expect(h.s.buildPrompts).toHaveLength(3);
+    h.s.buildPrompts.forEach((prompt, index) => expect(prompt).toContain(`step ${index + 1} of 3`));
+    expect(ticked).toEqual([0, 1, 2]);
+    for (const request of h.s.requests.filter((r) => !r.freshSession)) expect(request.toolRoundLimit).toBe(LOCAL_BUILDER_ROUNDS);
+    const reviews = h.s.architectPrompts.filter((prompt) => prompt.includes('reviewing the Implementer'));
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]).toContain('parse() lives in src/core/parse.ts');
+  });
+
+  it('keeps a CLI builder on whole-brief turns with no budget', async () => {
+    const h = autoHarness({ planOutput: stepped });
+    await h.session.start(autoInput({ architect: split() }), 1);
+    await autoSettled(h.session);
+    expect(h.s.architectPrompts[0]).not.toContain('"steps"');
+    expect(h.s.buildPrompts[0]).not.toContain('step 1 of');
+    expect(h.s.requests.filter((r) => !r.freshSession)[0]!.toolRoundLimit).toBeUndefined();
   });
 });

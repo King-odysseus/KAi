@@ -657,7 +657,9 @@ export class ArchitectCoach {
       const request = requestForTarget(
         target,
         { ...context.base, autonomy: 'plan' },
-        buildPrompt(this.label(target)),
+        // The Architect runs read-only, and a CLI in plan mode refuses any tool that writes, the project plan tool
+        // included: three refused calls a turn was all it got. KAI builds the plan from the brief, so it is told not to.
+        `${buildPrompt(this.label(target))}\n\nDo not call update_plan or any other tool that writes: you are read-only, and KAI turns your brief into the plan.`,
         { freshSession: true, ...extra },
       );
       const result = await this.ports.runAgent(request, context.ownerWindowId);

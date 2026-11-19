@@ -35,7 +35,11 @@ import {
   RunStoppedError,
   type ArchitectCoach,
   type CoachContext,
+  isSmallBuilder,
+  LOCAL_BUILDER_ROUNDS,
+  stepPrompt,
 } from './architect-loop';
+import { stepFilePath } from './step-file';
 import { formatDuration } from './autopilot';
 import { cooldownMs, detectRateLimit, RequestPacer, sleepAbortable } from './rate-limit';
 import { diagnoseRun, diagnosisLine } from './run-doctor';
@@ -91,6 +95,10 @@ export interface AutoWindowPort {
 }
 
 export interface AutoSessionPorts {
+  /** The step file for a local builder: written per stepped brief, ticked per step, its notes read by the Architect. */
+  writeSteps?(projectId: string, conversationId: string, brief: ArchitectBrief, task: string): Promise<string>;
+  tickStep?(projectId: string, conversationId: string, index: number): Promise<void>;
+  stepNotes?(projectId: string, conversationId: string): Promise<string>;
   getConversation(conversationId: string): Promise<ConversationRecord | null>;
   saveConversation(conversation: ConversationRecord): Promise<ConversationRecord>;
   /** Opens a blank conversation for the task, or for a split's remainder. */
@@ -157,6 +165,8 @@ interface ActiveAutoRun {
     /** The failure the Architect last stepped in on, so it steps in once per wall rather than once per run. */
     steppedInOn: string | null;
     context: CoachContext;
+    /** The brief step a local builder is on, when the brief was split into steps; null otherwise. */
+    step?: number | null;
   } | null;
 }
 
@@ -490,6 +500,23 @@ export class DesktopAutoSession {
         }
         lastStuckReason = null;
 
+        // A local builder working through steps: the step is ticked, and the next one runs as a fresh turn. Only after
+        // the last step does the run go on to the plan, the check and the Architect's review.
+        const stepping = active.architect && typeof active.architect.step === 'number' && active.architect.brief?.steps?.length ? active.architect : null;
+        if (stepping) {
+          const steps = stepping.brief!.steps!;
+          const done = stepping.step!;
+          await this.ports.tickStep?.(input.projectId, conversationId, done).catch(() => undefined);
+          if (done < steps.length - 1) {
+            stepping.step = done + 1;
+            this.record(conversationId, owner, 'info', `Step ${done + 1} of ${steps.length} done; on to step ${done + 2}.`);
+            prompt = stepPrompt(stepping.brief!, input.prompt, this.coach!.label(stepping.context.split.implementer!), done + 1, this.ports.writeSteps ? stepFilePath(conversationId) : undefined);
+            continue;
+          }
+          stepping.step = null;
+          this.record(conversationId, owner, 'info', `All ${steps.length} steps done; checking the work.`);
+        }
+
         // The model may say the task is bigger than one session can finish. That is a request for help rather than a
         // status, and it is taken before anything else — pushing such a run on with its own plan would be arguing
         // with the one account of the work that matters.
@@ -597,6 +624,8 @@ export class DesktopAutoSession {
     const coach = this.coach!;
     const owner = active.ownerWindowId;
     const implementer = await coach.implementerTarget(arch.context);
+    // A local builder gets the brief as steps, each its own short turn (see the Architect loop).
+    arch.context.smallBuilder = isSmallBuilder(implementer);
     const architectLabel = coach.label(arch.context.split.architect!);
     this.phase(conversationId, owner, 'working', `The Architect is planning (${architectLabel}).`);
     const planned = await coach.plan(arch.context, input.prompt);
@@ -605,7 +634,25 @@ export class DesktopAutoSession {
     this.record(conversationId, owner, 'info', planned.readable
       ? `Architect (${planned.label}) wrote the brief: ${planned.brief.goal}`
       : `${planned.label} did not return a readable brief, so the task itself is the brief.`);
-    return implementPrompt(planned.brief, input.prompt, coach.label(implementer));
+    return this.firstBuildPrompt(input, conversationId, active, coach.label(implementer));
+  }
+
+  /**
+   * The Implementer's first prompt for the current brief: step one of it for a local builder whose brief has steps, with
+   * the step file written first; the whole brief otherwise.
+   */
+  private async firstBuildPrompt(input: AutoStartInput, conversationId: string, active: ActiveAutoRun, label: string): Promise<string> {
+    const arch = active.architect!;
+    const brief = arch.brief!;
+    const steps = brief.steps ?? [];
+    if (!arch.context.smallBuilder || steps.length < 2) {
+      arch.step = null;
+      return implementPrompt(brief, input.prompt, label);
+    }
+    if (this.ports.writeSteps) await this.ports.writeSteps(input.projectId, conversationId, brief, input.prompt).catch(() => undefined);
+    arch.step = 0;
+    this.record(conversationId, active.ownerWindowId, 'info', `${label} is a local model, so the brief runs as ${steps.length} short steps, each a fresh turn of at most ${LOCAL_BUILDER_ROUNDS} tool rounds.`);
+    return stepPrompt(brief, input.prompt, label, 0, this.ports.writeSteps ? stepFilePath(conversationId) : undefined);
   }
 
   /** The Architect reads the work before Auto lets it finish. Null means approved; otherwise what the Implementer does next. */
@@ -615,7 +662,8 @@ export class DesktopAutoSession {
     const coach = this.coach!;
     const owner = active.ownerWindowId;
     this.phase(conversationId, owner, 'working', 'The Architect is reviewing the work.');
-    const reviewed = await coach.review(arch.context, arch.brief, input.prompt, implementerNote, active.controller.signal);
+    const notes = arch.context.smallBuilder ? await this.ports.stepNotes?.(input.projectId, conversationId).catch(() => '') ?? '' : '';
+    const reviewed = await coach.review(arch.context, arch.brief, input.prompt, notes ? `${implementerNote}\n\nThe builder's notes from its steps:\n${notes}` : implementerNote, active.controller.signal);
     this.state(conversationId).costUsd += reviewed.costUsd;
     if (reviewed.check) {
       this.record(conversationId, owner, 'check', reviewed.check.ran
@@ -657,7 +705,7 @@ export class DesktopAutoSession {
         : `Architect (${stepped.label}) stepped in, but the new brief could not be read; the old one stands.`);
     }
     arch.revisions = 0;
-    return implementPrompt(arch.brief!, input.prompt, coach.label(arch.context.split.implementer!));
+    return this.firstBuildPrompt(input, conversationId, active, coach.label(arch.context.split.implementer!));
   }
 
   /**
@@ -773,6 +821,8 @@ export class DesktopAutoSession {
       // What gets filed about this turn names the person's task, not the plan reminder, the failure text or the brief.
       taskText: input.prompt,
       ...(architectSplitActive(input.architect) ? { splitRole: 'implementer' as const } : {}),
+      // A local builder that is stuck does not stop on its own; at this many rounds it reports and the Architect steps in.
+      ...(execution === 'api' && architectSplitActive(input.architect) && isSmallBuilder(input.architect.implementer) ? { toolRoundLimit: LOCAL_BUILDER_ROUNDS } : {}),
       // The Implementer's own API connection, while it is the one running. After a fall back from a spent CLI window
       // the global API connection applies instead, exactly as it did before the split existed.
       ...(execution === 'api' && architectSplitActive(input.architect) && input.architect.implementer.execution === 'api' && input.architect.implementer.api

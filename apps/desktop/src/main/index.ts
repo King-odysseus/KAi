@@ -1639,6 +1639,9 @@ async function startApplication(): Promise<void> {
   };
 
   auto = new DesktopAutoSession({
+    writeSteps: async (projectId, conversationId, brief, task) => writeStepFile(await projectRootFor(projectId), conversationId, brief, task),
+    tickStep: async (projectId, conversationId, index) => tickStepInFile(await projectRootFor(projectId), conversationId, index),
+    stepNotes: async (projectId, conversationId) => readStepNotes(await projectRootFor(projectId), conversationId),
     getConversation: (conversationId) => conversations.get(conversationId),
     saveConversation: async (conversation) => { await conversations.save(conversation); return conversation; },
     createConversation: (projectId, title) => createBlankConversation(projectId, title),
