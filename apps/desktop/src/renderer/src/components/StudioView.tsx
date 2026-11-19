@@ -57,6 +57,7 @@ import {
   type StudioReadiness,
   type TeamPlanDraft,
   lacksRoute,
+  architectSplitActive,
 } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
 import { confirmDialog, promptDialog } from './AppDialog';
@@ -71,6 +72,7 @@ import { UiTextInput } from './UiTextInput';
 import { Select } from './ui/Select';
 import { PageHeader } from './ui/PageHeader';
 import { FIRST_RUN_PROJECT_TYPES, firstRunIdea } from '../first-run-onboarding';
+import { NEW_TAB, readLastSplit, readStoredSplit, writeStoredSplit } from './architect-settings';
 
 /**
  * The board's column headings in words. The status is a camelCase identifier, so printing it raw gave "INPROGRESS" as
@@ -135,7 +137,7 @@ const IMPORTANCE_LABEL: Record<'must' | 'worth' | 'skip', string> = { must: 'Nee
  * and `.kai/spec/brief.md` out. The artifacts, the board and the design layer all read that brief, so this screen
  * is the front door to the rest of the studio.
  */
-export function StudioView({ activeProject, projects: desktopProjects, planRequest, firstRunRequest, cardRequest, onOpenSettings, onLaunchProject, onPlanForTeam, onLearnCard, onOpenConversation }: {
+export function StudioView({ activeProject, projects: desktopProjects, planRequest, firstRunRequest, cardRequest, windowId, onOpenSettings, onLaunchProject, onPlanForTeam, onLearnCard, onOpenConversation }: {
   activeProject: ProjectRecord | null;
   projects: ProjectRecord[];
   /** Set by the composer's "Plan in Studio" button: open a fresh plan attached to this project's folder. */
@@ -144,6 +146,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   firstRunRequest?: { nonce: number } | null;
   /** Follow a Studio-origin conversation back to the card it was created for. */
   cardRequest?: { projectId: string; cardId: string; nonce: number } | null;
+  windowId?: number;
   onOpenSettings: () => void;
   onLaunchProject: (studioProjectId: string, destination: 'composer' | 'editor' | 'generate' | 'crew') => Promise<boolean>;
   onPlanForTeam: (plan: TeamPlanDraft) => void;
@@ -166,6 +169,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const [state, setState] = useState<InterviewState | null>(null);
   const [artifacts, setArtifacts] = useState<StudioArtifacts | null>(null);
   const [board, setBoard] = useState<StudioBoard | null>(null);
+  const [architectMode, setArchitectMode] = useState<'automatic' | 'handsOn'>(() =>
+    (readStoredSplit(NEW_TAB, windowId) ?? readLastSplit(windowId))?.participation === 'handsOn' ? 'handsOn' : 'automatic');
+  const configuredArchitect = readStoredSplit(NEW_TAB, windowId) ?? readLastSplit(windowId);
   const [idea, setIdea] = useState('');
   const [firstRunMode, setFirstRunMode] = useState(false);
   const [firstRunProjectType, setFirstRunProjectType] = useState('Web app');
@@ -673,11 +679,29 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     setBusy('launch');
     setError(null);
     try {
+      if ((destination === 'composer' || destination === 'generate') && configuredArchitect && architectSplitActive(configuredArchitect)) {
+        writeStoredSplit(NEW_TAB, { ...configuredArchitect, participation: architectMode }, windowId);
+      }
       await onLaunchProject(studioProjectId, destination);
     } catch (caught) {
       setError(messageOf(caught));
       setBusy(null);
     }
+  }
+
+  function architectModePicker(): ReactNode {
+    if (!configuredArchitect || !architectSplitActive(configuredArchitect)) {
+      return <p className="studio-note">Set up the Architect and Implementer in Workspace to use their workflow here.</p>;
+    }
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] p-3">
+        <div><strong className="text-sm">Architect workflow</strong><p className="studio-note">Choose automatic handoffs or approve each block before it goes to the Implementer.</p></div>
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Project Studio Architect workflow mode">
+          <UiButton type="button" className={architectMode === 'automatic' ? 'active' : 'secondary-button'} aria-pressed={architectMode === 'automatic'} onClick={() => { setArchitectMode('automatic'); writeStoredSplit(NEW_TAB, { ...configuredArchitect, participation: 'automatic' }, windowId); }}>Automatic</UiButton>
+          <UiButton type="button" className={architectMode === 'handsOn' ? 'active' : 'secondary-button'} aria-pressed={architectMode === 'handsOn'} onClick={() => { setArchitectMode('handsOn'); writeStoredSplit(NEW_TAB, { ...configuredArchitect, participation: 'handsOn' }, windowId); }}>Ask me each block</UiButton>
+        </div>
+      </div>
+    );
   }
 
   function linkedProjectName(linkedProjectId: string | null): string {
@@ -2651,6 +2675,8 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 </UiButton>
               )}</>} />
 
+          <div className="mb-3">{architectModePicker()}</div>
+
           {error && <p className="studio-notice error" role="alert"><AlertTriangle size={14} /> {error}</p>}
           {notice && <p className="studio-notice" role="status"><Check size={14} /> {notice}</p>}
 
@@ -2886,6 +2912,8 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
           <UiButton type="button" className="secondary-button" onClick={onOpenSettings}><Settings size={13} /> Open Settings</UiButton>
         </p>
       )}
+
+      {state?.status === 'done' && <div className="mb-3">{architectModePicker()}</div>}
 
       {building && (
         <article className="studio-card studio-handoff" role="status">

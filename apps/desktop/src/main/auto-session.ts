@@ -425,6 +425,7 @@ export class DesktopAutoSession {
     let first = true;
     let lastStuckReason: string | null = null;
     let prompt = input.prompt;
+    let handsOnApprovedPrompt: string | null = null;
     /** The plan is read against the task once per run, not once per turn. */
     let reviewed = false;
     try {
@@ -449,6 +450,14 @@ export class DesktopAutoSession {
           continue;
         }
         const state = this.state(conversationId);
+        if (active.architect && (active.architect.context.split.participation ?? 'automatic') === 'handsOn' && handsOnApprovedPrompt !== prompt) {
+          const arch = active.architect;
+          const step = typeof arch.step === 'number' ? arch.brief?.steps?.[arch.step] : null;
+          const block = step ? `The Architect proposes block ${arch.step! + 1} of ${arch.brief?.steps?.length}: ${step}` : 'The Architect proposes the next implementation block.';
+          await this.pauseForHuman(conversationId, active, null, `${block} Press Resume to send it to the Implementer, or Stop to finish here.`);
+          if (active.controller.signal.aborted) return this.settle(conversationId, owner, 'stopped', 'Auto was stopped before the next block.');
+          handsOnApprovedPrompt = prompt;
+        }
         state.activeProvider = chosen.execution;
         state.fallbackProvider = chosen.execution === 'api' ? chosen.provider : null;
         // Said every turn, so a run that has just been resumed or has come back from a limit stops reading as idle.
@@ -506,6 +515,13 @@ export class DesktopAutoSession {
         if (stepping) {
           const steps = stepping.brief!.steps!;
           const done = stepping.step!;
+          const corrections = await this.architectGate(input, conversationId, active, turn.output);
+          if (corrections) {
+            prompt = corrections;
+            continue;
+          }
+          // A local block is complete only after the Architect gate approves it; the builder finishing a turn
+          // alone is not enough to persist a checkmark.
           await this.ports.tickStep?.(input.projectId, conversationId, done).catch(() => undefined);
           if (done < steps.length - 1) {
             stepping.step = done + 1;

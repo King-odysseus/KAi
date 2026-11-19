@@ -1076,7 +1076,7 @@ ${ARCHITECT_BRIEF_SENTINEL} ${JSON.stringify({ ...BRIEF, steps: STEPS })}`;
     expect(prompt).toContain('Do step 2 now: In src/parser.ts, make parse() split lines on "=".');
   });
 
-  it('runs each step as its own budgeted turn, then has the work reviewed once', async () => {
+  it('runs and reviews each local builder step before starting the next', async () => {
     const s = scripted({ planOutput: stepped });
     const loop = new ArchitectLoop(s.ports);
     await loop.start(input(split({ implementer: LOCAL })), 1);
@@ -1087,7 +1087,31 @@ ${ARCHITECT_BRIEF_SENTINEL} ${JSON.stringify({ ...BRIEF, steps: STEPS })}`;
     s.buildPrompts.forEach((prompt, index) => expect(prompt).toContain(`step ${index + 1} of 3`));
     const builds = s.requests.filter((request) => !request.freshSession);
     for (const request of builds) expect(request.toolRoundLimit).toBe(LOCAL_BUILDER_ROUNDS);
-    expect(s.architectPrompts.filter((prompt) => prompt.includes('reviewing the Implementer'))).toHaveLength(1);
+    const reviews = s.architectPrompts.filter((prompt) => prompt.includes('reviewing the Implementer'));
+    expect(reviews).toHaveLength(3);
+    expect(s.buildPrompts.filter((prompt) => /step \d of 3/.test(prompt))).toHaveLength(3);
+  });
+
+  it('waits for approval before dispatching each block in hands-on mode', async () => {
+    const s = scripted({ planOutput: stepped });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split({ implementer: LOCAL, participation: 'handsOn' })), 1);
+    for (let index = 0; index < 3; index += 1) {
+      const waiting = await finish(loop);
+      expect(waiting.phase).toBe('waiting-for-you');
+      expect(waiting.message).toContain(`Block ${index + 1} of 3`);
+      expect(s.buildPrompts).toHaveLength(index);
+      loop.answer('conv-1', true);
+      if (index < 2) {
+        await vi.waitFor(() => {
+          const status = loop.status('conv-1');
+          if (status?.phase !== 'waiting-for-you' || !status.message.includes(`Block ${index + 2} of 3`)) throw new Error('next block has not reached approval');
+        }, { timeout: 4_000 });
+      }
+    }
+    await vi.waitFor(() => { if (loop.isRunning('conv-1')) throw new Error('run has not finished'); }, { timeout: 4_000 });
+    expect(loop.status('conv-1')?.phase).toBe('finished');
+    expect(s.buildPrompts).toHaveLength(3);
   });
 
   it('stops at a step that is stuck and hands the work to the Architect', async () => {
@@ -1135,7 +1159,32 @@ describe('Auto with a local builder works in short steps too', () => {
   const stepped = `Plan.
 ${ARCHITECT_BRIEF_SENTINEL} ${JSON.stringify({ ...BRIEF, steps: STEPS })}`;
 
-  it('asks for steps, runs each as a budgeted turn, ticks it, and has the Architect read the notes once at the end', async () => {
+  it('waits for the person before each hands-on block, including the first one', async () => {
+    const h = autoHarness({ planOutput: stepped });
+    await h.session.start(autoInput({ architect: split({ implementer: LOCAL, participation: 'handsOn' }) }), 1);
+    let waiting = await autoSettled(h.session);
+    expect(waiting.phase).toBe('waiting-for-you');
+    expect(waiting.message).toContain('block 1 of 3');
+    expect(h.s.buildPrompts).toHaveLength(0);
+    h.session.resume('conv-1');
+    await vi.waitFor(() => { if (!h.session.status('conv-1')?.message.includes('block 2 of 3')) throw new Error('block 2 is not awaiting approval'); }, { timeout: 4_000 });
+    waiting = await autoSettled(h.session);
+    expect(waiting.phase).toBe('waiting-for-you');
+    expect(waiting.message).toContain('block 2 of 3');
+    expect(h.s.buildPrompts).toHaveLength(1);
+    h.session.resume('conv-1');
+    await vi.waitFor(() => { if (!h.session.status('conv-1')?.message.includes('block 3 of 3')) throw new Error('block 3 is not awaiting approval'); }, { timeout: 4_000 });
+    waiting = await autoSettled(h.session);
+    expect(waiting.phase).toBe('waiting-for-you');
+    expect(waiting.message).toContain('block 3 of 3');
+    expect(h.s.buildPrompts).toHaveLength(2);
+    h.session.resume('conv-1');
+    await vi.waitFor(() => { if (h.session.isRunning('conv-1')) throw new Error('run has not finished'); }, { timeout: 4_000 });
+    expect(h.session.status('conv-1')?.phase).toBe('finished');
+    expect(h.s.buildPrompts).toHaveLength(3);
+  });
+
+  it('asks for steps, reviews each block, ticks approved steps and finishes with a whole-work review', async () => {
     const written: string[] = [];
     const ticked: number[] = [];
     const h = autoHarness({ planOutput: stepped }, {
@@ -1154,8 +1203,8 @@ ${ARCHITECT_BRIEF_SENTINEL} ${JSON.stringify({ ...BRIEF, steps: STEPS })}`;
     expect(ticked).toEqual([0, 1, 2]);
     for (const request of h.s.requests.filter((r) => !r.freshSession)) expect(request.toolRoundLimit).toBe(LOCAL_BUILDER_ROUNDS);
     const reviews = h.s.architectPrompts.filter((prompt) => prompt.includes('reviewing the Implementer'));
-    expect(reviews).toHaveLength(1);
-    expect(reviews[0]).toContain('parse() lives in src/core/parse.ts');
+    expect(reviews).toHaveLength(4);
+    expect(reviews.every((prompt) => prompt.includes('parse() lives in src/core/parse.ts'))).toBe(true);
   });
 
   it('keeps a CLI builder on whole-brief turns with no budget', async () => {

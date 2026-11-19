@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { contextChipSchema } from './context';
 import { agentIdSchema, autonomyModeSchema, executionModeSchema, routeModeSchema } from './primitives';
+import { architectSplitSchema } from './architect';
 import { goalInputSchema } from './workbench';
 
 export const queuedPromptSchema = z.object({
@@ -17,6 +18,7 @@ export const queuedPromptSchema = z.object({
     route: routeModeSchema.optional(),
     autonomy: autonomyModeSchema.optional(),
     model: z.string().optional(),
+    architect: architectSplitSchema.optional(),
   }).passthrough(),
   status: z.enum(['queued', 'sending', 'blocked']),
   error: z.string().optional(),

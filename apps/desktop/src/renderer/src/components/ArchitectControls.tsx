@@ -47,6 +47,7 @@ import { Switch } from './ui/Switch';
 export interface ArchitectSplitState {
   split: ArchitectSplit;
   setEnabled(enabled: boolean): void;
+  setParticipation(mode: 'automatic' | 'handsOn'): void;
   setRole(role: ArchitectRole, target: RoleTarget | null): void;
   /** Why a run cannot start yet, or null. */
   problem: string | null;
@@ -110,6 +111,7 @@ export function useArchitectSplit(input: {
   }, [tab, windowId]);
 
   const setEnabled = useCallback((enabled: boolean) => update({ ...split, enabled }), [split, update]);
+  const setParticipation = useCallback((participation: 'automatic' | 'handsOn') => update({ ...split, participation }), [split, update]);
   const setRole = useCallback((role: ArchitectRole, target: RoleTarget | null) => update(withRole(split, role, target)), [split, update]);
 
   // Which APIs have a key saved. Read when the composer appears and again whenever the window regains focus, so a key
@@ -156,7 +158,18 @@ export function useArchitectSplit(input: {
     return () => { alive = false; };
   }, [split, credentialIds]);
 
-  return { split, setEnabled, setRole, problem: splitProblem(split), warning: pairingWarning(split), readiness, credentialIds, liveModels, capabilities };
+  return { split, setEnabled, setParticipation, setRole, problem: splitProblem(split), warning: pairingWarning(split), readiness, credentialIds, liveModels, capabilities };
+}
+
+export function ArchitectParticipation({ state, disabled }: { state: ArchitectSplitState; disabled?: boolean }): ReactNode {
+  const mode = state.split.participation ?? 'automatic';
+  return (
+    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Architect workflow mode">
+      <span className="text-xs text-[var(--text-dim)]">Handoffs</span>
+      <UiButton type="button" className={mode === 'automatic' ? 'active' : ''} aria-pressed={mode === 'automatic'} disabled={disabled} onClick={() => state.setParticipation('automatic')}>Automatic</UiButton>
+      <UiButton type="button" className={mode === 'handsOn' ? 'active' : ''} aria-pressed={mode === 'handsOn'} disabled={disabled} onClick={() => state.setParticipation('handsOn')}>Ask me each block</UiButton>
+    </div>
+  );
 }
 
 /** The switch, as a row that says what it does. It lives in the run options panel, under its own heading. */

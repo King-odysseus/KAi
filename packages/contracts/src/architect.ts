@@ -67,6 +67,8 @@ export const architectSplitSchema = z
      * Implementer does everything, exactly as before.
      */
     worker: roleTargetSchema.nullable().optional(),
+    /** In hands-on mode KAI pauses before each planned block and waits for the person's approval to dispatch it. */
+    participation: z.enum(['automatic', 'handsOn']).optional(),
   })
   .strict();
 export type ArchitectSplit = z.infer<typeof architectSplitSchema>;

@@ -28,6 +28,7 @@ interface Script {
   /** The Lead's answer to a question from the Chat tab. */
   answer?: string;
   buildFails?: number;
+  buildOutput?: string;
   /** What a failed build says went wrong. */
   buildError?: string;
   costPerCall?: number;
@@ -59,7 +60,7 @@ function fixture(script: Script = {}, patch: Partial<CrewConfig> = {}) {
       if (request.prompt.includes('is asking you a question')) return reply(script.answer ?? 'Phase 0 is finished.');
       builds += 1;
       if (builds <= (script.buildFails ?? 0)) return reply('', 'failed', script.buildError ?? 'The agent crashed.');
-      return reply('Built it.');
+      return reply(script.buildOutput ?? 'Built it.');
     },
     cancelAgent: () => true,
     runCheck: async (_project, command) => { checks.push(command); return { passed: true, output: 'ok' }; },
@@ -81,6 +82,40 @@ async function runToIdle(runner: DesktopCrewRunner, runId: string): Promise<Crew
 }
 
 describe('crew runner', () => {
+  it('splits local builder work into atomic reviewed task cards and bounds each local turn', async () => {
+    const f = fixture();
+    const localConfig = crewConfigSchema.parse({
+      ...f.config,
+      roles: f.config.roles.map((role) => role.id === 'builder'
+        ? { ...role, execution: 'api', api: { provider: 'ollama', model: 'qwen3-coder' } }
+        : role),
+    });
+    const prompt = planPrompt('Build a booking flow', localConfig, '', { tasks: [] });
+    expect(prompt).toContain('small local model; assign only focused microtasks');
+    expect(prompt).toContain('dependency-ordered cards');
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: localConfig }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    const builder = f.requests.find((request) => request.displayText === 'Build: Log schema');
+    expect(builder?.toolRoundLimit).toBe(30);
+    expect(builder?.prompt).toContain('This is a deliberately small Crew task for a local model');
+    expect(run.tasks.map((task) => task.status)).toEqual(['accepted', 'accepted']);
+  });
+
+  it('sends an explicitly stuck local builder to the Lead immediately', async () => {
+    const f = fixture({ buildOutput: 'I cannot continue.\n<<KAI_STUCK>>missing project file' });
+    const localConfig = crewConfigSchema.parse({
+      ...f.config,
+      roles: f.config.roles.map((role) => role.id === 'builder'
+        ? { ...role, execution: 'api', api: { provider: 'ollama', model: 'qwen3-coder' } }
+        : role),
+    });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: localConfig }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(f.requests.some((request) => request.prompt.includes('A task has failed or been sent back too many times'))).toBe(true);
+    expect(run.status).toBe('needsYou');
+    expect(run.tasks[0]?.status).toBe('needsYou');
+  });
+
   it('captures the Studio brief when a crew starts and accepts later lead guidance', async () => {
     const f = fixture();
     f.ports.readBrief = async () => '# Brief at run start\n\nPayments: offline';

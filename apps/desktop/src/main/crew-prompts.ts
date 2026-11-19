@@ -1,5 +1,5 @@
 import { DEFAULT_AWAY_POLICY } from '@kai/contracts';
-import type { CrewAwayPolicy, CrewConfig, CrewDesign, CrewRun, CrewTask } from '@kai/contracts';
+import { isLocalProvider, type CrewAwayPolicy, type CrewConfig, type CrewDesign, type CrewRun, type CrewTask } from '@kai/contracts';
 import { boardSummary, roleAccess } from './crew-engine';
 
 /**
@@ -50,6 +50,7 @@ function designReviewLines(run: CrewRun, task: CrewTask): string[] {
 export function planPrompt(goal: string, config: CrewConfig, conventions: string, existing: Pick<CrewRun, 'tasks'> & { followUp?: string | null }, design: CrewDesign | null = null): string {
   const done = existing.tasks.filter((task) => task.status === 'accepted' && !task.proposed).map((task) => task.title);
   const roles = config.roles.filter((role) => roleAccess(role) === 'edit' || role.kind === 'security' || role.kind === 'reviewer');
+  const localBuilders = roles.filter((role) => roleAccess(role) === 'edit' && role.execution === 'api' && role.api && isLocalProvider(role.api.provider));
   return [
     'You are the Lead of a small crew that will build a project. Read the project, then split the goal into tasks.',
     'Do not change any files. Reply with one JSON object and nothing else.',
@@ -57,7 +58,8 @@ export function planPrompt(goal: string, config: CrewConfig, conventions: string
     `Goal: ${goal}`,
     '',
     'Roles that can be given a task (use the id):',
-    ...roles.map((role) => `- ${role.id}: ${role.label}${roleAccess(role) === 'edit' ? ' (writes code)' : ' (reviews, read-only)'}`),
+    ...roles.map((role) => `- ${role.id}: ${role.label}${roleAccess(role) === 'edit' ? ' (writes code)' : ' (reviews, read-only)'}${localBuilders.some((builder) => builder.id === role.id) ? ' (small local model; assign only focused microtasks)' : ''}`),
+    ...(localBuilders.length ? ['', 'Local builder task sizing:', `These roles use local models: ${localBuilders.map((role) => role.id).join(', ')}. Give each one a tiny, concrete task that changes one behavior in one or two files and can be finished in one short turn. If a feature needs more work, make separate ordered task cards with explicit "dependsOn" links; each card must have its own checkable acceptance criteria and be independently reviewable. Do not give a local model a whole feature, a multi-file refactor, or a task that mixes investigation, implementation and cleanup.`] : []),
     ...(conventions.trim() ? ['', 'How this developer usually builds things (follow these unless the goal says otherwise):', conventions.trim()] : []),
     ...designPlanLines(config, design),
     ...(existing.tasks.length > 0 ? ['', 'The board already has these tasks; add only what is missing:', boardSummary(existing)] : []),
@@ -65,6 +67,7 @@ export function planPrompt(goal: string, config: CrewConfig, conventions: string
     '',
     'Rules for the tasks:',
     '- Small enough for one agent to finish in one sitting. Prefer 5 to 14 tasks.',
+    ...(localBuilders.length ? ['- For tasks assigned to a local builder, keep each card to one concrete code change, one or two files, and 1 to 3 acceptance checks. Split bigger work into dependency-ordered cards; Crew checks and reviews each card before accepting it.'] : []),
     '- Each task has 1 to 5 acceptance criteria that can be checked by reading the code or running a command.',
     '- Never write a criterion only the person can meet (their approval, their sign-off, "every change is one they approved"). The crew cannot satisfy it, so the task would stop and wait. Put what needs their yes under "approvals" instead, and write the criterion as something the crew can check.',
     '- "dependsOn" lists task ids that must be accepted first. Use it only where order truly matters.',

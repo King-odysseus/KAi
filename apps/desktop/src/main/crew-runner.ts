@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_AWAY_POLICY, classifyWork, crewConfigSchema, crewRunSchema, phaseReportMarkdown } from '@kai/contracts';
+import { ARCHITECT_STUCK_SENTINEL, DEFAULT_AWAY_POLICY, classifyWork, crewConfigSchema, crewRunSchema, isLocalProvider, phaseReportMarkdown } from '@kai/contracts';
 import type { AgentRunRequest, AgentRunResult, ConversationOrigin, CrewAwayPolicy, CrewRevertPreview, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask, CrewTaskDiff } from '@kai/contracts';
 import {
   acceptPhase, addNotes, clearNotes, phaseToPauseAfter, setPauseAfter, openTasks, reopenOpenTasks, addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, isBareContinue, mergeChat, phaseFromFollowUp, requestApprovals, resetForRevert, ruleBlock, isUsageLimit, setTaskCheckpoint, tasksToRebuild, teachBlockers, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
@@ -7,6 +7,7 @@ import {
 } from './crew-engine';
 import { askPrompt, awayPrompt, parseAwayChoice, coveragePrompt, parseCoverage, parsePlanFull, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
 import type { ParallelSession } from './parallel-session';
+import { implementerIsStuck, repeatsItself, stuckReason } from './architect-loop';
 
 export interface CrewRunnerPorts {
   /** Opens a conversation for the crew's agents. `origin` marks it as the crew's, so the Workspace keeps it out of its tabs. */
@@ -70,6 +71,12 @@ export interface CrewStartInput {
 
 /** The reviewer id the per-task project check is recorded under; it is not a role. */
 const CHECK_REVIEWER = 'check';
+/** A local Crew builder gets a bounded turn per small board task, just like the Architect loop's local builder. */
+export const LOCAL_CREW_TASK_ROUND_LIMIT = 30;
+
+function isLocalCrewRole(role: CrewRole): boolean {
+  return role.execution === 'api' && Boolean(role.api && isLocalProvider(role.api.provider));
+}
 /** What a Lead call is called in the conversation log, in place of the brief it was sent. */
 const ASK_LABEL: Record<'plan' | 'review' | 'stuck' | 'coverage' | 'away', string> = {
   plan: 'Plan the tasks',
@@ -983,7 +990,7 @@ export class DesktopCrewRunner {
    * Records a failed build. When it is a blocker the crew has not met before, what it learned is also kept for the
    * project, so the next crew on it starts knowing the way past instead of finding it out again.
    */
-  private async recordFailure(active: ActiveRun, base: CrewRun, taskId: string, error: string): Promise<void> {
+  private async recordFailure(active: ActiveRun, base: CrewRun, taskId: string, error: string, askLeadNow = false): Promise<void> {
     const previousNote = base.tasks.find((item) => item.id === taskId)?.note ?? '';
     const next = failBuildSmart(base, taskId, error, this.now().toISOString());
     await this.commit(active, next);
@@ -996,7 +1003,7 @@ export class DesktopCrewRunner {
       await this.wait(active, this.dropRetryMs);
       return;
     }
-    await this.triage(active, taskId, error, previousNote);
+    await this.triage(active, taskId, error, previousNote, askLeadNow);
   }
 
   /** Waits, unless the run is stopped first. */
@@ -1013,10 +1020,10 @@ export class DesktopCrewRunner {
    * error and the whole board, and a plain retry would fail the same way. Known rules and a spent subscription are not
    * put to it (the crew already handles those), and each task gets at most two calls.
    */
-  private async triage(active: ActiveRun, taskId: string, error: string, previousNote: string): Promise<void> {
+  private async triage(active: ActiveRun, taskId: string, error: string, previousNote: string, force = false): Promise<void> {
     const task = active.run.tasks.find((item) => item.id === taskId);
     const key = `${active.run.id}|${taskId}`;
-    if (!task || task.status !== 'backlog' || !repeatsFailure(previousNote, error) || ruleBlock(error) || isUsageLimit(error) || (this.triaged.get(key) ?? 0) >= 2) return;
+    if (!task || task.status !== 'backlog' || (!force && !repeatsFailure(previousNote, error)) || ruleBlock(error) || isUsageLimit(error) || (this.triaged.get(key) ?? 0) >= 2) return;
     const lead = active.run.config.roles.find((role) => role.kind === 'lead');
     if (!lead) return;
     this.triaged.set(key, (this.triaged.get(key) ?? 0) + 1);
@@ -1026,7 +1033,19 @@ export class DesktopCrewRunner {
     const paid = addSpend(active.run, taskId, answer.costUsd, at);
     const next = applyTriage(paid, taskId, answer.value, lead.id, at);
     if (next?.status === 'needsYou') active.leadDecided.add(taskId);
-    await this.commit(active, next ?? paid);
+    if (next) {
+      await this.commit(active, next);
+    } else if (force) {
+      const blocked = {
+        ...paid,
+        status: 'needsYou' as const,
+        ask: { reason: 'noProgress' as const, message: `The local builder could not finish "${task.title}". The Lead could not choose a safe retry, so please give guidance or change the task.`, taskId },
+      };
+      active.leadDecided.add(taskId);
+      await this.commit(active, offerOptions(blocked, answer.value));
+    } else {
+      await this.commit(active, paid);
+    }
   }
 
   private async build(active: ActiveRun, taskId: string): Promise<void> {
@@ -1045,13 +1064,22 @@ export class DesktopCrewRunner {
     const conventions = (await this.ports.conventions?.(active.run.projectId, `${active.run.goal} ${task.title}`).catch(() => '')) ?? '';
     const before = await this.changed(active.run.projectId);
     const brief = taskBrief(active.run, taskId, conventions);
+    const localBuilder = roleAccess(role) === 'edit' && isLocalCrewRole(role);
+    const buildPrompt = localBuilder
+      ? `${brief}\n\nThis is a deliberately small Crew task for a local model. Make only the change described on this card; do not start later tasks or broaden the work. Work in short, concrete tool steps. If you are blocked or would otherwise repeat yourself, stop and report the exact blocker using this line:\n${ARCHITECT_STUCK_SENTINEL} <one-sentence blocker>`
+      : brief;
     const result = role.kind === 'designer' && this.ports.design
       ? await this.draw(active, task, brief)
-      : await this.call(active, role, brief, { effortFrom: `${task.title}\n${task.description}`, fresh: true, label: `Build: ${task.title}`, escalate: task.round >= 2 });
+      : await this.call(active, role, buildPrompt, { effortFrom: `${task.title}\n${task.description}`, fresh: true, label: `Build: ${task.title}`, escalate: task.round >= 2 });
     if (active.cancelled) return;
     let run = addSpend(active.run, taskId, result.costUsd ?? 0, at());
     if (result.status === 'failed') {
       await this.recordFailure(active, run, taskId, result.error ?? 'The agent stopped without finishing.');
+      return;
+    }
+    if (localBuilder && (implementerIsStuck(result.output) || repeatsItself(result.output))) {
+      const reason = implementerIsStuck(result.output) ? stuckReason(result.output) : 'the reply repeated itself instead of completing the task';
+      await this.recordFailure(active, run, taskId, `Local builder is stuck${reason ? `: ${reason}` : '.'}`, true);
       return;
     }
     const after = await this.changed(active.run.projectId);
@@ -1212,6 +1240,7 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
       execution: role.execution,
       route: role.route,
       ...(role.execution === 'api' && role.api ? { apiConnection: role.api } : {}),
+      ...(isLocalCrewRole(role) ? { toolRoundLimit: LOCAL_CREW_TASK_ROUND_LIMIT } : {}),
       // A role that cannot edit runs in Plan, whatever the crew's autonomy says.
       autonomy: roleAccess(role) === 'edit' ? config.autonomy : 'plan',
       helpers: helperChoiceFor(subAgentsFor(config, role.id, 0)),

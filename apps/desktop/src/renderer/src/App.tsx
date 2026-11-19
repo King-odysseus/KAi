@@ -31,7 +31,7 @@ import type {
   PlaywrightViewportStatus,
   TeamPlanDraft,
 } from '@kai/contracts';
-import { compactThresholdFor, experienceProfile, CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, helperChoiceSchema, responseStyleSchema, effortFitsAgent, modelBelongsToOtherAgent, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily, type ThemeMode } from '@kai/contracts';
+import { compactThresholdFor, experienceProfile, CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, helperChoiceSchema, responseStyleSchema, effortFitsAgent, modelBelongsToOtherAgent, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily, architectSplitActive, type ThemeMode } from '@kai/contracts';
 import { StatusBar } from './components/StatusBar';
 import { applyColorOverrides, loadColorOverrides } from './custom-colors';
 import { applyAppearance, clampScale, loadAppearance, saveAppearance, type Appearance } from './appearance';
@@ -51,6 +51,7 @@ import { GitView } from './components/GitView';
 import { CommandsView } from './components/CommandsView';
 import { TasksView } from './components/TasksView';
 import { StudioView } from './components/StudioView';
+import { NEW_TAB, adoptSplit, readLastSplit, readStoredSplit } from './components/architect-settings';
 import { TerminalView } from './components/TerminalView';
 import { PreviewView } from './components/PreviewView';
 import { RightPane } from './components/RightPane';
@@ -1291,11 +1292,31 @@ export function App(): ReactNode {
       'Creating conversation',
     );
     if (!conversation) return false;
+    // Studio can select a participation mode before this conversation has an id. Bind that exact
+    // split to the newly created conversation before a generate run starts (or Composer is shown).
+    adoptSplit(NEW_TAB, conversation.id, bootstrap?.windowId);
     setConversations((current) => [conversation, ...current]);
     setActiveConversationId(conversation.id);
     if (destination === 'generate') {
       setView('workspace');
-      await runConversation(conversation, launch.prompt);
+      const split = readStoredSplit(conversation.id, bootstrap?.windowId) ?? readLastSplit(bootstrap?.windowId);
+      if (architectSplitActive(split)) {
+        await perform(
+          () => window.kaiDesktop.runArchitect({
+            projectId: launch.projectId,
+            conversationId: conversation.id,
+            prompt: launch.prompt,
+            split,
+            agent: selectedAgent,
+            execution: executionMode,
+            route: selectedRoute,
+            autonomy: selectedAutonomy,
+          }).then(unwrap),
+          'Starting the Architect and Implementer',
+        );
+      } else {
+        await runConversation(conversation, launch.prompt);
+      }
       return true;
     }
     setWorkspaceCommand({ kind: 'prompt', nonce: Date.now(), prompt: launch.prompt });
@@ -1654,7 +1675,29 @@ export function App(): ReactNode {
           if (!claim.claimed) return;
           const latest = await window.kaiDesktop.getConversation(conversationId).then(unwrap);
           if (!latest) throw new Error('The conversation no longer exists.');
+          if (!latest.projectId) throw new Error('This conversation is not attached to a project.');
           if (!queuedPromptWasAccepted(latest, next.id)) {
+            if (next.options.architect && architectSplitActive(next.options.architect)) {
+              // A scope idea typed during an Architect run is queued by the composer. Start its follow-up with
+              // the same pair and mode instead of silently routing it through the one-agent send path.
+              await window.kaiDesktop.runArchitect({
+                projectId: latest.projectId,
+                conversationId,
+                prompt: next.text,
+                split: next.options.architect,
+                agent: next.options.agent ?? selectedAgent,
+                execution: next.options.execution ?? executionMode,
+                route: next.options.route ?? selectedRoute,
+                autonomy: next.options.autonomy ?? selectedAutonomy,
+                ...(next.options.goal ? { goal: next.options.goal } : {}),
+                ...(next.options.skills?.length ? { skills: next.options.skills } : {}),
+                ...(next.options.selectedPaths?.length ? { selectedPaths: next.options.selectedPaths } : {}),
+                ...(next.options.contextChips?.length ? { contextChips: next.options.contextChips } : {}),
+              }).then(unwrap);
+              const queue = await window.kaiDesktop.updateQueuedPrompt({ conversationId, id: next.id, action: 'accepted' }).then(unwrap);
+              setQueuedPromptsByConversation(queue);
+              return;
+            }
             await runConversation(latest, next.text, { ...next.options, clientMessageId: next.id });
           }
           const updated = await window.kaiDesktop.getConversation(conversationId).then(unwrap);
@@ -2836,6 +2879,7 @@ export function App(): ReactNode {
                   planRequest={studioPlanRequest}
                   firstRunRequest={studioFirstRunRequest}
                   cardRequest={studioCardRequest}
+                  windowId={windowId}
                   onOpenSettings={() => setView('settings')}
                   onLaunchProject={openStudioProject}
                   onPlanForTeam={(plan) => { setIncomingTeamPlan(plan); setView('workflows'); }}

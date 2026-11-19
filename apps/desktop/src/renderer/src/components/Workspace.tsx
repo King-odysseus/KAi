@@ -89,6 +89,7 @@ import type {
   FileVerificationState,
   ExecutionMode,
   GoalInput,
+  ArchitectSplit,
   NormalizedGoalInput,
   PersistedEvent,
   PermissionKey,
@@ -135,7 +136,7 @@ import {
 import { Select } from './ui/Select';
 import { Composer, ComposerInput, ComposerPause, ComposerSend, ComposerStop, ComposerToolbar } from './ui/Composer';
 import { IconButton } from './ui/IconButton';
-import { ArchitectChip, ArchitectRow, ArchitectStatusLine, ArchitectToggle, useArchitectSplit, useArchitectStatus } from './ArchitectControls';
+import { ArchitectChip, ArchitectParticipation, ArchitectRow, ArchitectStatusLine, ArchitectToggle, useArchitectSplit, useArchitectStatus } from './ArchitectControls';
 import { ActionsMenu } from './ui/ActionsMenu';
 import { PageHeader } from './ui/PageHeader';
 import { NoticeBanner } from './ui/NoticeBanner';
@@ -150,6 +151,7 @@ export interface WorkspaceSendOptions {
   selectedPaths?: string[];
   contextChips?: ContextChip[];
   agent?: AgentId;
+  architect?: ArchitectSplit;
 }
 
 export type WorkspaceCommandKind = 'goal' | 'skills' | 'context' | 'checkpoint' | 'raw' | 'handoff' | 'preview-change' | 'prompt';
@@ -850,7 +852,7 @@ export function WorkspaceView({
     if (running) {
       if (queueConversationId) onQueuePrompt({
         id: crypto.randomUUID(), conversationId: queueConversationId, text,
-        options: { ...(options ?? {}), agent: selectedAgent, execution: executionMode, route: selectedRoute, autonomy: selectedAutonomy, ...(selectedModel ? { model: selectedModel } : {}) },
+        options: { ...(options ?? {}), ...(architectSplitActive(architect.split) ? { architect: architect.split } : {}), agent: selectedAgent, execution: executionMode, route: selectedRoute, autonomy: selectedAutonomy, ...(selectedModel ? { model: selectedModel } : {}) },
         status: 'queued',
       });
       return;
@@ -2492,6 +2494,7 @@ export function WorkspaceView({
             </OptionSection>
             <OptionSection title="Architect and Implementer" className="!items-start !gap-3">
               <ArchitectToggle state={architect} disabled={busy || running} />
+              {architect.split.enabled && <ArchitectParticipation state={architect} disabled={busy || running} />}
               <ArchitectRow state={architect} disabled={busy || running} />
             </OptionSection>
           </div>}

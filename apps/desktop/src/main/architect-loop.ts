@@ -1133,11 +1133,12 @@ export class ArchitectLoop {
         : `${planned.label} did not return a readable brief, so the task itself is the brief.`);
 
       // What one round builds: the Implementer first, then the Worker for the brief's routine steps when there are any.
+      let stepCursor = 0;
       const turnsFor = (forBrief: ArchitectBrief): BuildTurn[] => {
         const steps = worker ? (forBrief.routine ?? []) : [];
         const stepped = context.smallBuilder && (forBrief.steps?.length ?? 0) >= 2;
         const planned: BuildTurn[] = stepped
-          ? forBrief.steps!.map((_, index) => ({ role: 'implementer' as const, prompt: stepPrompt(forBrief, input.prompt, implementerLabel, index, this.ports.writeSteps ? stepFilePath(conversationId) : undefined), step: { index, of: forBrief.steps!.length } }))
+          ? [{ role: 'implementer', prompt: stepPrompt(forBrief, input.prompt, implementerLabel, stepCursor, this.ports.writeSteps ? stepFilePath(conversationId) : undefined), step: { index: stepCursor, of: forBrief.steps!.length } }]
           : [{ role: 'implementer', prompt: implementPrompt(forBrief, input.prompt, implementerLabel, steps.length ? workerLabel : undefined) }];
         if (worker && workerLabel && steps.length) planned.push({ role: 'worker', prompt: workerPrompt(forBrief, input.prompt, workerLabel, steps) });
         return planned;
@@ -1161,6 +1162,14 @@ export class ArchitectLoop {
 
       for (;;) {
         if (stopped()) return this.settle(conversationId, owner, 'stopped', 'Stopped.');
+        if ((split.participation ?? 'automatic') === 'handsOn') {
+          const block = context.smallBuilder && (brief.steps?.length ?? 0) >= 2
+            ? brief.steps![stepCursor]
+            : brief.goal;
+          const number = context.smallBuilder && (brief.steps?.length ?? 0) >= 2 ? `Block ${stepCursor + 1} of ${brief.steps!.length}` : 'Next block';
+          const carryOn = await this.ask(conversationId, active, `The Architect proposes ${number}: ${block}\n\nContinue to send this block to the Implementer, or Finish here?`);
+          if (!carryOn) return this.settle(conversationId, owner, 'finished', 'Finished at your request before the next block.');
+        }
         const state = this.state(conversationId);
         state.round += 1;
         roundsSinceAsk += 1;
@@ -1190,9 +1199,6 @@ export class ArchitectLoop {
             return this.settle(conversationId, owner, 'failed', `The ${isWorker ? 'Worker' : 'Implementer'} (${this.coach.label(outcome.target)}) failed: ${(built.error ?? built.output ?? '').slice(-300) || 'the run failed'}`);
           }
           outputs.push(built.output ?? '');
-          if (turn.step && !implementerIsStuck(built.output ?? '') && !repeatsItself(built.output ?? '')) {
-            await this.ports.tickStep?.(input.projectId, conversationId, turn.step.index).catch(() => undefined);
-          }
           // A turn that asked for help or went round in circles ends the round: the Architect steps in, not the next builder.
           if (implementerIsStuck(built.output ?? '') || repeatsItself(built.output ?? '')) break;
         }
@@ -1248,6 +1254,15 @@ export class ArchitectLoop {
         if (!reviewed.readable) this.record(conversationId, owner, null, 'The review could not be read, so the work was sent back rather than waved through.');
 
         if (verdict.verdict === 'approve' && !stuck) {
+          // Persist a block as complete only after its review approves it. A finished builder turn can still fail
+          // checks or be sent back by the Architect, so marking it done earlier made the saved plan lie.
+          const approvedStep = turns.find((turn) => turn.step)?.step;
+          if (approvedStep) await this.ports.tickStep?.(input.projectId, conversationId, approvedStep.index).catch(() => undefined);
+          if (context.smallBuilder && stepCursor + 1 < (brief.steps?.length ?? 0)) {
+            stepCursor += 1;
+            turns = turnsFor(brief);
+            continue;
+          }
           return this.settle(conversationId, owner, 'finished', `Approved by the Architect after ${state.round} round${state.round === 1 ? '' : 's'}.`);
         }
 
@@ -1286,6 +1301,7 @@ export class ArchitectLoop {
           // A replacement brief in the verdict is taken as it stands; otherwise the Architect is asked for one.
           if (verdict.verdict === 'replan' && verdict.brief) {
             brief = verdict.brief;
+            stepCursor = 0;
             this.record(conversationId, owner, 'architect', 'New brief issued.');
           } else {
             const notes = context.smallBuilder ? await this.ports.stepNotes?.(input.projectId, conversationId).catch(() => '') ?? '' : '';
@@ -1293,6 +1309,7 @@ export class ArchitectLoop {
             this.addCost(conversationId, 'architect', stepped.costUsd);
             if (stopped()) return this.settle(conversationId, owner, 'stopped', 'Stopped.');
             brief = stepped.brief;
+            stepCursor = 0;
             this.record(conversationId, owner, 'architect', stepped.readable ? `Stepped in with a new brief (${stepped.label}).` : 'Stepped in, but the new brief could not be read; the old one stands.');
           }
           steppedInSinceApproval = true;
