@@ -14,7 +14,7 @@ import type {
   PersistedEvent,
 } from '@kai/contracts';
 import type { AgentExecutionResult } from './agent-runtime';
-import { withRepeatNotice } from './repeat-watch';
+import { notifyRepeatDetected, withRepeatNotice } from './repeat-watch';
 import { readPlan } from './plan-store';
 import { hasStepFile, stepFilePath } from './step-file';
 import { interjectionImages, steeringInstructionFor, takeInterjectionMessage } from './interjections';
@@ -160,6 +160,8 @@ interface ChatToolCall {
  * number: a limit of a hundred cut productive runs off mid-task, which is not something the CLIs do.
  */
 const MAX_TOTAL_TOOL_ROUNDS = 1_000;
+/** Local models benefit from a shorter leash; an Architect split can review and continue the work afterward. */
+const LOCAL_PROVIDER_MAX_TOOL_ROUNDS = 30;
 /** A helper's own loop is bounded much tighter than the main run's: it answers one question, not a whole task. */
 const EXPLORE_MAX_ROUNDS = 6;
 const EXPLORE_OUTPUT_TOKEN_BUDGET = 4_096;
@@ -1250,7 +1252,7 @@ export class DesktopDirectProviderRuntime {
     let nudges = 0;
     let forceFinalAnswer = false;
     let resumeAfterSteer = false;
-    const toolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
+    const toolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? (isLocalProvider(capability.provider) ? LOCAL_PROVIDER_MAX_TOOL_ROUNDS : MAX_TOTAL_TOOL_ROUNDS);
     const firstInputText = contextText?.trim()
       ? `${contextText.trim()}\n\nUser request:\n${request.prompt}`
       : request.prompt;
@@ -1536,7 +1538,7 @@ export class DesktopDirectProviderRuntime {
     // after each block the history is compacted and the run carries on in a fresh request.
     const deepSeek = isDeepSeekCapability(capability);
     const segmentLimit = deepSeek ? DEEPSEEK_MAX_TOOL_ROUNDS : Number.POSITIVE_INFINITY;
-    const totalToolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? (deepSeek ? DEEPSEEK_MAX_TOTAL_TOOL_ROUNDS : MAX_TOTAL_TOOL_ROUNDS);
+    const totalToolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? (isLocalProvider(capability.provider) ? LOCAL_PROVIDER_MAX_TOOL_ROUNDS : deepSeek ? DEEPSEEK_MAX_TOTAL_TOOL_ROUNDS : MAX_TOTAL_TOOL_ROUNDS);
     const providerRoundLimit = totalToolRoundLimit + PROVIDER_ROUND_HEADROOM;
     let segmentRounds = 0;
     let segmentStart = messages.length;
@@ -1863,7 +1865,7 @@ export class DesktopDirectProviderRuntime {
     let reasoningOnly = false;
     let forceFinalAnswer = false;
     let resumeAfterSteer = false;
-    const toolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
+    const toolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? (isLocalProvider(capability.provider) ? LOCAL_PROVIDER_MAX_TOOL_ROUNDS : MAX_TOTAL_TOOL_ROUNDS);
     // The size chosen for auto-compact (zero leaves the history alone), and where the part of this run that can be
     // folded into a summary begins.
     const loadedSettings = await this.settings.load().catch(() => undefined);
@@ -2139,7 +2141,7 @@ export class DesktopDirectProviderRuntime {
     let nudges = 0;
     let forceFinalAnswer = false;
     let resumeAfterSteer = false;
-    const toolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
+    const toolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? (isLocalProvider(capability.provider) ? LOCAL_PROVIDER_MAX_TOOL_ROUNDS : MAX_TOTAL_TOOL_ROUNDS);
 
     try {
       for (let providerRound = 0; providerRound < toolRoundLimit + PROVIDER_ROUND_HEADROOM; providerRound += 1) {
@@ -3420,6 +3422,13 @@ async function executeToolCalls(
     toolRuntime.guard.noteToolOutcome(execution.ok);
     const repeat = toolRuntime.guard.recordToolCall(name, argumentsValue, execution.output);
     if (repeat === 'stop') {
+      // In an Architect / Implementer run, repeating the same tool result is a build turn going in circles. Hand that
+      // turn back to the Architect instead of opening a Continue / Finish question while the Implementer stays active.
+      if (request.splitRole === 'implementer' && notifyRepeatDetected(request.conversationId)) {
+        execution.output = { ...(asRecord(execution.output) ?? { result: execution.output }), kaiNotice: 'The same tool call and result repeated; handing this turn to the Architect.' };
+        emit(toolCallEvent(request, name, execution.ok ? 'completed' : 'failed', argumentsValue, execution.output, callId));
+        throw signal.reason ?? new Error('The Architect is taking over after repeated tool calls.');
+      }
       // Stuck, not broken: ask rather than throw the run away. Continue sets the count aside, so it takes five more
       // identical calls before the person is bothered again; Finish leaves the run to sum itself up.
       const answer = await askToContinue(approvals, REPEAT_QUESTION(REPEAT_STOP_MESSAGE));

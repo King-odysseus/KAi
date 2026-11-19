@@ -41,6 +41,14 @@ export function onRepeatDetected(conversationId: string, listener: () => void): 
   return () => { if (repeatListeners.get(conversationId) === listener) repeatListeners.delete(conversationId); };
 }
 
+/** Lets another guard (for example, repeated tool calls) use the same handoff that catches repeated prose. */
+export function notifyRepeatDetected(conversationId: string): boolean {
+  const listener = repeatListeners.get(conversationId);
+  if (!listener) return false;
+  listener();
+  return true;
+}
+
 /** Fed a run's text as it streams; says `true` once, the first time the text starts repeating itself. */
 export class RepeatWatch {
   private buffer = '';
@@ -79,6 +87,6 @@ export function withRepeatNotice(
       type: 'notice',
       message: 'This run is repeating the same paragraph. It may be going in circles. Press Stop to end it, or leave it if it is still making progress.',
     });
-    repeatListeners.get(request.conversationId)?.();
+    notifyRepeatDetected(request.conversationId);
   };
 }

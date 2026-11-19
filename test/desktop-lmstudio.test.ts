@@ -15,6 +15,7 @@ import {
 import { DesktopDirectProviderRuntime, compactAnthropicToolHistory, foldCanHelp, compactChatToolHistory, estimateAnthropicTokens, estimateChatTokens, shouldCompactAnthropicRun, shouldCompactRun, type ChatMessage } from '../apps/desktop/src/main/direct-provider-runtime';
 import { probeLocalServer } from '../apps/desktop/src/main/local-provider';
 import { listProviderModels } from '../apps/desktop/src/main/provider-models';
+import { onRepeatDetected } from '../apps/desktop/src/main/repeat-watch';
 import { assignTeam, billingFor, type AssignmentEnvironment } from '../apps/desktop/src/main/team-assign';
 
 const servers: http.Server[] = [];
@@ -246,6 +247,78 @@ describe('LM Studio as a provider', () => {
     const cost = result.events.filter((event) => event.type === 'cost.update').at(-1);
     expect(cost).toMatchObject({ provider: 'lmstudio', model: 'gpt-oss-20b', inputTokens: 40, outputTokens: 6, amountUsd: 0 });
   });
+
+  it('wraps up a local model after 30 tool rounds instead of letting it loop for hours', async () => {
+    const requests: Array<{ messages: Array<Record<string, unknown>> }> = [];
+    const projectRoot = emptyProject();
+    fs.writeFileSync(path.join(projectRoot, 'notes.txt'), Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join('\n'));
+    const server = http.createServer((incoming, response) => {
+      let raw = '';
+      incoming.setEncoding('utf8');
+      incoming.on('data', (chunk) => { raw += chunk; });
+      incoming.on('end', () => {
+        if (incoming.url === '/v1/models') {
+          response.writeHead(200, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({ data: [{ id: 'qwen2.5-coder-7b-instruct' }] }));
+          return;
+        }
+        const body = JSON.parse(raw) as { messages: Array<Record<string, unknown>> };
+        requests.push(body);
+        const wrappingUp = body.messages.some((message) => typeof message.content === 'string' && message.content.includes('Stop calling tools'));
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        if (wrappingUp) {
+          response.end('data: {"choices":[{"delta":{"content":"I read the file; the task is unfinished."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+          return;
+        }
+        const call = { index: 0, id: `call_${requests.length}`, type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'notes.txt', start_line: requests.length }) } };
+        response.end(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [call] } }] })}\n\ndata: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n`);
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime({ load: async () => lmStudioSettings(baseUrl) }, noVault());
+
+    const result = await runtime.run({ ...request(), autonomy: 'full' }, projectRoot);
+
+    expect(result).toMatchObject({ status: 'completed', output: 'I read the file; the task is unfinished.' });
+    expect(requests).toHaveLength(32); // 30 executed tool rounds, one refused round, then the tool-free wrap-up.
+    expect(requests[31]!.messages.some((message) => typeof message.content === 'string' && message.content.includes('Stop calling tools'))).toBe(true);
+  }, 30_000);
+
+  it('hands repeated tool calls from a split Implementer to the Architect', async () => {
+    let calls = 0;
+    const server = http.createServer((incoming, response) => {
+      let raw = '';
+      incoming.setEncoding('utf8');
+      incoming.on('data', (chunk) => { raw += chunk; });
+      incoming.on('end', () => {
+        if (incoming.url === '/v1/models') {
+          response.writeHead(200, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({ data: [{ id: 'qwen2.5-coder-7b-instruct' }] }));
+          return;
+        }
+        calls += 1;
+        const call = { index: 0, id: `call_${calls}`, type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'notes.txt' }) } };
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.end(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [call] } }] })}\n\ndata: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n`);
+      });
+    });
+    const baseUrl = await listen(server);
+    const projectRoot = emptyProject();
+    fs.writeFileSync(path.join(projectRoot, 'notes.txt'), 'hello\n');
+    const runtime = new DesktopDirectProviderRuntime({ load: async () => lmStudioSettings(baseUrl) }, noVault());
+    let handedOff = false;
+    const stopListening = onRepeatDetected('conv-local', () => { handedOff = true; runtime.cancel('conv-local'); });
+
+    try {
+      const result = await runtime.run({ ...request(), splitRole: 'implementer', autonomy: 'full' }, projectRoot);
+
+      expect(handedOff).toBe(true);
+      expect(result.cancelled).toBe(true);
+      expect(calls).toBe(5);
+    } finally {
+      stopListening();
+    }
+  }, 30_000);
 
   it('uses a key when the user stored one (LM Studio can require API tokens)', async () => {
     const seen: Array<{ url?: string; authorization?: string }> = [];
