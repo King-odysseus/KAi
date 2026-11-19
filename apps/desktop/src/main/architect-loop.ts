@@ -33,6 +33,7 @@ import {
 
 import type { ArchitectNote } from './architect-notes';
 import { NOTES_HEADING, stepFilePath } from './step-file';
+import { testGuardNote, weakenedTestFlags } from './test-guard';
 export { repeatsItself };
 
 /**
@@ -223,7 +224,7 @@ export function fallbackBrief(task: string): ArchitectBrief {
 // Prompts
 // ---------------------------------------------------------------------------------------------------------------------
 
-const BRIEF_SHAPE = `{"goal": "one or two sentences", "files": ["path/to/touch"], "avoid": ["things to leave alone"], "doneChecks": ["a checkable statement that must be true when done"], "checkCommand": "optional: one plain test or typecheck command, for example npm test"}`;
+const BRIEF_SHAPE = `{"goal": "one or two sentences", "files": ["path/to/touch"], "avoid": ["things to leave alone"], "doneChecks": ["a checkable statement that must be true when done"], "checkCommand": "optional: one plain test or typecheck command, for example npm test", "oneTestCommand": "optional: the exact command that runs one test file here, with {file} where the path goes", "buildCommand": "optional: what must run before the tests see a change, when they read built output"}`;
 const VERDICT_SHAPE = `{"verdict": "approve" | "revise" | "replan", "summary": "one or two sentences", "corrections": ["a specific fix"], "brief": <a new brief, only for "replan">}`;
 /** The brief and verdict shapes when a Worker is in the split: the brief may list routine steps, and a verdict may say its fixes are mechanical. */
 const BRIEF_SHAPE_WITH_WORKER = BRIEF_SHAPE.replace('"checkCommand"', '"routine": ["a mechanical step for the Worker, specific enough to do without judgement"], "checkCommand"');
@@ -238,12 +239,21 @@ function briefShape(workerLabel: string | undefined, smallBuilder: boolean | und
 const WORKER_PLAN_NOTE = (workerLabel: string): string =>
   `A second builder, the Worker (${workerLabel}), is a smaller model for routine edits. Put in "routine" only mechanical steps it can do without judgement: renames, boilerplate, tests, docs, applying an edit you describe exactly. Leave the hard parts out of it: they stay with the Implementer. Leave "routine" out if nothing qualifies.`;
 
+/** How to test one file and what to run first, from the brief, so a builder does not spend its turn working them out. */
+export function testCommandLines(brief: ArchitectBrief): string[] {
+  return [
+    ...(brief.buildCommand ? [`Before you run tests, run: ${brief.buildCommand}`] : []),
+    ...(brief.oneTestCommand ? [`To run one test file: ${brief.oneTestCommand}`] : []),
+  ];
+}
+
 export function briefText(brief: ArchitectBrief): string {
   const lines = [`Goal: ${brief.goal}`];
   if (brief.files.length) lines.push(`Files to touch:\n${brief.files.map((file) => `- ${file}`).join('\n')}`);
   if (brief.avoid.length) lines.push(`Leave alone:\n${brief.avoid.map((item) => `- ${item}`).join('\n')}`);
   lines.push(`Done when:\n${brief.doneChecks.map((check) => `- ${check}`).join('\n')}`);
   if (brief.checkCommand && isSafeCheckCommand(brief.checkCommand)) lines.push(`KAI will run this before the review and the work cannot be approved while it fails: ${brief.checkCommand}`);
+  lines.push(...testCommandLines(brief));
   return lines.join('\n\n');
 }
 
@@ -254,6 +264,7 @@ export function planPrompt(task: string, label: string, workerLabel?: string, sm
     `Task:\n${task}`,
     `Write a brief the Implementer can work from without asking you anything. Keep it short and concrete. Finish your reply with its own line:\n${ARCHITECT_BRIEF_SENTINEL} ${briefShape(workerLabel, smallBuilder)}`,
     'Every item in "doneChecks" must be something a reviewer can check against the files or a command, not a feeling.',
+    'Fill "oneTestCommand" with the exact command that runs a single test file here (read package.json scripts and the test setup), and "buildCommand" if the tests read built output. A builder that has to work these out spends most of its turn on it.',
     ...(smallBuilder ? [STEPS_NOTE] : []),
     ...(workerLabel ? [WORKER_PLAN_NOTE(workerLabel)] : []),
   ].join('\n\n');
@@ -263,6 +274,12 @@ export function planPrompt(task: string, label: string, workerLabel?: string, sm
 const BUILD_ACCESS_LINE = 'This is a build run, not a planning run. You may edit files and run commands in this project. Do not say you are in plan mode; make the changes.';
 
 /** The structured report every Implementer turn ends with, so the Architect can check the claim against the diff. */
+/**
+ * A builder that cannot make a test pass will often change the test instead. It is told not to, and KAI also names any
+ * such change for the reviewer (see test-guard.ts).
+ */
+const TEST_LINE = 'Never change a test\'s expected value, delete an assertion or skip a test to make it pass, unless the brief says that behaviour changed. If you think a test is wrong, leave it as it is and say why in your report.';
+
 const REPORT_LINE = `When you finish a turn, end your reply with its own line: ${ARCHITECT_REPORT_SENTINEL} {"filesChanged": ["path"], "checksRun": ["command and how it came out"], "unfinished": ["what you did not get to"]}. Report only what is true.`;
 
 export function implementPrompt(brief: ArchitectBrief, task: string, label: string, workerLabel?: string): string {
@@ -274,6 +291,7 @@ export function implementPrompt(brief: ArchitectBrief, task: string, label: stri
     `Brief:\n${briefText(brief)}`,
     ...(routine.length ? [`A second builder, the Worker (${workerLabel}), will do these routine steps after you. Do not do them yourself:\n${routine.map((step) => `- ${step}`).join('\n')}`] : []),
     BUILD_ACCESS_LINE,
+    TEST_LINE,
     REPORT_LINE,
     `If you cannot make progress, stop and end your reply with its own line: ${ARCHITECT_STUCK_SENTINEL} followed by one sentence on what blocks you. The Architect will step in.`,
   ].join('\n\n');
@@ -293,10 +311,12 @@ export function stepPrompt(brief: ArchitectBrief, task: string, label: string, i
     `Original request, for context: ${task.length > 600 ? `${task.slice(0, 600)}…` : task}`,
     `The steps:\n${steps.map((step, position) => `[${mark(position)}] ${position + 1}. ${step}`).join('\n')}`,
     ...(brief.avoid.length ? [`Leave alone: ${brief.avoid.join('; ')}`] : []),
-    ...(stepFile ? [`The plan, and what earlier steps found, are in ${stepFile}. Read its "${NOTES_HEADING.replace(/^#+ /, '')}" section before you start. Before you finish, add one to three short lines under that heading saying what the next step needs to know. KAI ticks the step off; do not edit the step list.`] : []),
+    ...(stepFile ? [`The plan, and what earlier steps found, are in ${stepFile}. Read its "${NOTES_HEADING.replace(/^#+ /, '')}" section before you start. Before you finish, add one to three short lines under that heading saying what the next step needs to know, and the exact command for anything you had to work out how to run. KAI ticks the step off; do not edit the step list.`] : []),
+    ...testCommandLines(brief),
     `Do step ${index + 1} now: ${steps[index] ?? ''}`,
     'Read only what this step needs, make the change with your edit tools, and run a quick check if one proves it. Do not redo earlier steps and do not start later ones.',
     BUILD_ACCESS_LINE,
+    TEST_LINE,
     REPORT_LINE,
     `If you cannot do this step, stop and end your reply with its own line: ${ARCHITECT_STUCK_SENTINEL} followed by one sentence on what blocks you. The Architect will step in.`,
   ].join('\n\n');
@@ -311,6 +331,7 @@ export function workerPrompt(brief: ArchitectBrief, task: string, label: string,
     `Goal of the whole job: ${brief.goal}`,
     `Your steps:\n${steps.map((step, index) => `${index + 1}. ${step}`).join('\n')}`,
     BUILD_ACCESS_LINE,
+    TEST_LINE,
     REPORT_LINE,
     `If a step is not possible as written, stop and end your reply with its own line: ${ARCHITECT_STUCK_SENTINEL} followed by one sentence on why. The Architect will step in.`,
   ].join('\n\n');
@@ -380,6 +401,7 @@ export function correctionPrompt(verdict: ArchitectVerdict, brief: ArchitectBrie
     `Fixes:\n${fixes}`,
     `Still the brief:\n${briefText(brief)}`,
     BUILD_ACCESS_LINE,
+    TEST_LINE,
     REPORT_LINE,
     `If you cannot make progress, end your reply with its own line: ${ARCHITECT_STUCK_SENTINEL} followed by one sentence on what blocks you.`,
   ].join('\n\n');
@@ -394,6 +416,7 @@ export function workerCorrectionPrompt(verdict: ArchitectVerdict, brief: Archite
     `Fixes:\n${fixes}`,
     `Goal of the whole job: ${brief.goal}`,
     BUILD_ACCESS_LINE,
+    TEST_LINE,
     REPORT_LINE,
     `If a fix is not possible as written, end your reply with its own line: ${ARCHITECT_STUCK_SENTINEL} followed by one sentence on why.`,
   ].join('\n\n');
@@ -726,7 +749,8 @@ export class ArchitectCoach {
     const check = ranCheck !== undefined ? ranCheck : await this.runBriefCheck(context.projectId, brief, signal);
     // What the Implementer says it did, set beside what the working tree shows. The diff wins.
     const crossCheck = crossCheckReport(parseReport(implementerNote), rawMaterial);
-    const note = `${implementerNote.slice(-2_500) || '(none)'}\n\n${crossCheck.lines.join('\n')}`;
+    const guard = testGuardNote(weakenedTestFlags(rawMaterial));
+    const note = `${implementerNote.slice(-2_500) || '(none)'}\n\n${crossCheck.lines.join('\n')}${guard ? `\n\n${guard}` : ''}`;
     const answer = await this.ask(context, (label) => reviewPrompt(brief, task, material, note, label, check, splitWorker(context.split) !== null), { splitRole: 'architect', taskText: task });
     const parsed = parseVerdict(answer.output);
     // A failing check overrules an approval: the Architect read the diff, but the work does not do what the brief said.

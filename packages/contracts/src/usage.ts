@@ -87,8 +87,21 @@ export const defaultUsageBudget: UsageBudget = {
  * uses its own, smaller, setting. Turning the main setting off turns every automatic compaction off, so the person's
  * "never compact on my own" is honoured whichever model runs.
  */
-export function compactThresholdFor(budget: Pick<UsageBudget, 'compactAtTokens' | 'compactAtTokensLocal'>, provider: string | null | undefined): number {
+export function compactThresholdFor(
+  budget: Pick<UsageBudget, 'compactAtTokens' | 'compactAtTokensLocal'>,
+  provider: string | null | undefined,
+  /** The model's own context window, when the server reported it. A local model then folds at half of what it holds. */
+  contextWindow?: number | null,
+): number {
   if (budget.compactAtTokens <= 0) return 0;
-  if (provider && isLocalProvider(provider as Parameters<typeof isLocalProvider>[0]) && budget.compactAtTokensLocal > 0) return budget.compactAtTokensLocal;
+  const local = Boolean(provider && isLocalProvider(provider as Parameters<typeof isLocalProvider>[0]));
+  if (local && contextWindow && contextWindow > 0) return Math.max(4_000, Math.floor(contextWindow * LOCAL_WINDOW_SHARE));
+  if (local && budget.compactAtTokensLocal > 0) return budget.compactAtTokensLocal;
   return budget.compactAtTokens;
 }
+
+/**
+ * The share of a local model's window its conversation may use before it folds. The rest is for the instructions, the
+ * tool list and the reply, which go with every request.
+ */
+export const LOCAL_WINDOW_SHARE = 0.5;

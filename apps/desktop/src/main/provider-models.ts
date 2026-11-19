@@ -43,14 +43,17 @@ export async function listProviderModels(
     if (!response.ok) {
       return fallback(`The provider model list request failed (${response.status})${await responseDetail(response)}`);
     }
-    const models = parseModelIds(await response.json() as unknown);
+    const body = await response.json() as unknown;
+    const models = parseModelIds(body);
     if (models.length === 0) return fallback('The provider returned an empty model list.');
+    const contextLengths = parseModelContexts(body);
     return providerModelCatalogSchema.parse({
       provider: request.provider,
       models,
       source: 'live',
       fetchedAt: new Date().toISOString(),
       error: null,
+      ...(Object.keys(contextLengths).length ? { contextLengths } : {}),
     });
   } catch (error) {
     if (isLocalProvider(request.provider)) {
@@ -75,6 +78,33 @@ export function mergeLocalModels(
   // An unreachable server answers with the bundled preset; keep it only as a fallback when nothing is remembered.
   const models = catalog.source === 'live' || seen.length === 0 ? union(seen, catalog.models) : seen;
   return { catalog: { ...catalog, models }, remembered: seen };
+}
+
+/**
+ * The context window each model in a list reports, by id. Servers name it differently: LM Studio's own API says
+ * loaded_context_length and max_context_length, OpenRouter context_length, vLLM max_model_len. What a model is loaded
+ * with wins over what it could hold, since a request beyond the loaded size fails.
+ */
+export function parseModelContexts(value: unknown): Record<string, number> {
+  const records = Array.isArray(value)
+    ? value
+    : value && typeof value === 'object' && Array.isArray((value as Record<string, unknown>).data)
+      ? (value as Record<string, unknown>).data as unknown[]
+      : value && typeof value === 'object' && Array.isArray((value as Record<string, unknown>).models)
+        ? (value as Record<string, unknown>).models as unknown[]
+        : [];
+  const result: Record<string, number> = {};
+  for (const entry of records) {
+    if (!entry || typeof entry !== 'object') continue;
+    const record = entry as Record<string, unknown>;
+    const id = typeof record.id === 'string' ? record.id : typeof record.name === 'string' ? record.name : typeof record.model === 'string' ? record.model : '';
+    if (!id.trim()) continue;
+    const top = record.top_provider && typeof record.top_provider === 'object' ? (record.top_provider as Record<string, unknown>).context_length : undefined;
+    const size = [record.loaded_context_length, record.context_length, record.max_context_length, record.context_window, record.max_model_len, top]
+      .find((candidate) => typeof candidate === 'number' && Number.isInteger(candidate) && candidate > 0) as number | undefined;
+    if (size) result[id.trim().replace(/^models\//, '')] = size;
+  }
+  return result;
 }
 
 export function parseModelIds(value: unknown): string[] {

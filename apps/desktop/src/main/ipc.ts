@@ -494,6 +494,11 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     if (catalog.source === 'live' && merged.remembered.length !== (settings.savedLocalModels[request.provider] ?? []).length) {
       await context.settings.update((current) => ({ ...current, savedLocalModels: { ...current.savedLocalModels, [request.provider]: merged.remembered } }));
     }
+    // What each model can hold, so its runs compact at a share of its own window (see compactThresholdFor).
+    const windows = catalog.contextLengths ?? {};
+    if (Object.entries(windows).some(([model, size]) => settings.localModelContext[model] !== size)) {
+      await context.settings.update((current) => ({ ...current, localModelContext: { ...current.localModelContext, ...windows } }));
+    }
     return merged.catalog;
   });
   handle(context, 'catalog:list', async () => listConnectorCatalog());
@@ -2004,7 +2009,10 @@ export async function runConversationAgent(
   if (!project) throw new NotFoundError('Open a project before sending a message.');
   // One place for every agent run (composer, Crew, Studio, workflows): a history past the chosen size is summarised
   // first. A failure never blocks the run; it simply goes ahead with the full history.
-  const compactAt = compactThresholdFor(settings.usageBudget, request.execution === 'api' ? settings.directApi.provider : null);
+  // The connection this run actually uses: a role's own, or the one in Settings.
+  const runProvider = request.execution === 'api' ? request.apiConnection?.provider ?? settings.directApi.provider : null;
+  const runModel = request.apiConnection?.model || request.model || settings.directApi.model;
+  const compactAt = compactThresholdFor(settings.usageBudget, runProvider, settings.localModelContext[runModel]);
   const askedToCompact = compactBeforeNextRun.delete(conversation.id);
   // Said in the conversation when it happens: a fold nobody could see looked exactly like one that never ran.
   let compactionNotice: string | null = null;
@@ -2400,8 +2408,8 @@ ${BRAIN_TOOLS_GUIDANCE}`
   const stepOnly = executionMode === 'api' && Boolean(request.splitRole) && historyTurns.length > 0;
   // A local model is slowed by every token it is sent, so it is given the recent turns that fit a budget and reads the
   // rest with read_history. The budget is a share of the size it compacts at, since that is what it can comfortably hold.
-  const windowBudget = executionMode === 'api' && !request.splitRole && isLocalProvider(settings.directApi.provider)
-    ? Math.max(2_000, Math.floor(compactThresholdFor(settings.usageBudget, settings.directApi.provider) * 0.4))
+  const windowBudget = executionMode === 'api' && !request.splitRole && runProvider && isLocalProvider(runProvider)
+    ? Math.max(2_000, Math.floor(compactThresholdFor(settings.usageBudget, runProvider, settings.localModelContext[runModel]) * 0.4))
     : 0;
   const apiHistory = stepOnly
     ? [{ ...historyTurns[historyTurns.length - 1], text: effectivePrompt }]

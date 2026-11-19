@@ -1731,7 +1731,7 @@ export function WorkspaceView({
     }
   }
   // The size the person chose for compacting; with auto-compact off the old warning size still marks "getting long".
-  const compactLimit = compactThresholdFor(settings.usageBudget, apiRun ? directApiCapability?.provider : null) || COMPACTION_WARNING_TOKENS;
+  const compactLimit = compactThresholdFor(settings.usageBudget, apiRun ? directApiCapability?.provider : null, settings.localModelContext?.[selectedModel || directApiCapability?.model || '']) || COMPACTION_WARNING_TOKENS;
   // What the model itself said its last request held, when this conversation has one: that counts the project
   // instructions and tool output the chat text does not, and it falls when older activity is folded into a summary.
   // A summary made after that report makes it stale, so the chat-text estimate takes over until the next request.

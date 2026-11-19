@@ -130,6 +130,10 @@ export const architectBriefSchema = z
      * with a fresh start, so a small model never has to hold the whole task at once. Left out, the brief is one turn.
      */
     steps: z.array(z.string().trim().min(1).max(600)).max(15).optional(),
+    /** The exact command that runs one test file in this project, with {file} where the path goes. */
+    oneTestCommand: z.string().trim().max(300).optional(),
+    /** What has to run before the tests see a change (a build, a compile), when the tests read built output. */
+    buildCommand: z.string().trim().max(300).optional(),
   })
   .strict();
 export type ArchitectBrief = z.infer<typeof architectBriefSchema>;

@@ -1193,7 +1193,7 @@ data: {"type":"message_stop"}
         requests.push(body);
         response.writeHead(200, { 'Content-Type': 'text/event-stream' });
         const toolNames = (body.tools ?? []).map((tool) => tool.name);
-        const isExploreSubRun = toolNames.length > 0 && toolNames.every((name) => name === 'view_image' || name === 'read_file' || name === 'search_files' || name === 'list_files');
+        const isExploreSubRun = toolNames.length > 0 && toolNames.every((name) => name === 'view_image' || name === 'read_file' || name === 'outline_file' || name === 'search_files' || name === 'list_files');
         if (requests.length === 1) {
           // The main run's first turn: it hands the question off instead of reading files itself.
           response.end(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_explore', name: 'explore', input: { question: 'How does login work?' } } })}
@@ -1223,8 +1223,10 @@ data: {"type":"message_stop"}
     expect(result.status).toBe('completed');
     expect(result.output).toContain('Done: login uses JWT.');
     expect(requests).toHaveLength(3);
-    // The helper was offered only the four read-only tools, never the full project tool set.
-    expect(requests[1]!.tools).toHaveLength(4);
+    // The helper was offered only the five read-only tools (outline_file joined them), never the full project tool set.
+    expect(requests[1]!.tools).toHaveLength(5);
+    expect(JSON.stringify(requests[1]!.tools)).toContain('outline_file');
+    expect(JSON.stringify(requests[1]!.tools)).not.toContain('replace_in_file');
     expect(JSON.stringify(requests[1]!.messages)).toContain('How does login work?');
     // Its answer, not its (nonexistent, in this test) intermediate reads, is what reaches the main run.
     expect(JSON.stringify(requests[2]!.messages)).toContain('Login uses JWT in auth.ts.');

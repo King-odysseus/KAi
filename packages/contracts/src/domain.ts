@@ -393,6 +393,9 @@ export const appSettingsV1Schema = z
     // Local models KAI has seen, per local provider. A refresh adds to this list and never replaces it, so a model
     // that is not loaded right now (or a server that is stopped) does not drop out of the pickers.
     savedLocalModels: z.record(z.string().min(1).max(40), z.array(z.string().min(1).max(300)).max(500)).default(() => Object.fromEntries(Object.entries(DEFAULT_SAVED_LOCAL_MODELS).map(([id, models]) => [id, [...models]]))),
+    // The context window each local model reported, by model name, so a local model compacts at a share of what it can
+    // actually hold rather than a flat size. Filled from the server's model list; empty until it says.
+    localModelContext: z.record(z.string().min(1).max(300), z.number().int().positive().max(10_000_000)).default({}),
     directApi: directApiSettingsSchema,
     // Web search and URL fetching are separate from the model connection: any model can use an external source.
     webSearch: webSearchSettingsSchema.default({}),

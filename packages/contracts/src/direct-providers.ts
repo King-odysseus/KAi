@@ -22,6 +22,8 @@ export const providerModelCatalogSchema = z
     source: z.enum(['live', 'preset']),
     fetchedAt: z.string().datetime(),
     error: z.string().max(2_000).nullable(),
+    /** The context window each model reported, in tokens, when the server says (loaded size first, then the maximum). */
+    contextLengths: z.record(z.string().min(1).max(500), z.number().int().positive()).optional(),
   })
   .strict();
 export type ProviderModelCatalog = z.infer<typeof providerModelCatalogSchema>;

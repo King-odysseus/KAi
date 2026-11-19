@@ -64,6 +64,21 @@ export function invalidateRepoMap(root?: string): void {
 }
 
 /** Symbols a source file declares at its top level, in order, without duplicates. */
+/**
+ * Where each declaration in a file is, with its line number and the line itself: a file's shape in one call, for a
+ * model that would otherwise search for each export in turn. Empty for a language the map does not know.
+ */
+export function outlineFile(relativePath: string, source: string): Array<{ line: number; text: string }> {
+  const rule = RULE_BY_EXTENSION.get(path.extname(relativePath).toLowerCase());
+  if (!rule) return [];
+  const outline: Array<{ line: number; text: string }> = [];
+  source.split(/\r?\n/).forEach((line, index) => {
+    if (line.length > 300) return;
+    if (rule.patterns.some((pattern) => pattern.exec(line)?.[1])) outline.push({ line: index + 1, text: line.trim().slice(0, 200) });
+  });
+  return outline;
+}
+
 export function extractSymbols(relativePath: string, source: string): string[] {
   const rule = RULE_BY_EXTENSION.get(path.extname(relativePath).toLowerCase());
   if (!rule) return [];

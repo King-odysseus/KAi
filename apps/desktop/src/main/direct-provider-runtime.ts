@@ -96,6 +96,7 @@ const WRITING_HELPER_AUTONOMY: ReadonlySet<AutonomyMode> = new Set<AutonomyMode>
 const SUBAGENT_WRITER_TOOLS: ReadonlySet<string> = new Set([
   'view_image',
   'read_file',
+  'outline_file',
   'search_files',
   'list_files',
   'diagnostics',
@@ -166,6 +167,7 @@ const EXPLORE_OUTPUT_TOKEN_BUDGET = 4_096;
 const SUBAGENT_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'view_image',
   'read_file',
+  'outline_file',
   'search_files',
   'list_files',
   'diagnostics',
@@ -345,6 +347,7 @@ export function compactAnthropicToolHistory(tail: readonly AnthropicMessage[]): 
     }
   }
   const entries: string[] = [];
+  let lastCommand: { name: string; args: string; output: string } | null = null;
   // Only the last thing the model said is kept; see compactChatToolHistory.
   const spoken = (message: AnthropicMessage): boolean => message.role === 'assistant' && anthropicBlocksText(message.content).trim().length > 0 && (typeof message.content === 'string' || message.content.some((block) => block.type === 'text' && typeof block.text === 'string' && block.text.trim().length > 0));
   const lastSaid = tail.map((message, index) => (spoken(message) ? index : -1)).reduce((a, b) => Math.max(a, b), -1);
@@ -357,6 +360,7 @@ export function compactAnthropicToolHistory(tail: readonly AnthropicMessage[]): 
       const result = results.get(String(block.id));
       const status = result === undefined ? 'no result' : (toolResultFailed(result) ? 'failed' : 'ok');
       entries.push(`${String(block.name ?? 'unknown')} ${clip(JSON.stringify(block.input ?? {}), CONTINUATION_TEXT_LIMIT)} -> ${status}${result ? `: ${clip(result, CONTINUATION_TEXT_LIMIT)}` : ''}`);
+      if (COMMAND_TOOL.test(String(block.name ?? '')) && result !== undefined) lastCommand = { name: String(block.name), args: JSON.stringify(block.input ?? {}), output: result };
     }
   }
   const shown = entries.slice(-CONTINUATION_ENTRY_LIMIT);
@@ -365,7 +369,7 @@ export function compactAnthropicToolHistory(tail: readonly AnthropicMessage[]): 
     'Progress so far on this task (your earlier tool calls, oldest first):',
     ...(omitted > 0 ? [`(${omitted} earlier steps not shown)`] : []),
     ...shown.map((entry, index) => `${omitted + index + 1}. ${entry}`),
-  ].join('\n');
+  ].join('\n') + lastCommandNote(lastCommand);
 }
 
 /** Adds text as the next user turn, joining it to a user turn that is already last, as the Anthropic API wants roles to alternate. */
@@ -378,12 +382,27 @@ function pushUserText(messages: AnthropicMessage[], text: string): void {
   messages.push({ role: 'user', content: text });
 }
 
+/** A tool that runs a command or a check: its output is what the model would otherwise run again after a fold. */
+const COMMAND_TOOL = /run_command|diagnostics|terminal_(?:run|read|write)/;
+const LAST_OUTPUT_CHARS = 2_000;
+
+/**
+ * The last command the run made and the end of its output, kept whole across a fold. A summary clips every result, and
+ * a model that lost the test failures it was fixing runs the tests again, every fold, to read them.
+ */
+function lastCommandNote(call: { name: string; args: string; output: string } | null): string {
+  if (!call) return '';
+  const output = call.output.length > LAST_OUTPUT_CHARS ? `…${call.output.slice(-LAST_OUTPUT_CHARS)}` : call.output;
+  return `\n\nThe last command you ran (${call.name} ${clip(call.args, 300)}) and the end of its output, kept in full so you do not need to run it again:\n${output}`;
+}
+
 export function compactChatToolHistory(tail: readonly ChatMessage[]): string {
   const results = new Map<string, ChatMessage>();
   for (const message of tail) {
     if (message.role === 'tool' && message.tool_call_id) results.set(message.tool_call_id, message);
   }
   const entries: string[] = [];
+  let lastCommand: { name: string; args: string; output: string } | null = null;
   // Every "I will continue..." the model wrote would otherwise stay in the summary, and a model that reads a page of its
   // own announcements announces again. Only the last thing it said is kept; what it did is kept in full.
   const lastSaid = tail.map((message, index) => (message.role === 'assistant' && textOfContent(message.content).trim() ? index : -1)).reduce((a, b) => Math.max(a, b), -1);
@@ -396,6 +415,7 @@ export function compactChatToolHistory(tail: readonly ChatMessage[]): string {
       const resultText = textOfContent(result?.content);
       const status = result ? (toolResultFailed(resultText) ? 'failed' : 'ok') : 'no result';
       entries.push(`${call.function.name} ${clip(call.function.arguments, CONTINUATION_TEXT_LIMIT)} -> ${status}${resultText ? `: ${clip(resultText, CONTINUATION_TEXT_LIMIT)}` : ''}`);
+      if (COMMAND_TOOL.test(call.function.name) && result) lastCommand = { name: call.function.name, args: call.function.arguments, output: resultText };
     }
   }
   const shown = entries.slice(-CONTINUATION_ENTRY_LIMIT);
@@ -404,7 +424,7 @@ export function compactChatToolHistory(tail: readonly ChatMessage[]): string {
     'Progress so far on this task (your earlier tool calls, oldest first):',
     ...(omitted > 0 ? [`(${omitted} earlier steps not shown)`] : []),
     ...shown.map((entry, index) => `${omitted + index + 1}. ${entry}`),
-  ].join('\n');
+  ].join('\n') + lastCommandNote(lastCommand);
 }
 
 /**
@@ -772,7 +792,7 @@ export class DesktopDirectProviderRuntime {
     // tokens are folded into the parent run's totals by the caller, which is where the parent's guard already is.
     const toolRuntime = new DesktopProjectToolRuntime(projectRoot);
     const readOnlyTools = projectToolDefinitions.filter(
-      (definition) => definition.name === 'view_image' || definition.name === 'read_file' || definition.name === 'search_files' || definition.name === 'list_files',
+      (definition) => definition.name === 'view_image' || definition.name === 'read_file' || definition.name === 'outline_file' || definition.name === 'search_files' || definition.name === 'list_files',
     );
     const messages: AnthropicMessage[] = [{
       role: 'user',
@@ -1527,7 +1547,8 @@ export class DesktopDirectProviderRuntime {
     let reasoningOnly = false;
     // The size the person chose in Settings: a long run folds its older tool activity into a summary at this point,
     // so one run does not keep growing past it. Zero (or no setting) leaves the history alone.
-    const compactAt = compactThresholdFor((await this.settings.load().catch(() => undefined))?.usageBudget ?? { compactAtTokens: 0, compactAtTokensLocal: 0 }, capability.provider);
+    const loadedSettings = await this.settings.load().catch(() => undefined);
+    const compactAt = compactThresholdFor(loadedSettings?.usageBudget ?? { compactAtTokens: 0, compactAtTokensLocal: 0 }, capability.provider, loadedSettings?.localModelContext?.[capability.model]);
     let lastContextTokens = 0;
 
     try {
@@ -1845,7 +1866,8 @@ export class DesktopDirectProviderRuntime {
     const toolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
     // The size chosen for auto-compact (zero leaves the history alone), and where the part of this run that can be
     // folded into a summary begins.
-    const compactAt = compactThresholdFor((await this.settings.load().catch(() => undefined))?.usageBudget ?? { compactAtTokens: 0, compactAtTokensLocal: 0 }, capability.provider);
+    const loadedSettings = await this.settings.load().catch(() => undefined);
+    const compactAt = compactThresholdFor(loadedSettings?.usageBudget ?? { compactAtTokens: 0, compactAtTokensLocal: 0 }, capability.provider, loadedSettings?.localModelContext?.[capability.model]);
     let segmentStart = messages.length;
     let lastContextTokens = 0;
 

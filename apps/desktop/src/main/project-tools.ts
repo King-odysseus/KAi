@@ -12,6 +12,7 @@ import { BACKGROUND_REFUSAL, launchesBackgroundProcess } from './process-cleanup
 import { findGitBash } from './terminal';
 import { runTypeDiagnostics } from './type-diagnostics';
 import { WEB_TOOLS, WebToolRuntime, webFetchToolInputSchema, webSearchToolInputSchema, webToolDefinitionsFor } from './web-tools';
+import { outlineFile } from './repo-map';
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_READ_LINES = 400;
@@ -41,6 +42,8 @@ const IGNORED_DIRECTORIES = new Set([
   'out',
   'release',
 ]);
+
+const outlineInputSchema = z.object({ path: z.string().min(1) }).strict();
 
 const readFileInputSchema = z
   .object({
@@ -204,6 +207,17 @@ export const projectToolDefinitions = [
         start_line: { type: 'integer', minimum: 1, description: 'Optional first line to return (1-based).' },
         end_line: { type: 'integer', minimum: 1, description: 'Optional last line to return (1-based).' },
       },
+      required: ['path'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'outline_file',
+    description: 'List what a source file declares (functions, classes, constants, types, exports), each with its line number. One call shows a file\'s shape; then read_file the lines you need.',
+    parameters: {
+      type: 'object',
+      properties: { path: { type: 'string', description: 'Project-relative path of the file.' } },
       required: ['path'],
       additionalProperties: false,
     },
@@ -528,7 +542,7 @@ export class DesktopProjectToolRuntime {
 
   policy(name: string, autonomy: AutonomyMode): ProjectToolPolicy {
     // `diagnostics` runs the project's TypeScript compiler without a shell and with --noEmit, so it only reads.
-    if (name === 'view_image' || name === 'read_file' || name === 'search_files' || name === 'list_files' || name === 'diagnostics') return { decision: 'allow' };
+    if (name === 'view_image' || name === 'read_file' || name === 'outline_file' || name === 'search_files' || name === 'list_files' || name === 'diagnostics') return { decision: 'allow' };
     // The plan is the model's own note about where the task has got to, and KAI reads it to decide whether a task
     // is finished — so it is allowed at every level, plan mode included. It writes `.kai/plan.json` and nothing
     // else: it cannot touch project source. Without this line it fell through to the deny below as an unknown tool,
@@ -611,6 +625,7 @@ export class DesktopProjectToolRuntime {
     try {
       if (name === 'view_image') return await this.viewImage(deleteFileInputSchema.parse(rawInput));
       if (name === 'read_file') return await this.readFile(readFileInputSchema.parse(rawInput));
+      if (name === 'outline_file') return await this.outline(outlineInputSchema.parse(rawInput));
       if (name === 'search_files') return await this.searchFiles(searchFilesInputSchema.parse(rawInput));
       if (name === 'replace_in_file') return await this.replaceInFile(replaceInFileInputSchema.parse(rawInput));
       if (name === 'create_file') return await this.createFile(createFileInputSchema.parse(rawInput));
@@ -707,6 +722,20 @@ export class DesktopProjectToolRuntime {
       : bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP' ? 'image/webp' : undefined;
     if (!mimeType) throw new Error('Unsupported image: use PNG, JPEG, GIF or WebP.');
     return { ok: true, output: { path: normalizeRelative(input.path), content: [{ type: 'image', mimeType, data: bytes.toString('base64') }] } };
+  }
+
+  private async outline(input: z.infer<typeof outlineInputSchema>): Promise<ProjectToolExecution> {
+    const target = await this.resolveInsideProject(input.path, true);
+    const stat = await fs.stat(target);
+    if (!stat.isFile()) throw new Error(`${input.path} is not a file.`);
+    if (stat.size > MAX_READ_BYTES) throw new Error(`${input.path} is ${stat.size} bytes; the outline limit is ${MAX_READ_BYTES} bytes.`);
+    const outline = outlineFile(input.path, await fs.readFile(target, 'utf8'));
+    return {
+      ok: true,
+      output: outline.length
+        ? outline.map((entry) => `${entry.line}: ${entry.text}`).join('\n')
+        : `No declarations found in ${input.path}: it is empty, or not a language KAI outlines. Use read_file.`,
+    };
   }
 
   private async readFile(input: z.infer<typeof readFileInputSchema>): Promise<ProjectToolExecution> {
