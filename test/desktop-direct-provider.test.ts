@@ -175,7 +175,7 @@ describe('desktop direct provider runtime', () => {
       ]),
     );
     // A model with no known price is tagged as a paid run but gets no invented dollar amount.
-    const cost = result.events.find((event) => event.type === 'cost.update');
+    const cost = result.events.filter((event) => event.type === 'cost.update').at(-1);
     expect(cost).toMatchObject({ model: 'test-model', provider: expect.any(String) });
     expect(cost).not.toHaveProperty('amountUsd');
   });
@@ -256,7 +256,7 @@ describe('desktop direct provider runtime', () => {
     expect(result.events).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'cost.update', inputTokens: 9, outputTokens: 2, provider: 'openrouter', model: 'anthropic/claude-3.7-sonnet' }),
     ]));
-    const cost = result.events.find((event) => event.type === 'cost.update');
+    const cost = result.events.filter((event) => event.type === 'cost.update').at(-1);
     expect(cost).toMatchObject({ amountUsd: (9 * 5 + 2 * 25) / 1_000_000 });
   });
 

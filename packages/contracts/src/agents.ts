@@ -135,6 +135,11 @@ export const agentRunRequestSchema = z
     displayText: z.string().trim().min(1).max(500).optional(),
     // Which side of the split this run is. The Architect only plans and reviews, changes nothing, and files no lesson.
     splitRole: z.enum(['architect', 'implementer']).optional(),
+    /**
+     * The most tool rounds this one run may take before it is asked to wrap up and report. Set for a local builder's turn
+     * in the Architect split, so a stuck small model hands back to the Architect in minutes instead of working for hours.
+     */
+    toolRoundLimit: z.number().int().min(1).max(1_000).optional(),
   })
   .strict();
 

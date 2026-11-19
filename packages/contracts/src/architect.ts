@@ -125,6 +125,11 @@ export const architectBriefSchema = z
      * Each must be specific enough to do without judgement. Left out, the Implementer does all the work.
      */
     routine: z.array(z.string().trim().min(1).max(500)).max(30).optional(),
+    /**
+     * The work split into small changes, in order, for a builder that is a local model: each is run as its own short turn
+     * with a fresh start, so a small model never has to hold the whole task at once. Left out, the brief is one turn.
+     */
+    steps: z.array(z.string().trim().min(1).max(600)).max(15).optional(),
   })
   .strict();
 export type ArchitectBrief = z.infer<typeof architectBriefSchema>;

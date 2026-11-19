@@ -15,6 +15,7 @@ import {
   roleTargetKey,
   splitWorker,
   directProviderPreset,
+  isLocalProvider,
   type AgentId,
   type AgentRunRequest,
   type AgentRunResult,
@@ -31,6 +32,7 @@ import {
 } from '@kai/contracts';
 
 import type { ArchitectNote } from './architect-notes';
+import { NOTES_HEADING, stepFilePath } from './step-file';
 export { repeatsItself };
 
 /**
@@ -47,6 +49,16 @@ const LOG_LIMIT = 80;
 export const REVISIONS_BEFORE_STEP_IN = 3;
 /** Rounds without an approval before the person is asked whether to carry on. A question, never a cut-off. */
 export const ROUNDS_BEFORE_ASKING = 6;
+/**
+ * Tool rounds one local builder turn may take. A small model that is stuck does not stop on its own; it re-reads and
+ * restates, for hours. At this many rounds it is asked to report what it did, and the Architect takes it from there.
+ */
+export const LOCAL_BUILDER_ROUNDS = 30;
+
+/** A builder that runs on this machine or the home network: the one that needs small steps and a round budget. */
+export function isSmallBuilder(target: RoleTarget | null | undefined): boolean {
+  return target?.execution === 'api' && Boolean(target.api) && isLocalProvider(target.api!.provider);
+}
 /**
  * How much of the project's diff goes into one review prompt. Every review is a turn in the conversation, and a diff of
  * 60,000 characters (about 15,000 tokens) in each one made the conversation outgrow the auto-compact size as fast as it
@@ -216,6 +228,13 @@ const VERDICT_SHAPE = `{"verdict": "approve" | "revise" | "replan", "summary": "
 /** The brief and verdict shapes when a Worker is in the split: the brief may list routine steps, and a verdict may say its fixes are mechanical. */
 const BRIEF_SHAPE_WITH_WORKER = BRIEF_SHAPE.replace('"checkCommand"', '"routine": ["a mechanical step for the Worker, specific enough to do without judgement"], "checkCommand"');
 const VERDICT_SHAPE_WITH_WORKER = VERDICT_SHAPE.replace('"brief"', '"routine": true only when every correction is mechanical and the Worker may apply it, "brief"');
+/** What the Architect is told when the Implementer is a local model: split the work, so each step is one short fresh turn. */
+const STEPS_NOTE = 'The Implementer is a small local model. It does good work on one small change at a time and loses its way on a long task. So also split the work into "steps": 2 to 8 of them, in order, each one change it can finish in a few minutes. Each step names the file, says exactly what to change there, and how to tell it is done. Every step must change something: no step that only reads or investigates. Each step runs as its own turn with a fresh start, so a step must make sense with only the brief and the list of steps beside it.';
+function briefShape(workerLabel: string | undefined, smallBuilder: boolean | undefined): string {
+  const shape = workerLabel ? BRIEF_SHAPE_WITH_WORKER : BRIEF_SHAPE;
+  return smallBuilder ? shape.replace('"checkCommand"', '"steps": ["1. in path/file.ts, change this so that…"], "checkCommand"') : shape;
+}
+
 const WORKER_PLAN_NOTE = (workerLabel: string): string =>
   `A second builder, the Worker (${workerLabel}), is a smaller model for routine edits. Put in "routine" only mechanical steps it can do without judgement: renames, boilerplate, tests, docs, applying an edit you describe exactly. Leave the hard parts out of it: they stay with the Implementer. Leave "routine" out if nothing qualifies.`;
 
@@ -228,13 +247,14 @@ export function briefText(brief: ArchitectBrief): string {
   return lines.join('\n\n');
 }
 
-export function planPrompt(task: string, label: string, workerLabel?: string): string {
+export function planPrompt(task: string, label: string, workerLabel?: string, smallBuilder?: boolean): string {
   return [
     `[Architect · ${label}]`,
     'You are the Architect. Another agent, the Implementer, will write the code; you only plan. You are read-only: do not edit files or run commands that change anything. Read what you need to plan well.',
     `Task:\n${task}`,
-    `Write a brief the Implementer can work from without asking you anything. Keep it short and concrete. Finish your reply with its own line:\n${ARCHITECT_BRIEF_SENTINEL} ${workerLabel ? BRIEF_SHAPE_WITH_WORKER : BRIEF_SHAPE}`,
+    `Write a brief the Implementer can work from without asking you anything. Keep it short and concrete. Finish your reply with its own line:\n${ARCHITECT_BRIEF_SENTINEL} ${briefShape(workerLabel, smallBuilder)}`,
     'Every item in "doneChecks" must be something a reviewer can check against the files or a command, not a feeling.',
+    ...(smallBuilder ? [STEPS_NOTE] : []),
     ...(workerLabel ? [WORKER_PLAN_NOTE(workerLabel)] : []),
   ].join('\n\n');
 }
@@ -256,6 +276,29 @@ export function implementPrompt(brief: ArchitectBrief, task: string, label: stri
     BUILD_ACCESS_LINE,
     REPORT_LINE,
     `If you cannot make progress, stop and end your reply with its own line: ${ARCHITECT_STUCK_SENTINEL} followed by one sentence on what blocks you. The Architect will step in.`,
+  ].join('\n\n');
+}
+
+/**
+ * One step of a brief, for a local builder. It carries the goal and the list of steps, with this one marked, and none of
+ * the conversation: a small model does best with a short, fresh request that asks for one change.
+ */
+export function stepPrompt(brief: ArchitectBrief, task: string, label: string, index: number, stepFile?: string): string {
+  const steps = brief.steps ?? [];
+  const mark = (position: number): string => (position < index ? 'done' : position === index ? 'NOW' : 'later');
+  return [
+    `[Implementer · ${label} · step ${index + 1} of ${steps.length}]`,
+    'You are the Implementer, working through the Architect\'s plan one step at a time. Do this one step, then stop: the next step runs after you, with a fresh start.',
+    `The goal of the whole task: ${brief.goal}`,
+    `Original request, for context: ${task.length > 600 ? `${task.slice(0, 600)}…` : task}`,
+    `The steps:\n${steps.map((step, position) => `[${mark(position)}] ${position + 1}. ${step}`).join('\n')}`,
+    ...(brief.avoid.length ? [`Leave alone: ${brief.avoid.join('; ')}`] : []),
+    ...(stepFile ? [`The plan, and what earlier steps found, are in ${stepFile}. Read its "${NOTES_HEADING.replace(/^#+ /, '')}" section before you start. Before you finish, add one to three short lines under that heading saying what the next step needs to know. KAI ticks the step off; do not edit the step list.`] : []),
+    `Do step ${index + 1} now: ${steps[index] ?? ''}`,
+    'Read only what this step needs, make the change with your edit tools, and run a quick check if one proves it. Do not redo earlier steps and do not start later ones.',
+    BUILD_ACCESS_LINE,
+    REPORT_LINE,
+    `If you cannot do this step, stop and end your reply with its own line: ${ARCHITECT_STUCK_SENTINEL} followed by one sentence on what blocks you. The Architect will step in.`,
   ].join('\n\n');
 }
 
@@ -356,7 +399,7 @@ export function workerCorrectionPrompt(verdict: ArchitectVerdict, brief: Archite
   ].join('\n\n');
 }
 
-export function stepInPrompt(brief: ArchitectBrief, task: string, why: string, material: string, label: string, workerLabel?: string): string {
+export function stepInPrompt(brief: ArchitectBrief, task: string, why: string, material: string, label: string, workerLabel?: string, smallBuilder?: boolean): string {
   return [
     `[Architect · ${label}]`,
     'You are the Architect, and the Implementer is stuck. You are read-only: do not edit files and do not write the code yourself. Work out what is going wrong, then either give a corrected brief or point the Implementer in the right direction.',
@@ -364,7 +407,8 @@ export function stepInPrompt(brief: ArchitectBrief, task: string, why: string, m
     `Original request:\n${task}`,
     `Current brief:\n${briefText(brief)}`,
     `What changed in the project so far:\n${material || '(nothing yet)'}`,
-    `Finish your reply with its own line, a new brief that includes whatever the Implementer was missing:\n${ARCHITECT_BRIEF_SENTINEL} ${workerLabel ? BRIEF_SHAPE_WITH_WORKER : BRIEF_SHAPE}`,
+    `Finish your reply with its own line, a new brief that includes whatever the Implementer was missing:\n${ARCHITECT_BRIEF_SENTINEL} ${briefShape(workerLabel, smallBuilder)}`,
+    ...(smallBuilder ? [`${STEPS_NOTE} Steps already done stay done: list only what is left.`] : []),
     ...(workerLabel ? [WORKER_PLAN_NOTE(workerLabel)] : []),
   ].join('\n\n');
 }
@@ -400,6 +444,8 @@ export function implementerAutonomy(autonomy: AutonomyMode): AutonomyMode {
 interface BuildTurn {
   role: 'implementer' | 'worker';
   prompt: string;
+  /** Set when the turn is one step of a brief split for a local builder. */
+  step?: { index: number; of: number };
 }
 
 export interface RunBase {
@@ -467,6 +513,12 @@ export interface ArchitectCoachPorts {
    * here never stops the run.
    */
   record?(projectId: string, note: ArchitectNote): Promise<void>;
+  /** Writes a stepped brief to the run's step file (see step-file.ts), keeping notes already there. */
+  writeSteps?(projectId: string, conversationId: string, brief: ArchitectBrief, task: string): Promise<string>;
+  /** Ticks a step in the step file once its turn ends without getting stuck. */
+  tickStep?(projectId: string, conversationId: string, index: number): Promise<void>;
+  /** What the builder wrote under the notes heading, for the Architect. */
+  stepNotes?(projectId: string, conversationId: string): Promise<string>;
 }
 
 export interface CoachContext {
@@ -482,6 +534,8 @@ export interface CoachContext {
   exhausted?: Set<string>;
   /** Told each time a role moves to another model because of a limit, so a switch is never silent. */
   onSwitch?: (message: string) => void;
+  /** True when the Implementer is a local model: the Architect is asked for steps, and each runs as its own turn. */
+  smallBuilder?: boolean;
 }
 
 /**
@@ -626,7 +680,7 @@ export class ArchitectCoach {
   }
 
   async plan(context: CoachContext, task: string): Promise<{ brief: ArchitectBrief; readable: boolean; label: string; fallbackUsed: boolean; costUsd: number }> {
-    const answer = await this.ask(context, (label) => planPrompt(task, label, this.workerLabel(context)), { ...(context.firstTurn ?? {}), splitRole: 'architect', taskText: task });
+    const answer = await this.ask(context, (label) => planPrompt(task, label, this.workerLabel(context), context.smallBuilder), { ...(context.firstTurn ?? {}), splitRole: 'architect', taskText: task });
     const brief = parseBrief(answer.output);
     if (brief) this.note(context.projectId, { kind: 'plan', title: brief.goal, lines: [briefText(brief)] });
     return { brief: brief ?? fallbackBrief(task), readable: brief !== null, label: answer.label, fallbackUsed: answer.fallbackUsed, costUsd: answer.costUsd };
@@ -713,7 +767,7 @@ export class ArchitectCoach {
     why: string,
   ): Promise<{ brief: ArchitectBrief; readable: boolean; label: string; fallbackUsed: boolean; costUsd: number }> {
     const material = trimReviewMaterial(await this.ports.reviewMaterial(context.projectId).catch(() => ''));
-    const answer = await this.ask(context, (label) => stepInPrompt(brief, task, why, material, label, this.workerLabel(context)), { splitRole: 'architect', taskText: task });
+    const answer = await this.ask(context, (label) => stepInPrompt(brief, task, why, material, label, this.workerLabel(context), context.smallBuilder), { splitRole: 'architect', taskText: task });
     const next = parseBrief(answer.output);
     if (next) this.note(context.projectId, { kind: 'step-in', title: next.goal, lines: [`Why: ${why.slice(0, 400)}`, briefText(next)] });
     return { brief: next ?? brief, readable: next !== null, label: answer.label, fallbackUsed: answer.fallbackUsed, costUsd: answer.costUsd };
@@ -953,7 +1007,13 @@ export class ArchitectLoop {
     const stopped = (): boolean => active.controller.signal.aborted;
     let target = args.target;
     for (let switches = 0; ; switches += 1) {
-      const request = requestForTarget(target, base, prompt, { ...(args.first ? (context.firstTurn ?? {}) : {}), splitRole: 'implementer', taskText: input.prompt });
+      const request = requestForTarget(target, base, prompt, {
+        ...(args.first ? (context.firstTurn ?? {}) : {}),
+        splitRole: 'implementer',
+        taskText: input.prompt,
+        // A local builder that is stuck does not stop on its own; at this many rounds it reports and the Architect steps in.
+        ...(isSmallBuilder(target) ? { toolRoundLimit: LOCAL_BUILDER_ROUNDS } : {}),
+      });
       // A turn that starts repeating the same paragraph is going in circles: it is ended and handed to the Architect, who
       // keeps the work so far and gives it a smaller first step. Said in the log; the same blocker twice asks the person.
       const stopListening = onRepeatDetected(conversationId, () => {
@@ -1026,6 +1086,7 @@ export class ArchitectLoop {
       // The Implementer must be ready before any planning is paid for.
       let implementer = await this.coach.implementerTarget(context);
       let implementerLabel = this.coach.label(implementer);
+      context.smallBuilder = isSmallBuilder(implementer);
       // The Worker only takes part if it can run now; otherwise the Implementer does the routine steps too, and the log says so.
       const workerChoice = await this.coach.workerTarget(context);
       let worker = workerChoice.target;
@@ -1048,11 +1109,25 @@ export class ArchitectLoop {
       // What one round builds: the Implementer first, then the Worker for the brief's routine steps when there are any.
       const turnsFor = (forBrief: ArchitectBrief): BuildTurn[] => {
         const steps = worker ? (forBrief.routine ?? []) : [];
-        const planned: BuildTurn[] = [{ role: 'implementer', prompt: implementPrompt(forBrief, input.prompt, implementerLabel, steps.length ? workerLabel : undefined) }];
+        const stepped = context.smallBuilder && (forBrief.steps?.length ?? 0) >= 2;
+        const planned: BuildTurn[] = stepped
+          ? forBrief.steps!.map((_, index) => ({ role: 'implementer' as const, prompt: stepPrompt(forBrief, input.prompt, implementerLabel, index, this.ports.writeSteps ? stepFilePath(conversationId) : undefined), step: { index, of: forBrief.steps!.length } }))
+          : [{ role: 'implementer', prompt: implementPrompt(forBrief, input.prompt, implementerLabel, steps.length ? workerLabel : undefined) }];
         if (worker && workerLabel && steps.length) planned.push({ role: 'worker', prompt: workerPrompt(forBrief, input.prompt, workerLabel, steps) });
         return planned;
       };
+      // A stepped brief goes to the step file before its first step runs, and again whenever the Architect replaces it.
+      const writeSteps = async (forBrief: ArchitectBrief): Promise<void> => {
+        if (!context.smallBuilder || (forBrief.steps?.length ?? 0) < 2 || !this.ports.writeSteps) return;
+        await this.ports.writeSteps(input.projectId, conversationId, forBrief, input.prompt).catch(() => undefined);
+      };
       let turns = turnsFor(brief);
+      await writeSteps(brief);
+      if (context.smallBuilder) {
+        this.record(conversationId, owner, null, turns.some((turn) => turn.step)
+          ? `${implementerLabel} is a local model, so the brief runs as ${turns.filter((turn) => turn.step).length} short steps, each a fresh turn of at most ${LOCAL_BUILDER_ROUNDS} tool rounds.`
+          : `${implementerLabel} is a local model; the brief has no steps, so it runs as one turn of at most ${LOCAL_BUILDER_ROUNDS} tool rounds.`);
+      }
       let revisionsInARow = 0;
       let roundsSinceAsk = 0;
       let steppedInSinceApproval = false;
@@ -1075,7 +1150,7 @@ export class ArchitectLoop {
           const isWorker = turn.role === 'worker' && worker !== null;
           const label = isWorker ? (workerLabel ?? 'Worker') : implementerLabel;
           this.phase(conversationId, owner, state.round === 1 && index === 0 ? 'implementing' : 'correcting', 'implementer',
-            isWorker ? 'The Worker is doing the routine steps.' : state.round === 1 ? 'The Implementer is building from the brief.' : 'The Implementer is fixing what the Architect sent back.', label);
+            isWorker ? 'The Worker is doing the routine steps.' : turn.step ? `The Implementer is on step ${turn.step.index + 1} of ${turn.step.of}.` : state.round === 1 ? 'The Implementer is building from the brief.' : 'The Implementer is fixing what the Architect sent back.', label);
           const outcome = await this.buildTurn({
             context, input, active, owner, base: builderBase, prompt: turn.prompt,
             target: isWorker ? worker! : implementer, first: state.round === 1 && index === 0,
@@ -1089,6 +1164,9 @@ export class ArchitectLoop {
             return this.settle(conversationId, owner, 'failed', `The ${isWorker ? 'Worker' : 'Implementer'} (${this.coach.label(outcome.target)}) failed: ${(built.error ?? built.output ?? '').slice(-300) || 'the run failed'}`);
           }
           outputs.push(built.output ?? '');
+          if (turn.step && !implementerIsStuck(built.output ?? '') && !repeatsItself(built.output ?? '')) {
+            await this.ports.tickStep?.(input.projectId, conversationId, turn.step.index).catch(() => undefined);
+          }
           // A turn that asked for help or went round in circles ends the round: the Architect steps in, not the next builder.
           if (implementerIsStuck(built.output ?? '') || repeatsItself(built.output ?? '')) break;
         }
@@ -1127,7 +1205,8 @@ export class ArchitectLoop {
           reviewed = { verdict: checkFailedVerdict(precheck, 'The brief\'s check command failed, so the work went back without a review.'), readable: true, label: 'KAI check', fallbackUsed: false, costUsd: 0, check: precheck };
         } else {
           this.phase(conversationId, owner, 'reviewing', 'architect', 'The Architect is reviewing the work.');
-          reviewed = await this.coach.review(context, brief, input.prompt, builtOutput, active.controller.signal, precheck);
+          const notes = context.smallBuilder ? await this.ports.stepNotes?.(input.projectId, conversationId).catch(() => '') ?? '' : '';
+          reviewed = await this.coach.review(context, brief, input.prompt, notes ? `${builtOutput}\n\nThe builder's notes from its steps:\n${notes}` : builtOutput, active.controller.signal, precheck);
         }
         this.addCost(conversationId, 'architect', reviewed.costUsd);
         if (reviewed.check) {
@@ -1183,7 +1262,8 @@ export class ArchitectLoop {
             brief = verdict.brief;
             this.record(conversationId, owner, 'architect', 'New brief issued.');
           } else {
-            const stepped = await this.coach.stepIn(context, brief, input.prompt, why);
+            const notes = context.smallBuilder ? await this.ports.stepNotes?.(input.projectId, conversationId).catch(() => '') ?? '' : '';
+            const stepped = await this.coach.stepIn(context, brief, input.prompt, notes ? `${why}\n\nWhat the builder noted in its steps:\n${notes}` : why);
             this.addCost(conversationId, 'architect', stepped.costUsd);
             if (stopped()) return this.settle(conversationId, owner, 'stopped', 'Stopped.');
             brief = stepped.brief;
@@ -1192,6 +1272,7 @@ export class ArchitectLoop {
           steppedInSinceApproval = true;
           revisionsInARow = 0;
           turns = turnsFor(brief);
+          await writeSteps(brief);
           continue;
         }
 

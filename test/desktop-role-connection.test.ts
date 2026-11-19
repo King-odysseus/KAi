@@ -85,7 +85,7 @@ describe('a run that names its own API connection', () => {
     const chat = seen.find((entry) => entry.url === '/v1/chat/completions')!;
     expect(chat.body).toMatchObject({ model: 'qwen2.5-coder', stream: true });
     // Nothing went to the Settings address (port 9 refuses connections, so a stray call would have failed the run).
-    expect(result.events.find((event) => event.type === 'cost.update')).toMatchObject({ provider: 'ollama', amountUsd: 0 });
+    expect(result.events.filter((event) => event.type === 'cost.update').at(-1)).toMatchObject({ provider: 'ollama', amountUsd: 0 });
   });
 
   it('uses the role\'s own saved key, not the provider\'s default one', async () => {

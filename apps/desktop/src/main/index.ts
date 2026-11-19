@@ -83,6 +83,7 @@ import { DesktopAutopilot } from './autopilot';
 import { DesktopAutoSession } from './auto-session';
 import { ArchitectCoach, ArchitectLoop, targetLabel } from './architect-loop';
 import { appendArchitectNote, type ArchitectNote } from './architect-notes';
+import { readStepNotes, tickStepInFile, writeStepFile } from './step-file';
 import { AutoWindowStore } from './auto-session-store';
 import { AutopilotRunStore } from './autopilot-store';
 import { BrainMirrorLoop } from './brain-mirror';
@@ -1612,6 +1613,10 @@ async function startApplication(): Promise<void> {
         }).catch(() => undefined);
       }
     },
+    // A local builder's plan and notes, on disk, so what one step learns reaches the next (see step-file.ts).
+    writeSteps: async (projectId: string, conversationId: string, brief: import('@kai/contracts').ArchitectBrief, task: string) => writeStepFile(await projectRootFor(projectId), conversationId, brief, task),
+    tickStep: async (projectId: string, conversationId: string, index: number) => tickStepInFile(await projectRootFor(projectId), conversationId, index),
+    stepNotes: async (projectId: string, conversationId: string) => readStepNotes(await projectRootFor(projectId), conversationId),
     // A task started with no conversation gets one, shown in the window, exactly as Auto does for its own.
     openNewConversation: async (projectId: string, title: string, ownerWindowId: number) => {
       const created = await createBlankConversation(projectId, title);

@@ -40,6 +40,10 @@ import {
   namedStuckCause,
   REVISIONS_BEFORE_STEP_IN,
   ROUNDS_BEFORE_ASKING,
+  LOCAL_BUILDER_ROUNDS,
+  isSmallBuilder,
+  planPrompt,
+  stepPrompt,
   type ArchitectLoopPorts,
   type ComposerRecord,
 } from '../apps/desktop/src/main/architect-loop';
@@ -1041,5 +1045,86 @@ describe('a usage limit', () => {
     expect(limitKey({ execution: 'cli', agent: 'claude' })).not.toBe(limitKey({ execution: 'cli', agent: 'codex' }));
     expect(failedOnLimit({ error: 'You have hit your usage limit. It resets at 3pm.' })).toBe(true);
     expect(failedOnLimit({ error: 'connection dropped' })).toBe(false);
+  });
+});
+
+
+describe('a local builder works in short steps', () => {
+  const STEPS = ['In src/parser.ts, add an empty parse() export.', 'In src/parser.ts, make parse() split lines on "=".', 'In src/parser.test.ts, add a test for two lines.'];
+  const stepped = `Plan.
+${ARCHITECT_BRIEF_SENTINEL} ${JSON.stringify({ ...BRIEF, steps: STEPS })}`;
+
+  it('knows a local builder from a hosted or CLI one', () => {
+    expect(isSmallBuilder(LOCAL)).toBe(true);
+    expect(isSmallBuilder(KIMI_API)).toBe(false);
+    expect(isSmallBuilder(CODEX)).toBe(false);
+    expect(isSmallBuilder(null)).toBe(false);
+  });
+
+  it('asks the Architect for steps only when the builder is local', () => {
+    expect(planPrompt('task', 'Claude', undefined, true)).toContain('"steps"');
+    expect(planPrompt('task', 'Claude', undefined, false)).not.toContain('"steps"');
+  });
+
+  it('marks the step being done and the ones around it', () => {
+    const prompt = stepPrompt({ ...BRIEF, steps: STEPS }, 'Add a parser', 'Ollama', 1);
+    expect(prompt).toContain('step 2 of 3');
+    expect(prompt).toContain('[done] 1.');
+    expect(prompt).toContain('[NOW] 2.');
+    expect(prompt).toContain('[later] 3.');
+    expect(prompt).toContain('Do step 2 now: In src/parser.ts, make parse() split lines on "=".');
+  });
+
+  it('runs each step as its own budgeted turn, then has the work reviewed once', async () => {
+    const s = scripted({ planOutput: stepped });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split({ implementer: LOCAL })), 1);
+    const final = await finish(loop);
+    expect(final.phase).toBe('finished');
+    expect(s.architectPrompts[0]).toContain('"steps"');
+    expect(s.buildPrompts).toHaveLength(3);
+    s.buildPrompts.forEach((prompt, index) => expect(prompt).toContain(`step ${index + 1} of 3`));
+    const builds = s.requests.filter((request) => !request.freshSession);
+    for (const request of builds) expect(request.toolRoundLimit).toBe(LOCAL_BUILDER_ROUNDS);
+    expect(s.architectPrompts.filter((prompt) => prompt.includes('reviewing the Implementer'))).toHaveLength(1);
+  });
+
+  it('stops at a step that is stuck and hands the work to the Architect', async () => {
+    const s = scripted({ planOutput: stepped, built: ['Did step one.', `Cannot find the file.
+${ARCHITECT_STUCK_SENTINEL} src/parser.ts is missing.`, 'Did it.'] });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split({ implementer: LOCAL })), 1);
+    await finish(loop);
+    // Step 3 of the first plan never ran: the stuck step ended the round and the Architect stepped in.
+    expect(s.buildPrompts.slice(0, 2).map((prompt) => /step (\d) of 3/.exec(prompt)?.[1])).toEqual(['1', '2']);
+    expect(s.architectPrompts.some((prompt) => prompt.includes('the Implementer is stuck'))).toBe(true);
+  });
+
+  it('writes the step file, points each step at it, ticks finished steps and shows the notes to the Architect', async () => {
+    const s = scripted({ planOutput: stepped });
+    const written: string[] = [];
+    const ticked: number[] = [];
+    const loop = new ArchitectLoop({
+      ...s.ports,
+      writeSteps: async (_projectId, conversationId, forBrief) => { written.push(forBrief.goal); return `.kai/steps/${conversationId}.md`; },
+      tickStep: async (_projectId, _conversationId, index) => { ticked.push(index); },
+      stepNotes: async () => '- parse() lives in src/core/parse.ts',
+    });
+    await loop.start(input(split({ implementer: LOCAL })), 1);
+    await finish(loop);
+    expect(written).toEqual(['Add the parser']);
+    expect(ticked).toEqual([0, 1, 2]);
+    for (const prompt of s.buildPrompts) expect(prompt).toMatch(/\.kai\/steps\/.+\.md/);
+    expect(s.architectPrompts.find((prompt) => prompt.includes('reviewing the Implementer'))).toContain('parse() lives in src/core/parse.ts');
+  });
+
+  it('leaves a CLI builder on one unbudgeted turn, as before', async () => {
+    const s = scripted({ planOutput: stepped });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split()), 1);
+    await finish(loop);
+    expect(s.architectPrompts[0]).not.toContain('"steps"');
+    expect(s.buildPrompts).toHaveLength(1);
+    expect(s.requests.filter((request) => !request.freshSession)[0]!.toolRoundLimit).toBeUndefined();
   });
 });

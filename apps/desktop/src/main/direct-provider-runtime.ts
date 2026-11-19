@@ -16,6 +16,7 @@ import type {
 import type { AgentExecutionResult } from './agent-runtime';
 import { withRepeatNotice } from './repeat-watch';
 import { readPlan } from './plan-store';
+import { hasStepFile, stepFilePath } from './step-file';
 import { interjectionImages, steeringInstructionFor, takeInterjectionMessage } from './interjections';
 import {
   toolOutputImages,
@@ -293,7 +294,17 @@ export function shouldCompactRun(messages: readonly ChatMessage[], segmentStart:
   // with every request: counting those made a small limit unreachable, so a local model never folded or always did.
   // The size the model itself reported for its last request beats our estimate, which cannot see everything it was sent.
   const history = Math.max(estimateChatTokens(messages) - estimateChatTokens(messages.filter((message) => message.role === 'system')), reportedTokens - fixedTokens);
-  return history >= compactAt && estimateChatTokens(messages.slice(segmentStart)) >= Math.max(1_000, compactAt / 5);
+  return history >= compactAt && foldCanHelp(estimateChatTokens(messages.slice(segmentStart)), history, compactAt);
+}
+
+/**
+ * Whether folding the run's own activity would make a real difference. It folds only the part since the last fold, so
+ * when most of what is held is the starting prompt or a summary already made, folding gives nothing back and the run
+ * only loses its working state: it re-reads what it had read, reaches the size again, folds again, and never finishes.
+ * The block has to be a good share of the history, and big enough to be worth the loss.
+ */
+export function foldCanHelp(segmentTokens: number, historyTokens: number, compactAt: number): boolean {
+  return segmentTokens >= Math.max(2_000, compactAt / 2) && segmentTokens >= historyTokens * 0.4;
 }
 
 /** Rough size of an Anthropic-shaped history in tokens: text, tool calls and tool results, never the bytes of an image. */
@@ -318,7 +329,8 @@ function anthropicBlocksText(content: AnthropicMessage['content']): string {
 /** The same decision as `shouldCompactRun`, for an Anthropic-shaped history. */
 export function shouldCompactAnthropicRun(messages: readonly AnthropicMessage[], segmentStart: number, compactAt: number, reportedTokens = 0, fixedTokens = 0): boolean {
   if (compactAt <= 0 || messages.length - segmentStart < 2) return false;
-  return Math.max(estimateAnthropicTokens(messages), reportedTokens - fixedTokens) >= compactAt && estimateAnthropicTokens(messages.slice(segmentStart)) >= Math.max(1_000, compactAt / 5);
+  const history = Math.max(estimateAnthropicTokens(messages), reportedTokens - fixedTokens);
+  return history >= compactAt && foldCanHelp(estimateAnthropicTokens(messages.slice(segmentStart)), history, compactAt);
 }
 
 /** The tool activity of an Anthropic-shaped run so far, as the same short plain-text list the chat shape uses. */
@@ -333,11 +345,14 @@ export function compactAnthropicToolHistory(tail: readonly AnthropicMessage[]): 
     }
   }
   const entries: string[] = [];
-  for (const message of tail) {
+  // Only the last thing the model said is kept; see compactChatToolHistory.
+  const spoken = (message: AnthropicMessage): boolean => message.role === 'assistant' && anthropicBlocksText(message.content).trim().length > 0 && (typeof message.content === 'string' || message.content.some((block) => block.type === 'text' && typeof block.text === 'string' && block.text.trim().length > 0));
+  const lastSaid = tail.map((message, index) => (spoken(message) ? index : -1)).reduce((a, b) => Math.max(a, b), -1);
+  for (const [index, message] of tail.entries()) {
     if (message.role !== 'assistant') continue;
     const blocks: Array<Record<string, unknown>> = typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : message.content;
     for (const block of blocks) {
-      if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) entries.push(`You said: ${clip(block.text, CONTINUATION_TEXT_LIMIT)}`);
+      if (block.type === 'text' && typeof block.text === 'string' && block.text.trim() && index === lastSaid) entries.push(`You said: ${clip(block.text, CONTINUATION_TEXT_LIMIT)}`);
       if (block.type !== 'tool_use') continue;
       const result = results.get(String(block.id));
       const status = result === undefined ? 'no result' : (toolResultFailed(result) ? 'failed' : 'ok');
@@ -369,10 +384,13 @@ export function compactChatToolHistory(tail: readonly ChatMessage[]): string {
     if (message.role === 'tool' && message.tool_call_id) results.set(message.tool_call_id, message);
   }
   const entries: string[] = [];
-  for (const message of tail) {
+  // Every "I will continue..." the model wrote would otherwise stay in the summary, and a model that reads a page of its
+  // own announcements announces again. Only the last thing it said is kept; what it did is kept in full.
+  const lastSaid = tail.map((message, index) => (message.role === 'assistant' && textOfContent(message.content).trim() ? index : -1)).reduce((a, b) => Math.max(a, b), -1);
+  for (const [index, message] of tail.entries()) {
     if (message.role !== 'assistant') continue;
     const said = textOfContent(message.content).trim();
-    if (said) entries.push(`You said: ${clip(said, CONTINUATION_TEXT_LIMIT)}`);
+    if (said && index === lastSaid) entries.push(`You said: ${clip(said, CONTINUATION_TEXT_LIMIT)}`);
     for (const call of message.tool_calls ?? []) {
       const result = results.get(call.id);
       const resultText = textOfContent(result?.content);
@@ -501,6 +519,17 @@ function roundBreak(outputParts: readonly string[]): string {
 /** True when the endpoint turned the request down over the output-token ceiling rather than the request itself. */
 export function outputBudgetRejected(error: string | undefined): boolean {
   return /max_tokens|max output|output token|maximum number of tokens|too large|too many tokens/i.test(error ?? '');
+}
+
+/** The model's open plan as a reminder, for after a fold: the plan is where its place in the task is kept. Empty when there is none. */
+async function foldPlanNote(projectRoot: string, conversationId: string): Promise<string> {
+  const plan = await readPlan(projectRoot, conversationId).catch(() => null);
+  const planNote = plan && planIsUnfinished(plan) ? `\n\n${openPlanReminder(plan)}` : '';
+  // A builder working through steps keeps its plan and its notes in the step file: point it there, since the summary is lossy.
+  const stepNote = await hasStepFile(projectRoot, conversationId)
+    ? `\n\nYour step plan and the notes from earlier steps are in ${stepFilePath(conversationId)}. Read it before you carry on.`
+    : '';
+  return planNote + stepNote;
 }
 
 function continuationMessage(summary: string): string {
@@ -1201,7 +1230,7 @@ export class DesktopDirectProviderRuntime {
     let nudges = 0;
     let forceFinalAnswer = false;
     let resumeAfterSteer = false;
-    const toolRoundLimit = this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
+    const toolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
     const firstInputText = contextText?.trim()
       ? `${contextText.trim()}\n\nUser request:\n${request.prompt}`
       : request.prompt;
@@ -1487,7 +1516,7 @@ export class DesktopDirectProviderRuntime {
     // after each block the history is compacted and the run carries on in a fresh request.
     const deepSeek = isDeepSeekCapability(capability);
     const segmentLimit = deepSeek ? DEEPSEEK_MAX_TOOL_ROUNDS : Number.POSITIVE_INFINITY;
-    const totalToolRoundLimit = this.options.maxToolRounds ?? (deepSeek ? DEEPSEEK_MAX_TOTAL_TOOL_ROUNDS : MAX_TOTAL_TOOL_ROUNDS);
+    const totalToolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? (deepSeek ? DEEPSEEK_MAX_TOTAL_TOOL_ROUNDS : MAX_TOTAL_TOOL_ROUNDS);
     const providerRoundLimit = totalToolRoundLimit + PROVIDER_ROUND_HEADROOM;
     let segmentRounds = 0;
     let segmentStart = messages.length;
@@ -1693,7 +1722,7 @@ export class DesktopDirectProviderRuntime {
           }
         } else if (!forceFinalAnswer && toolRounds < totalToolRoundLimit && shouldCompactRun(messages, segmentStart, compactAt, lastContextTokens, fixedTokens())) {
           // The history reached the size chosen for auto-compact: the same fold as above, triggered by size.
-          const summary = compactChatToolHistory(messages.slice(segmentStart));
+          const summary = compactChatToolHistory(messages.slice(segmentStart)) + await foldPlanNote(projectRoot, request.conversationId);
           messages.length = segmentStart;
           messages.push({ role: 'user', content: continuationMessage(summary) });
           segmentStart = messages.length;
@@ -1813,7 +1842,7 @@ export class DesktopDirectProviderRuntime {
     let reasoningOnly = false;
     let forceFinalAnswer = false;
     let resumeAfterSteer = false;
-    const toolRoundLimit = this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
+    const toolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
     // The size chosen for auto-compact (zero leaves the history alone), and where the part of this run that can be
     // folded into a summary begins.
     const compactAt = compactThresholdFor((await this.settings.load().catch(() => undefined))?.usageBudget ?? { compactAtTokens: 0, compactAtTokensLocal: 0 }, capability.provider);
@@ -2013,7 +2042,7 @@ export class DesktopDirectProviderRuntime {
         messages.push({ role: 'user', content: toolResults as Array<Record<string, unknown>> });
         if (!forceFinalAnswer && toolRounds < toolRoundLimit && shouldCompactAnthropicRun(messages, segmentStart, compactAt, lastContextTokens, fixedTokens())) {
           // The history reached the size chosen for auto-compact: fold this block of tool activity into a summary.
-          const summary = compactAnthropicToolHistory(messages.slice(segmentStart));
+          const summary = compactAnthropicToolHistory(messages.slice(segmentStart)) + await foldPlanNote(projectRoot, request.conversationId);
           messages.length = segmentStart;
           pushUserText(messages, continuationMessage(summary));
           segmentStart = messages.length;
@@ -2088,7 +2117,7 @@ export class DesktopDirectProviderRuntime {
     let nudges = 0;
     let forceFinalAnswer = false;
     let resumeAfterSteer = false;
-    const toolRoundLimit = this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
+    const toolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
 
     try {
       for (let providerRound = 0; providerRound < toolRoundLimit + PROVIDER_ROUND_HEADROOM; providerRound += 1) {

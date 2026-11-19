@@ -12,7 +12,7 @@ import {
   type AgentRunRequest,
   type AppSettings,
 } from '../packages/contracts/src';
-import { DesktopDirectProviderRuntime, compactAnthropicToolHistory, compactChatToolHistory, estimateAnthropicTokens, estimateChatTokens, shouldCompactAnthropicRun, shouldCompactRun, type ChatMessage } from '../apps/desktop/src/main/direct-provider-runtime';
+import { DesktopDirectProviderRuntime, compactAnthropicToolHistory, foldCanHelp, compactChatToolHistory, estimateAnthropicTokens, estimateChatTokens, shouldCompactAnthropicRun, shouldCompactRun, type ChatMessage } from '../apps/desktop/src/main/direct-provider-runtime';
 import { probeLocalServer } from '../apps/desktop/src/main/local-provider';
 import { listProviderModels } from '../apps/desktop/src/main/provider-models';
 import { assignTeam, billingFor, type AssignmentEnvironment } from '../apps/desktop/src/main/team-assign';
@@ -175,9 +175,35 @@ describe('LM Studio as a provider', () => {
   });
 
   it('counts the size the model reported when that is larger than the estimate', () => {
-    const history: ChatMessage[] = [{ role: 'user', content: 'start' }, { role: 'assistant', content: 'a'.repeat(4_000) }, { role: 'user', content: 'b'.repeat(4_000) }];
-    expect(shouldCompactRun(history, 1, 8_000)).toBe(false);
-    expect(shouldCompactRun(history, 1, 8_000, 10_000)).toBe(true);
+    const history: ChatMessage[] = [{ role: 'user', content: 'start' }, { role: 'assistant', content: 'a'.repeat(6_000) }, { role: 'user', content: 'b'.repeat(6_000) }];
+    expect(shouldCompactRun(history, 1, 4_000)).toBe(false);
+    expect(shouldCompactRun(history, 1, 4_000, 5_000)).toBe(true);
+  });
+
+  it('does not fold when folding cannot give anything back', () => {
+    // The starting prompt is most of what is held and a fold leaves it alone: folding the little that follows only costs
+    // the run its working state, so it re-reads what it read, reaches the size again, and folds again, for hours.
+    const history: ChatMessage[] = [{ role: 'user', content: 'p'.repeat(100_000) }, { role: 'assistant', content: 'q'.repeat(10_000) }, { role: 'user', content: 'r'.repeat(10_000) }];
+    expect(estimateChatTokens(history)).toBeGreaterThan(25_000);
+    expect(shouldCompactRun(history, 1, 20_000)).toBe(false);
+    expect(foldCanHelp(5_000, 29_000, 20_000)).toBe(false);
+    expect(foldCanHelp(12_000, 24_000, 20_000)).toBe(true);
+    expect(foldCanHelp(1_500, 3_000, 2_000)).toBe(false);
+  });
+
+  it('keeps only the last thing the model said in a summary, so it is not shown its own announcements', () => {
+    const tail: ChatMessage[] = [
+      { role: 'assistant', content: 'I will continue the fix.', tool_calls: [{ id: 'a', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } }] },
+      { role: 'tool', tool_call_id: 'a', content: 'contents' },
+      { role: 'assistant', content: 'I will continue the fix again.', tool_calls: [{ id: 'b', type: 'function', function: { name: 'read_file', arguments: '{"path":"b.ts"}' } }] },
+      { role: 'tool', tool_call_id: 'b', content: 'more' },
+      { role: 'assistant', content: 'Now running the tests.' },
+    ];
+    const summary = compactChatToolHistory(tail);
+    expect(summary).not.toContain('I will continue the fix');
+    expect(summary).toContain('You said: Now running the tests.');
+    expect(summary).toContain('read_file {"path":"a.ts"}');
+    expect(summary).toContain('read_file {"path":"b.ts"}');
   });
 
   it('folds an Anthropic-shaped run the same way', () => {
