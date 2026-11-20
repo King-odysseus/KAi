@@ -2241,8 +2241,22 @@ export function App(): ReactNode {
   }
 
   async function saveConversationRecord(conversation: ConversationRecord): Promise<void> {
+    // The conversation list carries a header-only `__summary` record for speed. Workspace can still update settings
+    // from that record (for example when Guided Build is toggled), but saving its empty turns would erase history.
+    // Fetch the full record first and merge only the header changes before crossing the strict IPC schema.
+    const summary = conversation as ConversationRecord & { __summary?: boolean };
+    let recordToSave = conversation;
+    if (summary.__summary) {
+      const full = await perform(
+        () => window.kaiDesktop.getConversation(conversation.id).then(unwrap),
+        'Loading conversation before saving',
+      );
+      if (!full) return;
+      const { __summary: _summary, turns: _summaryTurns, events: _summaryEvents, ...headerChanges } = summary;
+      recordToSave = { ...full, ...headerChanges };
+    }
     const saved = await perform(
-      () => window.kaiDesktop.saveConversation(conversation).then(unwrap),
+      () => window.kaiDesktop.saveConversation(recordToSave).then(unwrap),
       'Saving conversation',
     );
     if (!saved) return;
