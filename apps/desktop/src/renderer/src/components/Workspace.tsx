@@ -957,7 +957,7 @@ export function WorkspaceView({
       const previousPlan = guidedBuild?.steps.map((step, index) => `${index + 1}. ${step.title}\nWhy: ${step.why}\nFile: ${step.where}\nChange: ${step.instructions}\nCheck: ${step.acceptanceCriteria.join('; ')}`).join('\n\n') ?? '';
       const promptText = addIdea
         ? `The user has a new idea to add to their Guided Build plan: ${idea}\n\nCurrent plan: ${guidedBuild?.planTitle}\n${previousPlan}\n\nFit this idea into the plan in the right place, updating or adding steps as needed. Return the complete updated plan as JSON only with title and steps. Each step needs id, title, why, where (file path and symbol), instructions, optional code, acceptanceCriteria (array). Do not edit files.`
-        : `Create a beginner-friendly coding plan for the user's request: ${text}\n\nCoach style: ${guidedBuild?.style}. Explanation detail: ${guidedBuild?.detail}. Ask questions setting: ${guidedBuild?.questions}. Inspect the project and return JSON only with title and steps. Each step needs id, title, why, where (file path and symbol), instructions, optional code, acceptanceCriteria (array). Do not edit files. Answer questions the user asks directly; do not ask questions unless a decision truly blocks the work.`;
+        : guidedBuildPlanPrompt(text, guidedBuild?.style ?? 'tutor', guidedBuild?.detail ?? 'step-by-step', guidedBuild?.questions ?? 'blocked');
       guidedPlanStartTurns.current = activeConversation?.turns.length ?? 0;
       setGuidedPlanBusy(true);
       if (running) { if (queueConversationId) onQueuePrompt({ id: crypto.randomUUID(), conversationId: queueConversationId, text: promptText, options: { ...runOptions }, status: 'queued' }); return; }
@@ -1938,7 +1938,8 @@ export function WorkspaceView({
           onAddIdea={() => onComposerDraftChange('Add an idea to my plan: ')}
           onDismiss={() => setDismissedGuidedBuildConversation(activeConversation.id)}
           onGeneratePlan={() => {
-            const prompt = `Create a beginner-friendly, step-by-step coding plan for this project and this request: ${activeConversation.turns.filter((turn) => turn.role === 'user').map((turn) => turn.text).slice(-3).join('\n')}\n\nCoach style: ${guidedBuild.style}. Explanation detail: ${guidedBuild.detail}. Ask questions: ${guidedBuild.questions}. Inspect the project and return the plan as JSON with keys title and steps. Each step needs id, title, why, where (file path and symbol), instructions, optional code, acceptanceCriteria (array). Do not edit files.`;
+            const request = activeConversation.turns.filter((turn) => turn.role === 'user').map((turn) => turn.text).slice(-3).join('\n');
+            const prompt = guidedBuildPlanPrompt(request, guidedBuild.style, guidedBuild.detail, guidedBuild.questions);
             guidedPlanStartTurns.current = activeConversation.turns.length;
             setGuidedPlanBusy(true);
             onSend(prompt, { ...coachSendOptions, displayText: 'Coach: create my plan' });
@@ -3636,6 +3637,15 @@ function GuidedBuildChip({ state, agents, onOpen }: { state: NonNullable<Convers
   return <UiButton type="button" variant="secondary" className="!min-h-6 !gap-1 !rounded-full !px-2 !text-[11px]" aria-label="Guided Build is on; open run options to change Coach and Builder" title={`Coach ${names(state.coachAgent)} · Builder ${names(state.builderAgent)}. Click to change.`} onClick={onOpen}><Sparkles size={13} /><span>Guided Build</span></UiButton>;
 }
 
+function guidedBuildPlanPrompt(request: string, style: string, detail: string, questions: string): string {
+  return `Create a beginner-friendly coding plan for this request: ${request}
+
+Before planning, inspect the project systematically. Start by listing the project files and reading its top-level instructions, README, manifests, and workspace/package configuration. Map the major apps, packages, services, entry points, and tests. Use project file search and file reading tools to inspect the source files that define the relevant behavior and trace how data/actions flow between them. Follow imports and tests until you can explain which files own the change. The compact repository map may be truncated: treat it as an index, not as a complete reading of the codebase. Do not claim to have read every file if you did not; state any coverage limits in the plan introduction.
+
+Coach style: ${style}. Explanation detail: ${detail}. Questions setting: ${questions}.
+Return valid JSON only: {"title": string, "steps": [{"id": string, "title": string, "why": string, "where": string, "instructions": string, "code"?: string, "acceptanceCriteria": string[]}]}. Keep each step small enough for one Builder handoff. In where, give exactly one project-relative file path, optionally followed by a symbol or line anchor. Never concatenate multiple file paths into where; when a step needs multiple files, choose its main file and name the related files in instructions. Give concrete, beginner-friendly instructions and checks that match this repository. Do not edit files. Ask a question only if a decision truly blocks a safe, useful plan.`;
+}
+
 function GuidedBuildPanel({ state, disabled, onChange, onOpenFile, onAddIdea, onDismiss, onGeneratePlan, onUseBuilder, onNext, planBusy, reviewBusy, onReview }: {
   state: NonNullable<ConversationRecord['guidedBuild']>;
   disabled: boolean;
@@ -3667,6 +3677,7 @@ function GuidedBuildPanel({ state, disabled, onChange, onOpenFile, onAddIdea, on
       {state.planTitle && <h3 className="mt-3 text-sm font-semibold text-[var(--text)]">{state.planTitle}</h3>}
       {step ? <div className="mt-3 grid gap-2 rounded-lg border border-[color:var(--border-soft)] bg-[var(--bg-shell)] p-3">
         <div className="flex flex-wrap items-center gap-2"><strong className="text-xs text-[var(--text-muted)]">Step {state.currentStep + 1} of {state.steps.length}</strong><div className="ml-auto flex gap-2"><UiButton type="button" className="secondary-button" disabled={disabled || !step.where.trim()} onClick={() => onOpenFile(step.where.split(':')[0]!, Number(step.where.split(':')[1]) || undefined)}>Open file</UiButton><UiButton type="button" className="primary-button" disabled={disabled} onClick={onUseBuilder}>Builder: implement this step</UiButton></div></div>
+        {state.steps.length > 1 && <nav className="flex flex-wrap gap-1" aria-label="Choose a plan step">{state.steps.map((item, index) => <UiButton key={item.id} type="button" className={index === state.currentStep ? 'primary-button' : 'secondary-button'} aria-current={index === state.currentStep ? 'step' : undefined} disabled={disabled} onClick={() => onChange({ ...state, currentStep: index, review: null })}>{index + 1}. {item.title}</UiButton>)}</nav>}
         <label className="guided-build-field"><span>What are we doing?</span><input aria-label="Step name" className="guided-build-field-control" value={step.title} onChange={(event) => updateStep(state.currentStep, { title: event.target.value })} /></label>
         <label className="guided-build-field"><span>Why does this change help?</span><Textarea aria-label="Why this change matters" rows={2} className="guided-build-field-control" placeholder="A short explanation in everyday language" value={step.why} onChange={(event) => updateStep(state.currentStep, { why: event.target.value })} /></label>
         <label className="guided-build-field"><span>Which file should I edit?</span><input aria-label="File and code location" className="guided-build-field-control" placeholder="For example, src/App.tsx, around line 42" value={step.where} onChange={(event) => updateStep(state.currentStep, { where: event.target.value })} /></label>

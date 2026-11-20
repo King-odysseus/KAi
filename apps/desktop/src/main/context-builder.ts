@@ -50,6 +50,8 @@ export interface BuildProjectContextOptions {
   omitStatic?: boolean;
   /** Add an outline of the project's source files and what they declare. For agents that cannot explore on their own. */
   includeRepoMap?: boolean;
+  /** Give a high-context Coach a wider project index while keeping the default context small for local builders. */
+  repoMapMaxCharacters?: number;
   /** What KAI's own runs already did here, as lines. Omitted from the context entirely when there are none. */
   history?: readonly string[];
   /** Project-relative paths this turn touches; `.kai/rules` files whose `applyTo` matches one of them are included. */
@@ -79,7 +81,7 @@ export async function buildProjectContext(
   const files = await collectSelectedFiles(root, options.selectedPaths ?? [], instructionPaths);
   const skills = options.omitStatic ? [] : await collectSkills(root);
   const memories = collectMemories(options.memories ?? []);
-  const repoMap = options.includeRepoMap ? await collectRepoMap(root) : [];
+  const repoMap = options.includeRepoMap ? await collectRepoMap(root, options.repoMapMaxCharacters) : [];
   const history = options.history?.length
     ? [toEntry('history', 'Earlier runs here', 'KAI run history', options.history.join('\n'), false)]
     : [];
@@ -194,9 +196,9 @@ async function collectSelectedFiles(
   return entries;
 }
 
-async function collectRepoMap(root: string): Promise<ContextEntry[]> {
+async function collectRepoMap(root: string, maxCharacters?: number): Promise<ContextEntry[]> {
   try {
-    const map = await buildRepoMap(root);
+    const map = await buildRepoMap(root, maxCharacters ? { maxCharacters } : {});
     if (!map) return [];
     return [toEntry('map', 'Repository map', `${map.files} source files, ${map.symbols} symbols`, map.text, map.truncated)];
   } catch {

@@ -169,7 +169,10 @@ export function GuidedBuildLearnPanel(props: {
     const teachingStyle = `Explain in a ${build.style === 'senior-dev' ? 'senior developer' : 'tutor'} style with ${build.detail} detail.`;
     return addToPlan
       ? `Fit this new idea into my current coding plan. Add, combine, or reorder steps as needed, and keep the other useful steps. Current plan: ${build.planTitle}\n${existing}\nNew idea: ${idea}\nFor each step explain why it matters, name the exact file and place to edit, give clear instructions, and say how to check it. ${teachingStyle} ${questionRule} Return only JSON with title and steps; each step needs title, why, where, instructions, optional code, and acceptanceCriteria.`
-      : `Make a step-by-step coding plan for my idea: ${idea}\nFor each step explain why it matters, name the exact file and place to edit, give clear instructions, and say how to check it. ${teachingStyle} ${questionRule} Return only JSON with title and steps; each step needs title, why, where, instructions, optional code, and acceptanceCriteria.`;
+      : `Make a beginner-friendly, step-by-step coding plan for my idea: ${idea}\n
+First map the project: list its files, read top-level instructions, README, manifests and workspace configuration, and identify its major apps, packages, services, entry points and tests. Use search and file-reading tools to inspect the code that implements the relevant behavior and trace its imports and tests. The compact repository map may be truncated, so use it only as an index. Do not claim to have read every file if you did not; state coverage limits in the plan introduction.
+
+For each small Builder-sized step explain why it matters, name exactly one project-relative file in where (optionally with a symbol or line anchor), give clear instructions, and say how to check it. If related files matter, name them in instructions rather than concatenating paths in where. ${teachingStyle} ${questionRule} Return valid JSON only with title and steps; each step needs id, title, why, where, instructions, optional code, and acceptanceCriteria.`;
   };
   const askCoach = (): void => {
     const question = message.trim();
@@ -240,6 +243,7 @@ export function GuidedBuildLearnPanel(props: {
       {error && <p className="studio-note error" role="alert">{error}</p>}
       {step ? <section className="guided-build-active-step" aria-label="Current coding step">
         <div className="guided-build-step-heading"><span>STEP {build.currentStep + 1} OF {build.steps.length}</span><h3>{step.title}</h3></div>
+        {build.steps.length > 1 && <nav className="flex flex-wrap gap-1" aria-label="Choose a plan step">{build.steps.map((item, index) => <UiButton key={item.id} type="button" className={index === build.currentStep ? 'primary-button' : 'secondary-button'} aria-current={index === build.currentStep ? 'step' : undefined} disabled={Boolean(working)} onClick={() => update({ ...build, currentStep: index, review: null })}>{index + 1}. {item.title}</UiButton>)}</nav>}
         {step.why && <p>{step.why}</p>}
         {step.where && <div className="guided-build-file-row"><code>{step.where}</code><UiButton type="button" className="secondary-button" onClick={() => onOpenFile(step.where.split(':')[0]!, Number(step.where.split(':')[1]) || undefined)}>Open file</UiButton></div>}
         {step.instructions && <div className="guided-build-instructions"><strong>What to do</strong><p>{step.instructions}</p></div>}

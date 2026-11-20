@@ -8,7 +8,9 @@ const execFileAsync = promisify(execFile);
 const MAX_FILES = 1_500;
 const MAX_FILE_BYTES = 200 * 1024;
 const CACHE_TTL_MS = 60_000;
-const DEFAULT_MAX_CHARACTERS = 8_000;
+// Keep enough of a large, multi-package project visible for planning. The map is an index rather than full source;
+// agents still use file search and reading tools to inspect the code behind these declarations.
+const DEFAULT_MAX_CHARACTERS = 32_000;
 const SYMBOL_CAPS = [12, 6, 3, 0] as const;
 const IGNORED_DIRECTORIES = new Set([
   '.git', '.hg', '.svn', '.next', '.venv', '__pycache__', 'build', 'coverage', 'dist', 'node_modules', 'out', 'release', 'target', 'vendor',
@@ -59,7 +61,10 @@ const cache = new Map<string, { at: number; map: RepoMap | null }>();
 
 /** Drop the cached map for one project, or every project, so the next run sees fresh files. */
 export function invalidateRepoMap(root?: string): void {
-  if (root) cache.delete(path.resolve(root));
+  if (root) {
+    const prefix = `${path.resolve(root)}|`;
+    for (const key of cache.keys()) if (key.startsWith(prefix)) cache.delete(key);
+  }
   else cache.clear();
 }
 
@@ -104,10 +109,12 @@ export function extractSymbols(relativePath: string, source: string): string[] {
  */
 export async function buildRepoMap(root: string, options: RepoMapOptions = {}): Promise<RepoMap | null> {
   const resolved = path.resolve(root);
-  const cached = cache.get(resolved);
+  const maxCharacters = options.maxCharacters ?? DEFAULT_MAX_CHARACTERS;
+  const cacheKey = `${resolved}|${maxCharacters}`;
+  const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.map;
-  const map = await computeRepoMap(resolved, options.maxCharacters ?? DEFAULT_MAX_CHARACTERS);
-  cache.set(resolved, { at: Date.now(), map });
+  const map = await computeRepoMap(resolved, maxCharacters);
+  cache.set(cacheKey, { at: Date.now(), map });
   return map;
 }
 

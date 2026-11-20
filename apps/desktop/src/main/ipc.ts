@@ -2280,6 +2280,10 @@ export async function runConversationAgent(
       });
     }),
   };
+  // Coach and Architect runs use the selected high-context reviewer/planner; local Builders keep the standard map.
+  const coachRepoMapMaxCharacters = request.splitRole === 'architect' || request.displayText?.startsWith('Coach:')
+    ? 128_000
+    : undefined;
   const builtProjectContext = executionMode === 'api'
     ? await buildConversationContext(
         context,
@@ -2298,6 +2302,7 @@ export async function runConversationAgent(
         // What was recalled, said on the run. The event type has existed all along and was never emitted, so a run
         // gave no sign of whether it had memory behind it — including when it had none because the brain was slow.
         (summary) => memoryEvents.push(memoryEvent(conversation.id, request.agent, 'recall', summary)),
+        coachRepoMapMaxCharacters,
       )
     : await buildConversationContext(
         context,
@@ -2315,6 +2320,9 @@ export async function runConversationAgent(
         // the agent starts from a map of the project instead of walking the whole tree to find its way. A resumed
         // session already has it.
         !resumeSessionId,
+        undefined,
+        undefined,
+        coachRepoMapMaxCharacters,
       );
   // A direct API run holds the brain tools, so it is told what they are for: the Architect keeps decisions there and a
   // local model, which compacts early, reads them back instead of depending on a summary.
@@ -2500,6 +2508,8 @@ ${BRAIN_TOOLS_GUIDANCE}`
         false,
         true,
         memoryBudget,
+        undefined,
+        coachRepoMapMaxCharacters,
       );
       const handoff = renderConversationHandoff(conversation.turns.slice(0, -1));
       const promptBody = planNote ? `${planNote}\n\n${promptWithoutProjectContext}` : promptWithoutProjectContext;
@@ -3114,6 +3124,7 @@ async function buildConversationContext(
   budget?: MemoryBudget,
   /** Told what recall did, so the run can say it. Optional: the context preview has nobody to tell. */
   onRecall?: (summary: string) => void,
+  repoMapMaxCharacters?: number,
 ) {
   const recall = await recallScopedMemories(context, projectPath, projectName, prompt, budget);
   onRecall?.(recall.skipped
@@ -3136,6 +3147,7 @@ async function buildConversationContext(
     conventions: context.conventions.briefing(),
     omitStatic,
     includeRepoMap,
+    ...(repoMapMaxCharacters ? { repoMapMaxCharacters } : {}),
     ...(history ? { history } : {}),
   });
   // What KAI has learned about this project leads, on the turns that carry the outline: it is the part an agent would
