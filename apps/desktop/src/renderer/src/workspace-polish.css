@@ -60,6 +60,69 @@ html[data-theme]:root .page-view .chip-button:hover:not(:disabled) { border-colo
   border-color: var(--border);
   background-color: var(--bg-raised);
 }
+.guided-build-panel { color: var(--text); }
+.guided-build-field,
+.guided-build-title { display: grid; min-width: 0; gap: 5px; color: var(--text-muted); font-size: 12px; }
+.guided-build-title { min-width: min(280px, 100%); }
+html[data-theme]:root .guided-build-panel .guided-build-field-control {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 8px 10px;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.45;
+}
+html[data-theme]:root .guided-build-panel textarea.guided-build-field-control { min-height: 56px; resize: vertical; }
+html[data-theme]:root .guided-build-panel .guided-build-field-control::placeholder { color: var(--text-dim); opacity: 1; }
+html[data-theme]:root .guided-build-panel .guided-build-field-control:focus { outline: 2px solid var(--mint-strong); outline-offset: 1px; }
+.guided-build-panel .guided-build-title .guided-build-field-control { min-height: 34px; }
+.guided-build-learn-panel { display: flex; min-height: 0; height: 100%; flex-direction: column; gap: 10px; overflow: auto; padding: 12px; color: var(--text); }
+.guided-build-learn-header,
+.guided-build-plan-heading,
+.guided-build-builder-heading,
+.guided-build-step-footer,
+.guided-build-file-row { display: flex; align-items: center; gap: 8px; }
+.guided-build-learn-header { align-items: flex-start; justify-content: space-between; }
+.guided-build-learn-header h2,
+.guided-build-plan-heading h3,
+.guided-build-builder-heading h3,
+.guided-build-active-step h3 { margin: 0; color: var(--text); font-size: 14px; font-weight: 700; }
+.guided-build-learn-header h2 { display: flex; align-items: center; gap: 6px; }
+.guided-build-learn-header p,
+.guided-build-builder-heading p { margin: 4px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+.guided-build-active-step,
+.guided-build-empty,
+.guided-build-project-context { border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--bg-panel); padding: 11px; }
+.guided-build-step-heading > span { color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+.guided-build-step-heading h3 { margin-top: 3px; }
+.guided-build-active-step > p,
+.guided-build-empty p { margin: 7px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.guided-build-file-row { justify-content: space-between; margin-top: 8px; padding: 7px 8px; border-radius: 8px; background: var(--bg-inset); }
+.guided-build-file-row code { min-width: 0; overflow-wrap: anywhere; color: var(--text); font-size: 11px; }
+.guided-build-instructions { margin-top: 9px; color: var(--text); font-size: 12px; }
+.guided-build-instructions p { margin: 4px 0 0; color: var(--text-muted); line-height: 1.5; white-space: pre-wrap; }
+.guided-build-instructions ul { margin: 5px 0 0; padding-left: 18px; color: var(--text-muted); }
+.guided-build-instructions li { margin: 2px 0; }
+.guided-build-step-footer { flex-wrap: wrap; justify-content: flex-end; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.guided-build-step-footer > span { flex: 1 1 100%; color: var(--text-muted); font-size: 11px; }
+.guided-build-empty h3 { margin: 0; color: var(--text); font-size: 13px; }
+.guided-build-builder-heading { align-items: flex-start; justify-content: space-between; }
+.guided-build-agent-pickers { display: flex; flex-wrap: wrap; gap: 5px; }
+.guided-build-chat { display: flex; min-height: 80px; max-height: 42vh; flex-direction: column; gap: 7px; overflow: auto; }
+.guided-build-chat-turn { max-width: 96%; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-panel); padding: 8px 10px; }
+.guided-build-chat-turn.user { align-self: flex-end; background: var(--bg-raised); }
+.guided-build-chat-turn > strong { color: var(--accent); font-size: 10px; }
+.guided-build-chat-turn > :last-child { margin-top: 3px; color: var(--text); font-size: 12px; line-height: 1.5; }
+.guided-build-working { display: flex; align-items: center; gap: 6px; color: var(--accent); font-size: 12px; }
+.guided-build-mini-composer { margin-top: auto; }
+.guided-build-composer-hint { color: var(--text-dim); font-size: 10px; }
+.guided-build-project-context { color: var(--text-muted); font-size: 11px; }
+.guided-build-project-context summary { cursor: pointer; color: var(--text); font-weight: 600; }
+.guided-build-project-context > p { line-height: 1.5; }
 .page-view :is(.settings-section, .project-card, .service-hero, .metric, .blank-panel,
   .settings-category-toggle, .settings-subsection, .settings-save-summary) {
   border-radius: var(--radius-card);

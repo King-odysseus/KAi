@@ -12,6 +12,8 @@ import type {
   CompareRun,
   ConfigBackup,
   ConversationRecord,
+  GuidedBuild,
+  RoleTarget,
   ContextChip,
   ContextPreview,
   CredentialStatus,
@@ -274,6 +276,7 @@ export function App(): ReactNode {
   // The same hand-off for a board card, rather than a file. The card travels whole, because the Studio is the view
   // that holds the board: the Code view is pointed at the card rather than left to look it up in another project.
   const [codeLearnRequest, setCodeLearnRequest] = useState<{ cardId: string; title: string; stale: boolean; staleReason: string | null; nonce: number } | null>(null);
+  const [codeOpenRequest, setCodeOpenRequest] = useState<{ path: string; paths?: string[]; nonce: number } | null>(null);
   const [contextPreviewLoading, setContextPreviewLoading] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<AgentId>('codex');
   const signInAttempt = useRef(0);
@@ -1317,6 +1320,37 @@ export function App(): ReactNode {
     setView('workspace');
   }
 
+  async function runCodeGuidedBuild(prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code'): Promise<void> {
+    if (!bootstrap || !activeProject) return;
+    let conversation = activeConversation?.projectId === activeProject.id ? activeConversation : null;
+    if (!conversation) {
+      conversation = await perform(() => window.kaiDesktop.createConversation(activeProject.id, '').then(unwrap), 'Starting Guided Build');
+      if (!conversation) return;
+      setConversations((current) => [conversation!, ...current.filter((item) => item.id !== conversation!.id)]);
+      setActiveConversationId(conversation.id);
+    }
+    const target = (mode === 'coach' || mode === 'plan' || mode === 'review' ? build.coachTarget ?? build.builderTarget : build.builderTarget)
+      ?? ({ execution: 'cli', agent: selectedAgent } satisfies RoleTarget);
+    const state = { ...build, enabled: true, builderTarget: build.builderTarget ?? target, coachTarget: build.coachTarget ?? target };
+    const prepared = { ...conversation, guidedBuild: state, updatedAt: new Date().toISOString() };
+    await saveConversationRecord(prepared);
+    const displayText = mode === 'plan' ? (build.steps.length ? 'Add an idea to my plan' : 'Create my coding plan') : mode === 'review' ? 'Check this edit' : mode === 'coach' ? 'Ask the Coach' : mode === 'show-code' ? 'Show me the code to type' : 'Write this change in the file';
+    await runConversation(prepared, prompt, {
+      agent: target.agent ?? selectedAgent,
+      execution: target.execution,
+      route: 'direct',
+      autonomy: mode === 'show-code' || mode === 'plan' || mode === 'review' || mode === 'coach' ? 'plan' : selectedAutonomy,
+      ...(target.execution === 'api' && target.api ? { apiConnection: target.api, ...(target.api.model ? { model: target.api.model } : {}) } : {}),
+      ...(target.execution === 'cli' && target.model ? { model: target.model } : {}),
+      displayText,
+    });
+  }
+
+  async function updateGuidedBuildFromCode(build: GuidedBuild): Promise<void> {
+    if (!activeConversation || activeConversation.projectId !== activeProject?.id) return;
+    await saveConversationRecord({ ...activeConversation, guidedBuild: build, updatedAt: new Date().toISOString() });
+  }
+
   async function openStudioProject(
     studioProjectId: string,
     destination: 'composer' | 'editor' | 'generate' | 'crew',
@@ -1673,6 +1707,7 @@ export function App(): ReactNode {
           conversationId: conversation.id,
           prompt,
           ...(options.clientMessageId ? { clientMessageId: options.clientMessageId } : {}),
+          ...(options.displayText ? { displayText: options.displayText } : {}),
           agent: runAgentId,
           execution: runExecution,
           route: runRoute,
@@ -1705,6 +1740,13 @@ export function App(): ReactNode {
         result.conversation,
         ...current.filter((item) => item.id !== result.conversation.id),
       ]);
+      if (conversation.guidedBuild?.enabled && (options.displayText === 'Builder task' || options.displayText === 'Write this change in the file')) {
+        const changedPaths = [...new Set(result.conversation.turns.at(-1)?.fileChanges?.map((change) => change.path) ?? [])];
+        if (changedPaths.length) {
+          setCodeOpenRequest({ path: changedPaths[0]!, paths: changedPaths, nonce: Date.now() });
+          setView('code');
+        }
+      }
       if (result.signInRequired && capability) {
         markSignedOut(capability);
       } else if (result.error) {
@@ -2979,8 +3021,13 @@ export function App(): ReactNode {
                 onOpenSettings={() => setView('settings')}
                 onCreateReviewFollowup={(prompt) => { updateComposerDraft(prompt); setView('workspace'); }}
                 learnRequest={codeLearnRequest}
+                openRequest={codeOpenRequest}
                 guidedBuild={activeConversation?.guidedBuild ?? null}
-                onOpenGuidedBuild={() => { void openGuidedBuildInWorkspace(); }}
+                conversation={activeConversation?.projectId === activeProject?.id ? activeConversation : null}
+                agentCapabilities={agentCapabilities}
+                selectedAgent={selectedAgent}
+                onUpdateGuidedBuild={(build) => { void updateGuidedBuildFromCode(build); }}
+                onRunGuidedBuild={(prompt, build, mode) => { void runCodeGuidedBuild(prompt, build, mode); }}
               />
             </div>
           </main>

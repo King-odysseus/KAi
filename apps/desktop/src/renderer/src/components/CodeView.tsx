@@ -24,6 +24,9 @@ import type {
   CodeGuideAction,
   CodeGuideView,
   GuidedBuild,
+  ConversationRecord,
+  AgentCapability,
+  AgentId,
   GitFileInfo,
   GitChange,
   EditorWindowSnapshot,
@@ -251,14 +254,22 @@ export function CodeView({
   openRequest = null,
   learnRequest = null,
   guidedBuild = null,
-  onOpenGuidedBuild,
+  conversation = null,
+  agentCapabilities,
+  selectedAgent,
+  onUpdateGuidedBuild,
+  onRunGuidedBuild,
 }: {
   /** A file another part of the app wants shown; a new `nonce` asks again even for the same path. */
-  openRequest?: { path: string; nonce: number } | null;
+  openRequest?: { path: string; paths?: string[]; nonce: number } | null;
   /** A Studio card to learn from, with the project that owns it already open; a new `nonce` asks again for it. */
   learnRequest?: { cardId: string; title: string; stale: boolean; staleReason: string | null; nonce: number } | null;
   guidedBuild?: GuidedBuild | null;
-  onOpenGuidedBuild?: () => void;
+  conversation?: ConversationRecord | null;
+  agentCapabilities: readonly AgentCapability[];
+  selectedAgent: AgentId;
+  onUpdateGuidedBuild: (build: GuidedBuild) => void;
+  onRunGuidedBuild: (prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code') => void | Promise<void>;
   activeProject: ProjectRecord | null;
   editorState: EditorWindowSnapshot | null;
   autoSave: boolean;
@@ -1161,7 +1172,9 @@ export function CodeView({
     // The editor may still be starting, so the request waits until it is ready and is then handled once.
     if (!openRequest || !editorReady || !projectId || openRequest.nonce === handledOpenRequest.current) return;
     handledOpenRequest.current = openRequest.nonce;
-    void openFile(openRequest.path);
+    void (async () => {
+      for (const path of openRequest.paths?.length ? openRequest.paths : [openRequest.path]) await openFile(path);
+    })();
     // openFile reads the current editor through refs, so it does not need to be a dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openRequest, editorReady, projectId]);
@@ -2318,7 +2331,12 @@ export function CodeView({
             stripHidden={guideStripHidden}
             onToggleStrip={() => toggleGuideStrip(!guideStripHidden)}
             guidedBuild={guidedBuild}
-            onOpenGuidedBuild={onOpenGuidedBuild}
+            conversation={conversation}
+            agentCapabilities={agentCapabilities}
+            selectedAgent={selectedAgent}
+            onUpdateGuidedBuild={onUpdateGuidedBuild}
+            onRunGuidedBuild={onRunGuidedBuild}
+            onOpenFile={(path) => { void openFile(path); }}
           /> : sidePanel === 'review' ? <GuidedReviewPanel
             projectId={activeProject.id}
             changes={reviewChanges}
