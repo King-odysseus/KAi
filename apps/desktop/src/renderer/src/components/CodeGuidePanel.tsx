@@ -30,6 +30,7 @@ interface Props {
   stripHidden: boolean;
   onToggleStrip: () => void;
   guidedBuild?: GuidedBuild | null;
+  onOpenGuidedBuild?: () => void;
 }
 
 function StepMark({ state }: { state: CodeGuideStep['state'] }): ReactNode {
@@ -60,24 +61,25 @@ function Step({ step, index, busy, onAction }: { step: CodeGuideStep; index: num
   );
 }
 
-export function CodeGuidePanel({ view, explaining, busy, error = null, onExplain, onAction, stripHidden, onToggleStrip, guidedBuild = null }: Props): ReactNode {
+export function CodeGuidePanel({ view, explaining, busy, error = null, onExplain, onAction, stripHidden, onToggleStrip, guidedBuild = null, onOpenGuidedBuild }: Props): ReactNode {
   const [showHistory, setShowHistory] = useState(false);
 
   if (!view) {
     return (
-      <article className="studio-card" aria-label="Senior dev">
-        <h2><Sparkles size={16} /> Senior dev</h2>
+      <article className="studio-card" aria-label="Guided Build">
+        <h2><Sparkles size={16} /> Guided Build</h2>
         {error
           ? <p className="studio-note error" role="alert"><AlertTriangle size={13} /> {error}</p>
           : <p className="studio-note"><Loader2 className="spin" size={13} /> Reading where this project is…</p>}
+        {onOpenGuidedBuild && <UiButton type="button" className="primary-button" onClick={onOpenGuidedBuild}>Open Guided Build in Workspace</UiButton>}
       </article>
     );
   }
 
   const current = view.steps.find((step) => step.id === view.currentStepId);
   return (
-    <article className="studio-card" aria-label="Senior dev">
-      <h2><Sparkles size={16} /> Senior dev</h2>
+    <article className="studio-card" aria-label="Guided Build">
+      <h2><Sparkles size={16} /> Guided Build</h2>
       <UiButton type="button" className="link-button" onClick={onToggleStrip}>{stripHidden ? 'Show guide bar above editor' : 'Hide guide bar above editor'}</UiButton>
       <p className="studio-note">
         Reads this project — the repository, the files, what you have studied and the board — and says where it has
@@ -89,6 +91,7 @@ export function CodeGuidePanel({ view, explaining, busy, error = null, onExplain
           ? <><strong>Step {guidedBuild.currentStep + 1} of {guidedBuild.steps.length}: {guidedBuild.steps[guidedBuild.currentStep]!.title}</strong><p className="guide-explanation">{guidedBuild.steps[guidedBuild.currentStep]!.why || guidedBuild.steps[guidedBuild.currentStep]!.instructions}</p><p className="studio-note">{guidedBuild.review ? `Review: ${guidedBuild.review.status} — ${guidedBuild.review.summary}` : 'Make the edit in the Workspace Builder, then return here or open Workspace to ask the Coach to review it.'}</p></>
           : <p className="studio-note">No coding steps yet. Open Workspace and ask the Coach to create the plan.</p>}
       </section>}
+      {onOpenGuidedBuild && <div className="guide-now"><p className="studio-note">The Composer and Builder conversation are in Workspace. Your active step and Coach review stay linked to this project.</p><UiButton type="button" className="primary-button" onClick={onOpenGuidedBuild}>Open Guided Build in Workspace</UiButton></div>}
 
       <div className="guide-now">
         <h3>{view.narrative?.headline ?? current?.title ?? 'Where you are'}</h3>

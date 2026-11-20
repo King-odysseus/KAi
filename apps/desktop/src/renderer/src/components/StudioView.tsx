@@ -703,6 +703,15 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     );
   }
 
+  function guidedBuildWorkspacePicker(): ReactNode {
+    if (!projectId || !state) return null;
+    return <section className="studio-card studio-handoff" aria-label="Guided Build workspace">
+      <h2><Sparkles size={16} /> Guided Build</h2>
+      <p className="studio-note">This is the Studio plan. Open its linked Workspace project to use the Builder composer, choose separate Coach and Builder agents, and see their conversation.</p>
+      <UiButton type="button" className="primary-button" disabled={busy !== null} onClick={() => void onStartGuidedBuild(projectId, projectTitle)}>Open this project in Workspace</UiButton>
+    </section>;
+  }
+
   function linkedProjectName(linkedProjectId: string | null): string {
     if (!linkedProjectId) return 'Studio workspace only';
     return desktopProjects.find((project) => project.id === linkedProjectId)?.name ?? 'Linked folder';
@@ -2839,7 +2848,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
             ['board', `Board${board && board.cards.length > 0 ? ` (${board.cards.length})` : ''}`],
             ['design', 'Design'],
             ['chat', 'Studio chat'],
-            ['guide', 'Senior dev'],
+            ['guide', 'Guided Build'],
             ['team', 'Team'],
           ] as const).map(([id, label]) => (
             <UiButton key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? 'active' : undefined} onClick={() => setTab(id)}>{label}</UiButton>
@@ -2912,7 +2921,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
         </p>
       )}
 
-      {state?.status === 'done' && <div className="mb-3">{architectModePicker()}</div>}
+      {state?.status === 'done' && <div className="mb-3">{guidedBuildWorkspacePicker()}</div>}
 
       {building && (
         <article className="studio-card studio-handoff" role="status">
@@ -3879,7 +3888,6 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               busy={busy !== null}
               onExplain={() => void explainGuide()}
               onAction={(action) => void runGuideAction(action)}
-              onStartGuidedBuild={() => { if (projectId) void onStartGuidedBuild(projectId, projectTitle); }}
             />
           )}
 

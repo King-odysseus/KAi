@@ -533,6 +533,8 @@ export const guidedBuildSchema = z.object({
   enabled: z.boolean().default(false),
   coachAgent: agentIdSchema.nullable().default(null),
   coachModel: z.string().default(''),
+  builderAgent: agentIdSchema.nullable().default(null),
+  builderModel: z.string().default(''),
   style: z.enum(['tutor', 'senior-dev']).default('tutor'),
   detail: z.enum(['brief', 'step-by-step', 'line-by-line']).default('step-by-step'),
   questions: z.enum(['blocked', 'decisions', 'each-step']).default('blocked'),

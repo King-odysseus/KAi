@@ -1283,6 +1283,38 @@ export function App(): ReactNode {
     if (opened) setView('workflows');
   }
 
+  async function openGuidedBuildInWorkspace(): Promise<void> {
+    if (!activeProject) return;
+    let conversation = activeConversation?.projectId === activeProject.id ? activeConversation : null;
+    if (!conversation) {
+      conversation = await perform(
+        () => window.kaiDesktop.createConversation(activeProject.id, '').then(unwrap),
+        'Opening Guided Build in Workspace',
+      );
+      if (!conversation) return;
+    }
+    const guidedBuild = {
+      enabled: true,
+      coachAgent: conversation.guidedBuild?.coachAgent ?? selectedAgent,
+      coachModel: conversation.guidedBuild?.coachModel ?? '',
+      builderAgent: conversation.guidedBuild?.builderAgent ?? selectedAgent,
+      builderModel: conversation.guidedBuild?.builderModel ?? modelFor(selectedAgent, executionMode, modelChoices[`${executionMode}:${selectedAgent}`]),
+      style: conversation.guidedBuild?.style ?? 'tutor' as const,
+      detail: conversation.guidedBuild?.detail ?? 'step-by-step' as const,
+      questions: conversation.guidedBuild?.questions ?? 'blocked' as const,
+      followEdits: conversation.guidedBuild?.followEdits ?? true,
+      planTitle: conversation.guidedBuild?.planTitle ?? '',
+      steps: conversation.guidedBuild?.steps ?? [],
+      currentStep: conversation.guidedBuild?.currentStep ?? 0,
+      review: conversation.guidedBuild?.review ?? null,
+    };
+    const updated = { ...conversation, guidedBuild, updatedAt: new Date().toISOString() };
+    await saveConversationRecord(updated);
+    setConversations((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+    setActiveConversationId(updated.id);
+    setView('workspace');
+  }
+
   async function openStudioProject(
     studioProjectId: string,
     destination: 'composer' | 'editor' | 'generate' | 'crew',
@@ -1316,6 +1348,8 @@ export function App(): ReactNode {
         enabled: true,
         coachAgent: selectedAgent,
         coachModel: '',
+        builderAgent: selectedAgent,
+        builderModel: modelFor(selectedAgent, executionMode, modelChoices[`${executionMode}:${selectedAgent}`]),
         style: 'senior-dev' as const,
         detail: 'step-by-step' as const,
         questions: 'decisions' as const,
@@ -2941,6 +2975,7 @@ export function App(): ReactNode {
                 onCreateReviewFollowup={(prompt) => { updateComposerDraft(prompt); setView('workspace'); }}
                 learnRequest={codeLearnRequest}
                 guidedBuild={activeConversation?.guidedBuild ?? null}
+                onOpenGuidedBuild={() => { void openGuidedBuildInWorkspace(); }}
               />
             </div>
           </main>

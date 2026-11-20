@@ -19,7 +19,6 @@ interface Props {
   busy: boolean;
   onExplain: () => void;
   onAction: (action: GuideAction) => void;
-  onStartGuidedBuild?: () => void;
 }
 
 function StepMark({ state }: { state: StudioGuideStep['state'] }): ReactNode {
@@ -52,13 +51,13 @@ function Step({ step, index, busy, onAction }: { step: StudioGuideStep; index: n
   );
 }
 
-export function GuidePanel({ view, explaining, busy, onExplain, onAction, onStartGuidedBuild }: Props): ReactNode {
+export function GuidePanel({ view, explaining, busy, onExplain, onAction }: Props): ReactNode {
   const [showHistory, setShowHistory] = useState(false);
 
   if (!view) {
     return (
-      <article className="studio-card" aria-label="Senior dev">
-        <h2><Sparkles size={16} /> Senior dev</h2>
+      <article className="studio-card" aria-label="Studio plan progress">
+        <h2><Sparkles size={16} /> Studio plan progress</h2>
         <p className="studio-note"><Loader2 className="spin" size={13} /> Reading where this project is…</p>
       </article>
     );
@@ -66,13 +65,12 @@ export function GuidePanel({ view, explaining, busy, onExplain, onAction, onStar
 
   const current = view.steps.find((step) => step.id === view.currentStepId);
   return (
-    <article className="studio-card" aria-label="Senior dev">
-      <h2><Sparkles size={16} /> Senior dev</h2>
+    <article className="studio-card" aria-label="Studio plan progress">
+      <h2><Sparkles size={16} /> Studio plan progress</h2>
       <p className="studio-note">
         Reads this project — the brief, the plan, the board and the design — and says where it has got to and what to do
         next. The steps come from the project itself; the explanation is written for you.
       </p>
-      {onStartGuidedBuild && <UiButton type="button" className="primary-button" onClick={onStartGuidedBuild} disabled={busy}>Start Guided Build in Workspace</UiButton>}
 
       <div className="guide-now">
         <h3>{view.narrative?.headline ?? current?.title ?? 'Where you are'}</h3>

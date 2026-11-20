@@ -251,12 +251,14 @@ export function CodeView({
   openRequest = null,
   learnRequest = null,
   guidedBuild = null,
+  onOpenGuidedBuild,
 }: {
   /** A file another part of the app wants shown; a new `nonce` asks again even for the same path. */
   openRequest?: { path: string; nonce: number } | null;
   /** A Studio card to learn from, with the project that owns it already open; a new `nonce` asks again for it. */
   learnRequest?: { cardId: string; title: string; stale: boolean; staleReason: string | null; nonce: number } | null;
   guidedBuild?: GuidedBuild | null;
+  onOpenGuidedBuild?: () => void;
   activeProject: ProjectRecord | null;
   editorState: EditorWindowSnapshot | null;
   autoSave: boolean;
@@ -2304,7 +2306,7 @@ export function CodeView({
           <div className="code-side-panel-tabs" role="tablist" aria-label="Code assistance">
             <UiButton type="button" role="tab" aria-selected={sidePanel === 'learn'} className={sidePanel === 'learn' ? 'active' : ''} onClick={() => openSidePanel('learn')}>Learn</UiButton>
             <UiButton type="button" role="tab" aria-selected={sidePanel === 'review'} className={sidePanel === 'review' ? 'active' : ''} onClick={() => openSidePanel('review')}>Review</UiButton>
-            <UiButton type="button" role="tab" aria-selected={sidePanel === 'guide'} className={sidePanel === 'guide' ? 'active' : ''} onClick={() => openSidePanel('guide')}>Senior dev</UiButton>
+            <UiButton type="button" role="tab" aria-selected={sidePanel === 'guide'} className={sidePanel === 'guide' ? 'active' : ''} onClick={() => openSidePanel('guide')}>Guided Build</UiButton>
           </div>
           {sidePanel === 'guide' ? <CodeGuidePanel
             view={codeGuide}
@@ -2316,6 +2318,7 @@ export function CodeView({
             stripHidden={guideStripHidden}
             onToggleStrip={() => toggleGuideStrip(!guideStripHidden)}
             guidedBuild={guidedBuild}
+            onOpenGuidedBuild={onOpenGuidedBuild}
           /> : sidePanel === 'review' ? <GuidedReviewPanel
             projectId={activeProject.id}
             changes={reviewChanges}
