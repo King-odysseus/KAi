@@ -1295,6 +1295,8 @@ export function App(): ReactNode {
     }
     const guidedBuild = {
       enabled: true,
+      coachTarget: conversation.guidedBuild?.coachTarget ?? null,
+      builderTarget: conversation.guidedBuild?.builderTarget ?? null,
       coachAgent: conversation.guidedBuild?.coachAgent ?? selectedAgent,
       coachModel: conversation.guidedBuild?.coachModel ?? '',
       builderAgent: conversation.guidedBuild?.builderAgent ?? selectedAgent,
@@ -1346,6 +1348,8 @@ export function App(): ReactNode {
       ...conversation,
       guidedBuild: {
         enabled: true,
+        coachTarget: null,
+        builderTarget: null,
         coachAgent: selectedAgent,
         coachModel: '',
         builderAgent: selectedAgent,
@@ -1608,7 +1612,7 @@ export function App(): ReactNode {
     const apiRun = runExecution === 'api';
     const capability = agentCapabilities.find((agent) => agent.id === runAgentId);
     const requestedRoute = options.route ?? selectedRoute;
-    const runRoute = !apiRun && !capability?.supportsRoutes.includes('proxy') ? 'direct' : requestedRoute;
+    const runRoute = apiRun || !capability?.supportsRoutes.includes('proxy') ? 'direct' : requestedRoute;
     // The proxy supplies its own key, so a signed-out CLI can still run through it.
     const proxyWithoutAccount = runRoute === 'proxy' && capability?.state === 'signed_out';
     if (!apiRun && !capability?.available && !proxyWithoutAccount) {
@@ -1619,7 +1623,7 @@ export function App(): ReactNode {
       setError('Start Universal Proxy before running an agent through its proxy route.');
       return;
     }
-    if (apiRun && !directApiCapability?.available) {
+    if (apiRun && !options.apiConnection && !directApiCapability?.available) {
       setError(directApiCapability?.unavailableReason ?? 'Direct API mode is not available.');
       return;
     }
@@ -1673,6 +1677,7 @@ export function App(): ReactNode {
           execution: runExecution,
           route: runRoute,
           autonomy: runAutonomy,
+          ...(options.apiConnection ? { apiConnection: options.apiConnection } : {}),
           ...(() => {
             const saved = composerSelections[conversation.id];
             const savedFits = saved?.agent === runAgentId && saved?.execution === runExecution;

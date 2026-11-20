@@ -71,7 +71,7 @@ export function CodeGuidePanel({ view, explaining, busy, error = null, onExplain
         {error
           ? <p className="studio-note error" role="alert"><AlertTriangle size={13} /> {error}</p>
           : <p className="studio-note"><Loader2 className="spin" size={13} /> Reading where this project is…</p>}
-        {onOpenGuidedBuild && <UiButton type="button" className="primary-button" onClick={onOpenGuidedBuild}>Open Guided Build in Workspace</UiButton>}
+        {onOpenGuidedBuild && <><p className="studio-note">Choose separate CLI agents or local and cloud models for Coach and Builder in Workspace.</p><UiButton type="button" className="primary-button" onClick={onOpenGuidedBuild}>Open Guided Build in Workspace</UiButton></>}
       </article>
     );
   }
@@ -91,7 +91,7 @@ export function CodeGuidePanel({ view, explaining, busy, error = null, onExplain
           ? <><strong>Step {guidedBuild.currentStep + 1} of {guidedBuild.steps.length}: {guidedBuild.steps[guidedBuild.currentStep]!.title}</strong><p className="guide-explanation">{guidedBuild.steps[guidedBuild.currentStep]!.why || guidedBuild.steps[guidedBuild.currentStep]!.instructions}</p><p className="studio-note">{guidedBuild.review ? `Review: ${guidedBuild.review.status} — ${guidedBuild.review.summary}` : 'Make the edit in the Workspace Builder, then return here or open Workspace to ask the Coach to review it.'}</p></>
           : <p className="studio-note">No coding steps yet. Open Workspace and ask the Coach to create the plan.</p>}
       </section>}
-      {onOpenGuidedBuild && <div className="guide-now"><p className="studio-note">The Composer and Builder conversation are in Workspace. Your active step and Coach review stay linked to this project.</p><UiButton type="button" className="primary-button" onClick={onOpenGuidedBuild}>Open Guided Build in Workspace</UiButton></div>}
+      {onOpenGuidedBuild && <div className="guide-now"><p className="studio-note">The Composer and Builder conversation are in Workspace. Choose separate CLI agents or local and cloud models there; your active step and Coach review stay linked to this project.</p><UiButton type="button" className="primary-button" onClick={onOpenGuidedBuild}>Open Guided Build in Workspace</UiButton></div>}
 
       <div className="guide-now">
         <h3>{view.narrative?.headline ?? current?.title ?? 'Where you are'}</h3>

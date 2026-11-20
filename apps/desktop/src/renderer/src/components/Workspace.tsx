@@ -67,11 +67,14 @@ import {
   X,
 } from 'lucide-react';
 import { PlanApprovalBar, PLAN_APPROVED_PROMPT } from './PlanApprovalBar';
+import { CUSTOM_ROLE_MODEL, modelOf as roleModelOf, roleModelOptions, targetFromValue, targetOptions, targetValue, withModel } from './architect-settings';
 import { Fragment, memo, useCallback, useEffect, useRef, useState, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
 import type {
   AgentCapability,
   AgentId,
+  RoleTarget,
+  ApiConnection,
   AppSettings,
   AutopilotRunRecord,
   AutonomyMode,
@@ -157,6 +160,7 @@ export interface WorkspaceSendOptions {
   execution?: ExecutionMode;
   route?: RouteMode;
   architect?: ArchitectSplit;
+  apiConnection?: ApiConnection;
 }
 
 export type WorkspaceCommandKind = 'goal' | 'skills' | 'context' | 'checkpoint' | 'raw' | 'handoff' | 'preview-change' | 'prompt';
@@ -479,12 +483,16 @@ export function WorkspaceView({
     if (!activeConversation) return;
     void onUpdateConversation({ ...activeConversation, guidedBuild: update, updatedAt: new Date().toISOString() });
   };
-  const coachAgent = guidedBuild?.coachAgent ?? selectedAgent;
+  const coachTarget = guidedBuild?.coachTarget;
+  const coachAgent = coachTarget?.execution === 'cli' ? coachTarget.agent ?? selectedAgent : guidedBuild?.coachAgent ?? selectedAgent;
   const coachCapability = agentCapabilities.find((agent) => agent.id === coachAgent);
   const coachRoute: RouteMode = selectedRoute === 'proxy' && coachCapability?.supportsRoutes.includes('proxy') ? 'proxy' : 'direct';
-  const coachSendOptions: WorkspaceSendOptions = { agent: coachAgent, execution: 'cli', route: coachRoute, ...(guidedBuild?.coachModel ? { model: guidedBuild.coachModel } : {}) };
-  const builderAgent = guidedBuild?.builderAgent ?? selectedAgent;
-  const builderModel = guidedBuild?.builderModel ?? selectedModel;
+  const coachSendOptions: WorkspaceSendOptions = coachTarget?.execution === 'api'
+    ? { agent: selectedAgent, execution: 'api', apiConnection: { ...coachTarget.api!, ...(guidedBuild?.coachModel ? { model: guidedBuild.coachModel } : {}) } }
+    : { agent: coachAgent, execution: 'cli', route: coachRoute, ...(coachTarget?.model || guidedBuild?.coachModel ? { model: coachTarget?.model ?? guidedBuild?.coachModel } : {}) };
+  const builderTarget = guidedBuild?.builderTarget;
+  const builderAgent = builderTarget?.execution === 'cli' ? builderTarget.agent ?? selectedAgent : guidedBuild?.builderAgent ?? selectedAgent;
+  const builderModel = builderTarget?.execution === 'cli' ? builderTarget.model ?? guidedBuild?.builderModel ?? selectedModel : builderTarget?.api?.model ?? guidedBuild?.builderModel ?? selectedModel;
   const runAgent = guidedBuild?.enabled ? builderAgent : selectedAgent;
   const runModel = guidedBuild?.enabled ? builderModel : selectedModel;
   const guidedStep = guidedBuild?.steps[guidedBuild.currentStep];
@@ -517,7 +525,7 @@ export function WorkspaceView({
         }];
       });
       if (steps.length > 0) {
-        const current = activeConversation.guidedBuild ?? { enabled: true, coachAgent, coachModel: '', builderAgent: selectedAgent, builderModel: selectedModel, style: 'tutor' as const, detail: 'step-by-step' as const, questions: 'blocked' as const, followEdits: true, planTitle: '', steps: [], currentStep: 0, review: null };
+        const current = activeConversation.guidedBuild ?? { enabled: true, coachTarget: null, builderTarget: null, coachAgent, coachModel: '', builderAgent: selectedAgent, builderModel: selectedModel, style: 'tutor' as const, detail: 'step-by-step' as const, questions: 'blocked' as const, followEdits: true, planTitle: '', steps: [], currentStep: 0, review: null };
         void onUpdateConversation({ ...activeConversation, guidedBuild: { ...current, enabled: true, planTitle: plan.title, steps, currentStep: 0, review: null }, updatedAt: new Date().toISOString() });
       }
       setGuidedPlanBusy(false);
@@ -614,13 +622,13 @@ export function WorkspaceView({
   const brainReady = settings.cognitive1.enabled;
   const profile = experienceProfile(settings.experienceLevel);
   // Guided Build's role pickers choose independent CLI agents; ordinary Workspace runs keep the existing CLI/API setting.
-  const apiRun = !guidedBuild?.enabled && executionMode === 'api';
+  const apiRun = guidedBuild?.enabled ? builderTarget?.execution === 'api' : executionMode === 'api';
   const cliProxySupported = Boolean(selectedCapability?.supportsRoutes.includes('proxy'));
   const routeAvailable = apiRun || (cliProxySupported && proxyReady);
-  const effectiveRoute = apiRun || cliProxySupported ? selectedRoute : 'direct';
+  const effectiveRoute = apiRun ? 'direct' : cliProxySupported ? selectedRoute : 'direct';
   // A signed-out CLI can still run through the proxy, which supplies its own key.
   const ready = apiRun
-    ? Boolean(directApiCapability?.available)
+    ? (guidedBuild?.enabled ? true : Boolean(directApiCapability?.available))
     : Boolean(selectedCapability?.available || (effectiveRoute === 'proxy' && selectedCapability?.state === 'signed_out'));
   const unavailableReason = apiRun
     ? directApiCapability?.unavailableReason ?? 'Direct API status is unavailable.'
@@ -924,7 +932,7 @@ export function WorkspaceView({
 
   const queueOrSend = (text: string, options = sendOptions): void => {
     if (!text || !activeProject || !ready) return;
-    const runOptions = { ...(options ?? {}), agent: runAgent, execution: apiRun ? 'api' as const : 'cli' as const, route: effectiveRoute, ...(runModel ? { model: runModel } : {}) };
+    const runOptions = { ...(options ?? {}), agent: runAgent, execution: apiRun ? 'api' as const : 'cli' as const, route: effectiveRoute, ...(guidedBuild?.enabled && builderTarget?.execution === 'api' ? { apiConnection: { ...builderTarget.api!, ...(runModel ? { model: runModel } : {}) } } : {}), ...(runModel ? { model: runModel } : {}) };
     if (running) {
       if (queueConversationId) onQueuePrompt({
         id: crypto.randomUUID(), conversationId: queueConversationId, text,
@@ -2617,6 +2625,8 @@ export function WorkspaceView({
                 disabled={busy || running || architectSplitActive(architect.split)}
                 onChange={(enabled) => setGuidedBuild({
                   enabled,
+                  coachTarget: guidedBuild?.coachTarget ?? null,
+                  builderTarget: guidedBuild?.builderTarget ?? null,
                   coachAgent: guidedBuild?.coachAgent ?? selectedAgent,
                   coachModel: guidedBuild?.coachModel ?? '',
                   builderAgent: guidedBuild?.builderAgent ?? selectedAgent,
@@ -2632,6 +2642,7 @@ export function WorkspaceView({
                 })}
               />
               {guidedBuild?.enabled && <GuidedBuildAgentRow
+                credentialIds={architect.credentialIds}
                 coachAgent={coachAgent}
                 coachModel={guidedBuild.coachModel}
                 builderAgent={builderAgent}
@@ -2640,6 +2651,7 @@ export function WorkspaceView({
                 disabled={busy || running}
                 onChange={setGuidedBuild}
                 state={guidedBuild}
+                liveModels={architect.liveModels}
               />}
             </OptionSection>}
           </div>}
@@ -3470,7 +3482,7 @@ function GuidedBuildToggle({ enabled, disabled, onChange }: { enabled: boolean; 
   </label>;
 }
 
-function GuidedBuildAgentRow({ state, coachAgent, coachModel, builderAgent, builderModel, agents, disabled, onChange }: {
+function GuidedBuildAgentRow({ state, coachAgent, coachModel, builderAgent, builderModel, agents, disabled, onChange, credentialIds, liveModels }: {
   state: NonNullable<ConversationRecord['guidedBuild']>;
   coachAgent: AgentId;
   coachModel: string;
@@ -3479,27 +3491,60 @@ function GuidedBuildAgentRow({ state, coachAgent, coachModel, builderAgent, buil
   agents: readonly AgentCapability[];
   disabled: boolean;
   onChange: (state: NonNullable<ConversationRecord['guidedBuild']>) => void;
+  credentialIds: readonly string[];
+  liveModels: ReadonlyMap<string, readonly string[]>;
 }): ReactNode {
-  const chooseModel = (role: 'coach' | 'builder', agent: AgentId, value: string): void => {
-    const field = role === 'coach' ? 'coachModel' : 'builderModel';
-    const title = role === 'coach' ? 'Coach' : 'Builder';
-    if (value !== CUSTOM_MODEL) { onChange({ ...state, [field]: value }); return; }
-    void promptDialog({ title: `Choose ${title} model`, label: 'Model name', initialValue: role === 'coach' ? coachModel : builderModel, placeholder: 'Model name from this agent', confirmLabel: 'Use model' })
-      .then((typed) => { if (typed?.trim()) onChange({ ...state, [field]: typed.trim() }); });
+  const [discoveredModels, setDiscoveredModels] = useState<ReadonlyMap<string, readonly string[]>>(new Map());
+  const coachTarget = state.coachTarget ?? { execution: 'cli' as const, agent: coachAgent };
+  const builderTarget = state.builderTarget ?? { execution: 'cli' as const, agent: builderAgent };
+  useEffect(() => {
+    let active = true;
+    for (const target of [coachTarget, builderTarget]) {
+      if (target.execution !== 'api' || !target.api) continue;
+      const api = target.api;
+      const preset = directProviderPreset(api.provider);
+      const key = `${api.provider}:${api.credentialId ?? preset.credentialId}`;
+      if (discoveredModels.has(key) || liveModels.has(key)) continue;
+      void window.kaiDesktop.listProviderModels({ provider: api.provider, baseUrl: api.baseUrl ?? preset.defaultBaseUrl, credentialId: api.credentialId ?? preset.credentialId })
+        .then(unwrap)
+        .then((catalog) => { if (active) setDiscoveredModels((current) => new Map(current).set(key, catalog.models)); })
+        .catch(() => { if (active) setDiscoveredModels((current) => new Map(current).set(key, [])); });
+    }
+    return () => { active = false; };
+  }, [coachTarget, builderTarget, discoveredModels, liveModels]);
+  const chooseTarget = (role: 'coach' | 'builder', value: string): void => {
+    const previous = role === 'coach' ? coachTarget : builderTarget;
+    const target = targetFromValue(value, previous);
+    if (!target) return;
+    onChange(role === 'coach' ? { ...state, coachTarget: target, coachAgent: target.agent ?? coachAgent, coachModel: '' } : { ...state, builderTarget: target, builderAgent: target.agent ?? builderAgent, builderModel: '' });
   };
-  const agentOptions = agents.map((agent) => ({ value: agent.id, label: `${agent.displayName}${agent.available ? '' : ' (unavailable)'}` }));
+  const chooseModel = (role: 'coach' | 'builder', target: RoleTarget, value: string): void => {
+    const field = role === 'coach' ? 'coachTarget' : 'builderTarget';
+    const legacyField = role === 'coach' ? 'coachModel' : 'builderModel';
+    if (value !== CUSTOM_ROLE_MODEL) { onChange({ ...state, [field]: withModel(target, value), [legacyField]: value }); return; }
+    void promptDialog({ title: `Choose ${role} model`, label: 'Model name', initialValue: roleModelOf(target), placeholder: 'Provider model name', confirmLabel: 'Use model' })
+      .then((typed) => { if (typed?.trim()) onChange({ ...state, [field]: withModel(target, typed.trim()), [legacyField]: typed.trim() }); });
+  };
+  const optionsFor = (role: 'coach' | 'builder', target: RoleTarget) => targetOptions(role === 'coach' ? 'architect' : 'implementer', { capabilities: agents, credentialIds, current: [coachTarget, builderTarget] });
+  const modelsFor = (role: 'coach' | 'builder', target: RoleTarget, legacy: string) => {
+    const key = target.execution === 'api' && target.api ? `${target.api.provider}:${target.api.credentialId ?? directProviderPreset(target.api.provider).credentialId}` : '';
+    const live = key ? liveModels.get(key) ?? discoveredModels.get(key) : undefined;
+    const values = roleModelOptions(role === 'coach' ? 'architect' : 'implementer', target, live);
+    const value = roleModelOf(target) || legacy;
+    return values.some((item) => item.value === value) ? values : [...values.slice(0, -1), { value, label: value }, values[values.length - 1]];
+  };
   return <div className="flex w-full flex-col gap-2" aria-label="Guided Build agents">
     <div className="flex flex-wrap items-center gap-2">
       <span className="w-20 text-xs font-medium text-[var(--text)]">Coach</span>
-      <OptionMenu ariaLabel="Coach agent" disabled={disabled} icon={<Sparkles size={13} />} onChange={(value) => onChange({ ...state, coachAgent: value as AgentId, coachModel: '' })} options={agentOptions} title="Agent that creates the plan and reviews your edits" value={coachAgent} />
-      <OptionMenu ariaLabel="Coach model" disabled={disabled} onChange={(value) => chooseModel('coach', coachAgent, value)} options={modelOptions(false, coachAgent, null, coachModel)} title="Model used for Coach planning and review" value={coachModel} />
+      <OptionMenu ariaLabel="Coach agent or local model" disabled={disabled} icon={<Sparkles size={13} />} onChange={(value) => chooseTarget('coach', value)} options={optionsFor('coach', coachTarget)} title="Choose a CLI agent, cloud provider, or local model for Coach planning and review" value={targetValue(coachTarget)} />
+      <OptionMenu ariaLabel="Coach model" disabled={disabled} onChange={(value) => chooseModel('coach', coachTarget, value)} options={modelsFor('coach', coachTarget, coachModel)} title="Model used for Coach planning and review" value={roleModelOf(coachTarget) || coachModel} />
     </div>
     <div className="flex flex-wrap items-center gap-2">
       <span className="w-20 text-xs font-medium text-[var(--text)]">Builder</span>
-      <OptionMenu ariaLabel="Builder agent" disabled={disabled} icon={<Cpu size={13} />} onChange={(value) => onChange({ ...state, builderAgent: value as AgentId, builderModel: '' })} options={agentOptions} title="Agent that receives the coding task when you send from the composer" value={builderAgent} />
-      <OptionMenu ariaLabel="Builder model" disabled={disabled} onChange={(value) => chooseModel('builder', builderAgent, value)} options={modelOptions(false, builderAgent, null, builderModel)} title="Model used for implementation steps" value={builderModel} />
+      <OptionMenu ariaLabel="Builder agent or local model" disabled={disabled} icon={<Cpu size={13} />} onChange={(value) => chooseTarget('builder', value)} options={optionsFor('builder', builderTarget)} title="Choose a CLI agent, cloud provider, or local model for the Builder" value={targetValue(builderTarget)} />
+      <OptionMenu ariaLabel="Builder model" disabled={disabled} onChange={(value) => chooseModel('builder', builderTarget, value)} options={modelsFor('builder', builderTarget, builderModel)} title="Model used for implementation steps" value={roleModelOf(builderTarget) || builderModel} />
     </div>
-    {agents.find((agent) => agent.id === builderAgent)?.available === false && <p className="text-xs text-[var(--waiting)]">The selected Builder is unavailable. Choose a ready agent before sending a build step.</p>}
+    {builderTarget.execution === 'cli' && agents.find((agent) => agent.id === builderAgent)?.available === false && <p className="text-xs text-[var(--waiting)]">The selected Builder is unavailable. Choose a ready agent before sending a build step.</p>}
   </div>;
 }
 

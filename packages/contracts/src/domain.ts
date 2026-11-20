@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { roleTargetSchema } from './architect';
 import { architectSplitSchema } from './architect';
 import { persistedEventV1Schema } from './events';
 import { experienceLevelSchema } from './experience';
@@ -531,6 +532,8 @@ export const guidedBuildStepSchema = z.object({
 
 export const guidedBuildSchema = z.object({
   enabled: z.boolean().default(false),
+  coachTarget: roleTargetSchema.nullable().default(null),
+  builderTarget: roleTargetSchema.nullable().default(null),
   coachAgent: agentIdSchema.nullable().default(null),
   coachModel: z.string().default(''),
   builderAgent: agentIdSchema.nullable().default(null),
