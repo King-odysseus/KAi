@@ -580,6 +580,7 @@ export function WorkspaceView({
   const [compareResult, setCompareResult] = useState<CompareRun | null>(null);
   const [comparing, setComparing] = useState(false);
   const [advancedComposerOpen, setAdvancedComposerOpen] = useState(false);
+  const [dismissedGuidedBuildConversation, setDismissedGuidedBuildConversation] = useState<string | null>(null);
   const [composerStatusOpen, setComposerStatusOpen] = useState(false);
   const [noticesExpanded, setNoticesExpanded] = useState(false);
   const [noticeCount, setNoticeCount] = useState(0);
@@ -1888,7 +1889,7 @@ export function WorkspaceView({
         title={activeConversation?.title ?? activeProject?.name ?? 'Workspace'}
         detail={activeConversation ? activeProject?.name ?? 'Conversation' : activeProject ? 'Workspace' : 'Open a project to begin'}
         actions={<>
-          {guidedBuild?.enabled && <GuidedBuildChip state={guidedBuild} agents={agentCapabilities} onOpen={() => setAdvancedComposerOpen(true)} />}
+          {guidedBuild?.enabled && <GuidedBuildChip state={guidedBuild} agents={agentCapabilities} onOpen={() => { setDismissedGuidedBuildConversation(null); setAdvancedComposerOpen(true); }} />}
           {guidedBuild?.enabled && running && <Pill tone="info" role="status" aria-live="polite">{activeGuidedRole} is working</Pill>}
           {activeProject && !activeProject.id.startsWith('studio_') && (
             <UiButton
@@ -1914,13 +1915,14 @@ export function WorkspaceView({
         </>}
       />
 
-      {activeConversation && guidedBuild?.enabled && (
+      {activeConversation && guidedBuild?.enabled && dismissedGuidedBuildConversation !== activeConversation.id && (
           <GuidedBuildPanel
           state={guidedBuild}
           disabled={busy || running}
           onChange={setGuidedBuild}
           onOpenFile={onOpenFile}
           onAddIdea={() => onComposerDraftChange('Add an idea to my plan: ')}
+          onDismiss={() => setDismissedGuidedBuildConversation(activeConversation.id)}
           onGeneratePlan={() => {
             const prompt = `Create a beginner-friendly, step-by-step coding plan for this project and this request: ${activeConversation.turns.filter((turn) => turn.role === 'user').map((turn) => turn.text).slice(-3).join('\n')}\n\nCoach style: ${guidedBuild.style}. Explanation detail: ${guidedBuild.detail}. Ask questions: ${guidedBuild.questions}. Inspect the project and return the plan as JSON with keys title and steps. Each step needs id, title, why, where (file path and symbol), instructions, optional code, acceptanceCriteria (array). Do not edit files.`;
             guidedPlanStartTurns.current = activeConversation.turns.length;
@@ -3618,12 +3620,13 @@ function GuidedBuildChip({ state, agents, onOpen }: { state: NonNullable<Convers
   return <UiButton type="button" variant="secondary" className="!min-h-6 !gap-1 !rounded-full !px-2 !text-[11px]" aria-label="Guided Build is on; open run options to change Coach and Builder" title={`Coach ${names(state.coachAgent)} · Builder ${names(state.builderAgent)}. Click to change.`} onClick={onOpen}><Sparkles size={13} /><span>Guided Build</span></UiButton>;
 }
 
-function GuidedBuildPanel({ state, disabled, onChange, onOpenFile, onAddIdea, onGeneratePlan, onUseBuilder, onNext, planBusy, reviewBusy, onReview }: {
+function GuidedBuildPanel({ state, disabled, onChange, onOpenFile, onAddIdea, onDismiss, onGeneratePlan, onUseBuilder, onNext, planBusy, reviewBusy, onReview }: {
   state: NonNullable<ConversationRecord['guidedBuild']>;
   disabled: boolean;
   onChange: (state: NonNullable<ConversationRecord['guidedBuild']>) => void;
   onOpenFile: (path: string, line?: number) => void;
   onAddIdea: () => void;
+  onDismiss: () => void;
   onGeneratePlan: () => void;
   onUseBuilder: () => void;
   onNext: () => void;
@@ -3643,6 +3646,7 @@ function GuidedBuildPanel({ state, disabled, onChange, onOpenFile, onAddIdea, on
         <span className="text-xs text-[var(--text-dim)]">Coach makes a plan from your first request, then guides you and Builder through it.</span>
         {!state.steps.length && <UiButton type="button" className="secondary-button" disabled={disabled || planBusy} onClick={onGeneratePlan}>{planBusy ? 'Making your plan…' : 'Make my plan now'}</UiButton>}
         {state.steps.length > 0 && <UiButton type="button" className="secondary-button" disabled={disabled} onClick={onAddIdea}>Add an idea to the plan</UiButton>}
+        <IconButton className="ml-auto" aria-label="Hide Guided Build plan" title="Hide this plan panel; Guided Build stays on" onClick={onDismiss} icon={<X size={14} />} />
       </div>
       {state.planTitle && <h3 className="mt-3 text-sm font-semibold text-[var(--text)]">{state.planTitle}</h3>}
       {step ? <div className="mt-3 grid gap-2 rounded-lg border border-[color:var(--border-soft)] bg-[var(--bg-shell)] p-3">
