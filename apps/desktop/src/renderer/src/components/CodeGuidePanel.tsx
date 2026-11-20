@@ -1,6 +1,6 @@
 import { AlertTriangle, ArrowRight, Check, Circle, Loader2, Sparkles, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
-import type { CodeGuideAction, CodeGuideStep, CodeGuideView } from '@kai/contracts';
+import type { CodeGuideAction, CodeGuideStep, CodeGuideView, GuidedBuild } from '@kai/contracts';
 import { UiButton } from './UiButton';
 
 /**
@@ -29,6 +29,7 @@ interface Props {
   onAction: (action: CodeGuideAction) => void;
   stripHidden: boolean;
   onToggleStrip: () => void;
+  guidedBuild?: GuidedBuild | null;
 }
 
 function StepMark({ state }: { state: CodeGuideStep['state'] }): ReactNode {
@@ -59,7 +60,7 @@ function Step({ step, index, busy, onAction }: { step: CodeGuideStep; index: num
   );
 }
 
-export function CodeGuidePanel({ view, explaining, busy, error = null, onExplain, onAction, stripHidden, onToggleStrip }: Props): ReactNode {
+export function CodeGuidePanel({ view, explaining, busy, error = null, onExplain, onAction, stripHidden, onToggleStrip, guidedBuild = null }: Props): ReactNode {
   const [showHistory, setShowHistory] = useState(false);
 
   if (!view) {
@@ -82,6 +83,12 @@ export function CodeGuidePanel({ view, explaining, busy, error = null, onExplain
         Reads this project — the repository, the files, what you have studied and the board — and says where it has
         got to and what to do next. The steps come from the project itself; the explanation is written for you.
       </p>
+      {guidedBuild?.enabled && <section className="guide-now" aria-label="Guided Build progress">
+        <h3>Guided Build · {guidedBuild.planTitle || 'Coding plan'}</h3>
+        {guidedBuild.steps[guidedBuild.currentStep]
+          ? <><strong>Step {guidedBuild.currentStep + 1} of {guidedBuild.steps.length}: {guidedBuild.steps[guidedBuild.currentStep]!.title}</strong><p className="guide-explanation">{guidedBuild.steps[guidedBuild.currentStep]!.why || guidedBuild.steps[guidedBuild.currentStep]!.instructions}</p><p className="studio-note">{guidedBuild.review ? `Review: ${guidedBuild.review.status} — ${guidedBuild.review.summary}` : 'Make the edit in the Workspace Builder, then return here or open Workspace to ask the Coach to review it.'}</p></>
+          : <p className="studio-note">No coding steps yet. Open Workspace and ask the Coach to create the plan.</p>}
+      </section>}
 
       <div className="guide-now">
         <h3>{view.narrative?.headline ?? current?.title ?? 'Where you are'}</h3>

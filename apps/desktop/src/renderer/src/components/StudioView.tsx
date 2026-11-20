@@ -138,7 +138,7 @@ const IMPORTANCE_LABEL: Record<'must' | 'worth' | 'skip', string> = { must: 'Nee
  * and `.kai/spec/brief.md` out. The artifacts, the board and the design layer all read that brief, so this screen
  * is the front door to the rest of the studio.
  */
-export function StudioView({ activeProject, projects: desktopProjects, planRequest, firstRunRequest, cardRequest, windowId, onOpenSettings, onLaunchProject, onPlanForTeam, onLearnCard, onOpenConversation }: {
+export function StudioView({ activeProject, projects: desktopProjects, planRequest, firstRunRequest, cardRequest, windowId, onOpenSettings, onLaunchProject, onStartGuidedBuild, onPlanForTeam, onLearnCard, onOpenConversation }: {
   activeProject: ProjectRecord | null;
   projects: ProjectRecord[];
   /** Set by the composer's "Plan in Studio" button: open a fresh plan attached to this project's folder. */
@@ -150,6 +150,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   windowId?: number;
   onOpenSettings: () => void;
   onLaunchProject: (studioProjectId: string, destination: 'composer' | 'editor' | 'generate' | 'crew') => Promise<boolean>;
+  onStartGuidedBuild: (studioProjectId: string, title: string) => Promise<boolean>;
   onPlanForTeam: (plan: TeamPlanDraft) => void;
   /**
    * Hands one card, and the plan that owns it, to the Learning tutor. The plan is needed as well as the card: the
@@ -3878,6 +3879,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               busy={busy !== null}
               onExplain={() => void explainGuide()}
               onAction={(action) => void runGuideAction(action)}
+              onStartGuidedBuild={() => { if (projectId) void onStartGuidedBuild(projectId, projectTitle); }}
             />
           )}
 

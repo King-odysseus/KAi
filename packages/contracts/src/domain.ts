@@ -518,6 +518,33 @@ export const conversationCompactionSchema = z
   })
   .strict();
 
+export const guidedBuildStepSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  why: z.string(),
+  where: z.string(),
+  instructions: z.string(),
+  code: z.string().optional(),
+  acceptanceCriteria: z.array(z.string()),
+  status: z.enum(['pending', 'active', 'review', 'complete']).default('pending'),
+}).strict();
+
+export const guidedBuildSchema = z.object({
+  enabled: z.boolean().default(false),
+  coachAgent: agentIdSchema.nullable().default(null),
+  coachModel: z.string().default(''),
+  style: z.enum(['tutor', 'senior-dev']).default('tutor'),
+  detail: z.enum(['brief', 'step-by-step', 'line-by-line']).default('step-by-step'),
+  questions: z.enum(['blocked', 'decisions', 'each-step']).default('blocked'),
+  followEdits: z.boolean().default(true),
+  planTitle: z.string().default(''),
+  steps: z.array(guidedBuildStepSchema).default([]),
+  currentStep: z.number().int().nonnegative().default(0),
+  review: z.object({ status: z.enum(['ready', 'changes-needed', 'unverified']), summary: z.string(), checkedAt: timestampSchema }).strict().nullable().default(null),
+}).strict();
+export type GuidedBuildStep = z.infer<typeof guidedBuildStepSchema>;
+export type GuidedBuild = z.infer<typeof guidedBuildSchema>;
+
 /**
  * Who opened a conversation, when it was not the person.
  *
@@ -560,6 +587,7 @@ export const conversationRecordV1Schema = z
     agentSessionId: z.string().min(1).optional(),
     goal: workbenchGoalSchema.nullable().optional(),
     workflow: workflowSchema.nullable().optional(),
+    guidedBuild: guidedBuildSchema.optional(),
     origin: conversationOriginSchema.optional(),
     compaction: conversationCompactionSchema.optional(),
     /**

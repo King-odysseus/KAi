@@ -104,6 +104,7 @@ import type {
   SkillSummary,
   VerificationOverview,
   WorkbenchGoal,
+  GuidedBuildStep,
 } from '@kai/contracts';
 import { compactThresholdFor, ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, HELPER_CHOICES, HELPER_CHOICE_DESCRIPTION, HELPER_CHOICE_LABEL, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, isLocalProvider, estimateConversationTokens, estimateResponseCostUsd, experienceProfile, MAX_SAVED_RECIPES, SAVED_RECIPE_INTENTS, architectSplitActive } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
@@ -142,6 +143,7 @@ import { PageHeader } from './ui/PageHeader';
 import { NoticeBanner } from './ui/NoticeBanner';
 import { OptionMenu, type OptionMenuOption } from './ui/OptionMenu';
 import { OptionSection } from './ui/OptionSection';
+import { Toggle } from './ui/Toggle';
 import { UiButton } from './UiButton';
 import { Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
@@ -151,6 +153,7 @@ export interface WorkspaceSendOptions {
   selectedPaths?: string[];
   contextChips?: ContextChip[];
   agent?: AgentId;
+  model?: string;
   architect?: ArchitectSplit;
 }
 
@@ -469,6 +472,68 @@ export function WorkspaceView({
   const [presets, setPresets] = useState<PromptPreset[]>([]);
   const [savingPresetSlot, setSavingPresetSlot] = useState<number | null>(null);
   const [sideOpen, setSideOpen] = useState(false);
+  const guidedBuild = activeConversation?.guidedBuild;
+  const setGuidedBuild = (update: NonNullable<ConversationRecord['guidedBuild']>): void => {
+    if (!activeConversation) return;
+    void onUpdateConversation({ ...activeConversation, guidedBuild: update, updatedAt: new Date().toISOString() });
+  };
+  const coachAgent = guidedBuild?.coachAgent ?? selectedAgent;
+  const guidedStep = guidedBuild?.steps[guidedBuild.currentStep];
+  const [guidedPlanBusy, setGuidedPlanBusy] = useState(false);
+  const [guidedReviewBusy, setGuidedReviewBusy] = useState(false);
+  const guidedPlanStartTurns = useRef(0);
+  const guidedReviewStartTurns = useRef(0);
+  useEffect(() => {
+    if (!guidedPlanBusy || !activeConversation || activeConversation.turns.length <= guidedPlanStartTurns.current) return;
+    const answer = [...activeConversation.turns].reverse().find((turn) => turn.role === 'assistant')?.text;
+    if (!answer) return;
+    setGuidedPlanBusy(false);
+    const json = answer.slice(answer.indexOf('{'), answer.lastIndexOf('}') + 1);
+    try {
+      const plan = JSON.parse(json) as { title?: unknown; steps?: unknown };
+      if (typeof plan.title !== 'string' || !Array.isArray(plan.steps)) return;
+      const steps: GuidedBuildStep[] = plan.steps.flatMap((raw, index) => {
+        if (!raw || typeof raw !== 'object') return [];
+        const value = raw as Record<string, unknown>;
+        if (typeof value.title !== 'string') return [];
+        return [{
+          id: typeof value.id === 'string' ? value.id : `step-${index + 1}-${crypto.randomUUID()}`,
+          title: value.title,
+          why: typeof value.why === 'string' ? value.why : '',
+          where: typeof value.where === 'string' ? value.where : '',
+          instructions: typeof value.instructions === 'string' ? value.instructions : '',
+          ...(typeof value.code === 'string' ? { code: value.code } : {}),
+          acceptanceCriteria: Array.isArray(value.acceptanceCriteria) ? value.acceptanceCriteria.filter((item): item is string => typeof item === 'string') : [],
+          status: index === 0 ? 'active' : 'pending',
+        }];
+      });
+      if (steps.length > 0) {
+        const current = activeConversation.guidedBuild ?? { enabled: true, coachAgent, coachModel: '', style: 'tutor' as const, detail: 'step-by-step' as const, questions: 'blocked' as const, followEdits: true, planTitle: '', steps: [], currentStep: 0, review: null };
+        void onUpdateConversation({ ...activeConversation, guidedBuild: { ...current, enabled: true, planTitle: plan.title, steps, currentStep: 0, review: null }, updatedAt: new Date().toISOString() });
+      }
+      setGuidedPlanBusy(false);
+    } catch {
+      // The reply may not contain valid plan JSON. Leave the Coach response visible so the user can still edit steps manually.
+    }
+  }, [activeConversation?.turns.length, guidedPlanBusy]);
+  useEffect(() => {
+    if (!guidedReviewBusy || !activeConversation?.guidedBuild || activeConversation.turns.length <= guidedReviewStartTurns.current) return;
+    const answer = [...activeConversation.turns].reverse().find((turn) => turn.role === 'assistant')?.text;
+    if (!answer) return;
+    setGuidedReviewBusy(false);
+    const json = answer.slice(answer.indexOf('{'), answer.lastIndexOf('}') + 1);
+    try {
+      const review = JSON.parse(json) as { status?: unknown; summary?: unknown };
+      if (!['ready', 'changes-needed', 'unverified'].includes(String(review.status)) || typeof review.summary !== 'string') return;
+      const build = activeConversation.guidedBuild;
+      const status = review.status as 'ready' | 'changes-needed' | 'unverified';
+      const steps = build.steps.map((step, index) => index === build.currentStep && status === 'ready' ? { ...step, status: 'complete' as const } : step);
+      void onUpdateConversation({ ...activeConversation, guidedBuild: { ...build, steps, review: { status, summary: review.summary, checkedAt: new Date().toISOString() } }, updatedAt: new Date().toISOString() });
+      setGuidedReviewBusy(false);
+    } catch {
+      // Keep the Coach's prose visible when its review reply is not structured JSON.
+    }
+  }, [activeConversation?.turns.length, guidedReviewBusy]);
   const [sideDraft, setSideDraft] = useState('');
   const [contextPickerOpen, setContextPickerOpen] = useState(false);
   const [fileQuery, setFileQuery] = useState('');
@@ -1775,6 +1840,26 @@ export function WorkspaceView({
         title={activeConversation?.title ?? activeProject?.name ?? 'Workspace'}
         detail={activeConversation ? activeProject?.name ?? 'Conversation' : activeProject ? 'Workspace' : 'Open a project to begin'}
         actions={<>
+          {activeConversation && (
+            <Toggle
+              checked={guidedBuild?.enabled ?? false}
+              label="Guided Build"
+              title="Plan and work through this project one reviewed step at a time"
+              onChange={(enabled) => setGuidedBuild({
+                enabled,
+                coachAgent: guidedBuild?.coachAgent ?? selectedAgent,
+                coachModel: guidedBuild?.coachModel ?? '',
+                style: guidedBuild?.style ?? 'tutor',
+                detail: guidedBuild?.detail ?? 'step-by-step',
+                questions: guidedBuild?.questions ?? 'blocked',
+                followEdits: guidedBuild?.followEdits ?? true,
+                planTitle: guidedBuild?.planTitle ?? '',
+                steps: guidedBuild?.steps ?? [],
+                currentStep: guidedBuild?.currentStep ?? 0,
+                review: guidedBuild?.review ?? null,
+              })}
+            />
+          )}
           {activeProject && !activeProject.id.startsWith('studio_') && (
             <UiButton
               type="button"
@@ -1798,6 +1883,43 @@ export function WorkspaceView({
           />
         </>}
       />
+
+      {activeConversation && guidedBuild?.enabled && (
+        <GuidedBuildPanel
+          state={guidedBuild}
+          agentCapabilities={agentCapabilities}
+          selectedModel={selectedModel}
+          disabled={busy || running}
+          onChange={setGuidedBuild}
+          onOpenFile={onOpenFile}
+          onGeneratePlan={() => {
+            const prompt = `Create a beginner-friendly, step-by-step coding plan for this project and this request: ${activeConversation.turns.filter((turn) => turn.role === 'user').map((turn) => turn.text).slice(-3).join('\n')}\n\nCoach style: ${guidedBuild.style}. Explanation detail: ${guidedBuild.detail}. Ask questions: ${guidedBuild.questions}. Inspect the project and return the plan as JSON with keys title and steps. Each step needs id, title, why, where (file path and symbol), instructions, optional code, acceptanceCriteria (array). Do not edit files.`;
+            guidedPlanStartTurns.current = activeConversation.turns.length;
+            setGuidedPlanBusy(true);
+            onSend(prompt, { agent: coachAgent, ...(guidedBuild.coachModel ? { model: guidedBuild.coachModel } : {}) });
+          }}
+          onReview={() => {
+            if (!guidedStep) return;
+            const latestChange = [...activeConversation.events].reverse().find((event) => event.type === 'turn.changes');
+            const changed = latestChange?.files.map((file) => file.path) ?? [];
+            const prompt = `Review the current Guided Build step using the project's current files. Step: ${guidedStep.title}. Why: ${guidedStep.why}. Where: ${guidedStep.where}. Instructions: ${guidedStep.instructions}. Acceptance criteria: ${guidedStep.acceptanceCriteria.join('; ')}. Recent changed files: ${[...new Set(changed)].join(', ') || 'No saved changes were reported.'}. Return JSON only with status ready, changes-needed, or unverified and a concise summary citing file paths and lines where possible. Mark ready only when the saved code meets every criterion. Do not edit files.`;
+            guidedReviewStartTurns.current = activeConversation.turns.length;
+            setGuidedReviewBusy(true);
+            onSend(prompt, { agent: coachAgent, ...(guidedBuild.coachModel ? { model: guidedBuild.coachModel } : {}) });
+          }}
+          onUseBuilder={() => {
+            if (!guidedStep) return;
+            onComposerDraftChange(`${guidedStep.title}\n\nWhy: ${guidedStep.why}\nWhere: ${guidedStep.where}\n\n${guidedStep.instructions}${guidedStep.code ? `\n\nSuggested code:\n${guidedStep.code}` : ''}\n\nAcceptance criteria:\n${guidedStep.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}`);
+          }}
+          onNext={() => {
+            const nextIndex = Math.min(guidedBuild.currentStep + 1, Math.max(0, guidedBuild.steps.length - 1));
+            const steps = guidedBuild.steps.map((step, index) => index === nextIndex ? { ...step, status: 'active' as const } : step);
+            setGuidedBuild({ ...guidedBuild, steps, currentStep: nextIndex, review: null });
+          }}
+          planBusy={guidedPlanBusy}
+          reviewBusy={guidedReviewBusy}
+        />
+      )}
 
       <div ref={noticesRef} className={`workspace-notices ${noticesExpanded ? 'expanded' : ''}`}>
         {interruptedRuns > 0 && !running && (
@@ -3316,4 +3438,69 @@ function formatCompact(value: number): string {
 
 function BrainIcon(): ReactNode {
   return <span className="inline-block h-2 w-2 rounded-full bg-[var(--accent-2)]" aria-hidden="true" />;
+}
+
+function GuidedBuildPanel({ state, agentCapabilities, selectedModel, disabled, onChange, onOpenFile, onGeneratePlan, onUseBuilder, onNext, planBusy, reviewBusy, onReview }: {
+  state: NonNullable<ConversationRecord['guidedBuild']>;
+  agentCapabilities: readonly AgentCapability[];
+  selectedModel: string;
+  disabled: boolean;
+  onChange: (state: NonNullable<ConversationRecord['guidedBuild']>) => void;
+  onOpenFile: (path: string, line?: number) => void;
+  onGeneratePlan: () => void;
+  onUseBuilder: () => void;
+  onNext: () => void;
+  planBusy: boolean;
+  reviewBusy: boolean;
+  onReview: () => void;
+}): ReactNode {
+  const step = state.steps[state.currentStep];
+  const updateStep = (index: number, update: Partial<GuidedBuildStep>): void => {
+    const steps = state.steps.map((item, position) => position === index ? { ...item, ...update } : item);
+    onChange({ ...state, steps, review: null });
+  };
+  const createStep = (): void => {
+    const step: GuidedBuildStep = { id: crypto.randomUUID(), title: 'New coding step', why: '', where: '', instructions: '', acceptanceCriteria: [], status: 'active' };
+    onChange({ ...state, planTitle: state.planTitle || 'My coding plan', steps: [...state.steps, step], currentStep: state.steps.length, review: null });
+  };
+  return (
+    <section className="mx-4 my-2 rounded-xl border border-[color:var(--border-soft)] bg-[var(--bg-panel)] p-3" aria-label="Guided Build">
+      <div className="flex flex-wrap items-center gap-3">
+        <strong className="text-sm">Guided Build</strong>
+        <label className="text-xs text-[var(--text-muted)]">Coach agent
+          <Select aria-label="Coach agent" value={state.coachAgent ?? agentCapabilities[0]?.id ?? ''} onChange={(event) => onChange({ ...state, coachAgent: event.target.value as AgentId })}>
+            {agentCapabilities.map((agent) => <option key={agent.id} value={agent.id}>{agent.displayName}{agent.available ? '' : ' (unavailable)'}</option>)}
+          </Select>
+        </label>
+        <label className="text-xs text-[var(--text-muted)]">Coach model
+          <input aria-label="Coach model" placeholder={selectedModel || 'Agent default'} value={state.coachModel} onChange={(event) => onChange({ ...state, coachModel: event.target.value })} />
+        </label>
+        <label className="text-xs text-[var(--text-muted)]">Style
+          <Select aria-label="Coach style" value={state.style} onChange={(event) => onChange({ ...state, style: event.target.value as typeof state.style })}><option value="tutor">Tutor</option><option value="senior-dev">Senior Dev</option></Select>
+        </label>
+        <label className="text-xs text-[var(--text-muted)]">Detail
+          <Select aria-label="Explanation detail" value={state.detail} onChange={(event) => onChange({ ...state, detail: event.target.value as typeof state.detail })}><option value="brief">Brief</option><option value="step-by-step">Step by step</option><option value="line-by-line">Line by line</option></Select>
+        </label>
+        <label className="text-xs text-[var(--text-muted)]">Questions
+          <Select aria-label="Question frequency" value={state.questions} onChange={(event) => onChange({ ...state, questions: event.target.value as typeof state.questions })}><option value="blocked">Only when blocked</option><option value="decisions">Before major decisions</option><option value="each-step">At each step</option></Select>
+        </label>
+        <div className="ml-auto"><Toggle checked={state.followEdits} label="Follow edits" ariaLabel="Follow Builder edits" onChange={(followEdits) => onChange({ ...state, followEdits })} /></div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <input aria-label="Plan title" className="min-w-48 rounded border border-[color:var(--border-soft)] bg-[var(--bg-shell)] px-2 py-1 text-sm" placeholder="Plan title" value={state.planTitle} onChange={(event) => onChange({ ...state, planTitle: event.target.value })} />
+        <UiButton type="button" className="secondary-button" disabled={disabled || planBusy} onClick={onGeneratePlan}>{planBusy ? 'Sending to Coach…' : 'Ask Coach to create plan'}</UiButton>
+        <UiButton type="button" className="secondary-button" disabled={disabled} onClick={createStep}>Add step</UiButton>
+        <span className="text-xs text-[var(--text-dim)]">Coach replies in this conversation. Add or edit steps here.</span>
+      </div>
+      {step ? <div className="mt-3 grid gap-2 rounded-lg border border-[color:var(--border-soft)] bg-[var(--bg-shell)] p-3">
+        <div className="flex items-center gap-2"><strong className="text-xs text-[var(--text-muted)]">Step {state.currentStep + 1} of {state.steps.length}</strong><div className="ml-auto flex gap-2"><UiButton type="button" className="secondary-button" disabled={disabled || !step.where.trim()} onClick={() => onOpenFile(step.where.split(':')[0]!, Number(step.where.split(':')[1]) || undefined)}>Open file</UiButton><UiButton type="button" className="secondary-button" disabled={disabled} onClick={onUseBuilder}>Put task in composer</UiButton></div></div>
+        <input aria-label="Step title" value={step.title} onChange={(event) => updateStep(state.currentStep, { title: event.target.value })} />
+        <textarea aria-label="Why this change matters" placeholder="Why this step matters" value={step.why} onChange={(event) => updateStep(state.currentStep, { why: event.target.value })} />
+        <input aria-label="File and code location" placeholder="File path and line, for example src/App.tsx:42" value={step.where} onChange={(event) => updateStep(state.currentStep, { where: event.target.value })} />
+        <textarea aria-label="What to change" placeholder="What to change" value={step.instructions} onChange={(event) => updateStep(state.currentStep, { instructions: event.target.value })} />
+        <textarea aria-label="Acceptance criteria" placeholder="One acceptance criterion per line" value={step.acceptanceCriteria.join('\n')} onChange={(event) => updateStep(state.currentStep, { acceptanceCriteria: event.target.value.split('\n').filter(Boolean) })} />
+        <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">Status: {state.review?.status ?? step.status}<span className="ml-auto">{state.review?.summary ?? 'Review the saved edit before moving on.'}</span><UiButton type="button" className="secondary-button" disabled={disabled || reviewBusy} onClick={onReview}>{reviewBusy ? 'Reviewing…' : 'Review step'}</UiButton><UiButton type="button" className="secondary-button" disabled={disabled || state.review?.status !== 'ready' || state.currentStep >= state.steps.length - 1} onClick={onNext}>Next step</UiButton></div>
+      </div> : <p className="mt-3 text-sm text-[var(--text-muted)]">Ask the Coach for a plan, then add or edit each step here. The Builder only runs when you press Send in the composer.</p>}
+    </section>
+  );
 }

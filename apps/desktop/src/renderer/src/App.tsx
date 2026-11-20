@@ -270,6 +270,7 @@ export function App(): ReactNode {
   const [workspaceFilePath, setWorkspaceFilePath] = useState<string | null>(null);
   const [workspaceFileLine, setWorkspaceFileLine] = useState<number | undefined>();
   const [workspaceFileDirty, setWorkspaceFileDirty] = useState(false);
+  const guidedFollowCursor = useRef<{ conversationId: string; eventId: string } | null>(null);
   // The same hand-off for a board card, rather than a file. The card travels whole, because the Studio is the view
   // that holds the board: the Code view is pointed at the card rather than left to look it up in another project.
   const [codeLearnRequest, setCodeLearnRequest] = useState<{ cardId: string; title: string; stale: boolean; staleReason: string | null; nonce: number } | null>(null);
@@ -458,6 +459,22 @@ export function App(): ReactNode {
   // A crew's work log belongs to the Crew screen, so it is left out of the thread list and history as well as the tabs.
   const visibleConversations = conversations.filter((conversation) => !conversation.sideOf && !isCrewConversation(conversation));
   const activeRunning = Boolean(activeConversationId && runningConversationIds.includes(activeConversationId));
+  useEffect(() => {
+    const build = activeConversation?.guidedBuild;
+    if (!activeConversation || !build?.enabled || !build.followEdits) return;
+    const changes = [...activeConversation.events].reverse().find((event) => event.type === 'turn.changes');
+    if (!changes) return;
+    const cursor = guidedFollowCursor.current;
+    if (!cursor || cursor.conversationId !== activeConversation.id) {
+      guidedFollowCursor.current = { conversationId: activeConversation.id, eventId: changes.id };
+      return;
+    }
+    if (cursor.eventId === changes.id || activeRunning || workspaceFileDirty) return;
+    guidedFollowCursor.current = { conversationId: activeConversation.id, eventId: changes.id };
+    const plannedPath = build.steps[build.currentStep]?.where.split(':')[0]?.replaceAll('\\', '/');
+    const file = changes.files.find((entry) => plannedPath && entry.path.replaceAll('\\', '/') === plannedPath) ?? changes.files[0];
+    if (file) void openWorkspaceFile(file.path);
+  }, [activeConversation?.id, activeConversation?.events.length, activeConversation?.guidedBuild, activeRunning, workspaceFileDirty]);
   const activePaused = Boolean(
     activeConversationId
     && (pausedConversationIds.includes(activeConversationId) || autoWaitingConversationIds.includes(activeConversationId)),
@@ -1269,6 +1286,7 @@ export function App(): ReactNode {
   async function openStudioProject(
     studioProjectId: string,
     destination: 'composer' | 'editor' | 'generate' | 'crew',
+    guidedBuildTitle?: string,
   ): Promise<boolean> {
     const launch = await perform(
       () => window.kaiDesktop.launchStudioProject({ projectId: studioProjectId, destination }).then(unwrap),
@@ -1292,19 +1310,36 @@ export function App(): ReactNode {
       'Creating conversation',
     );
     if (!conversation) return false;
+    const initializedConversation = guidedBuildTitle ? {
+      ...conversation,
+      guidedBuild: {
+        enabled: true,
+        coachAgent: selectedAgent,
+        coachModel: '',
+        style: 'senior-dev' as const,
+        detail: 'step-by-step' as const,
+        questions: 'decisions' as const,
+        followEdits: true,
+        planTitle: guidedBuildTitle,
+        steps: [],
+        currentStep: 0,
+        review: null,
+      },
+    } : conversation;
+    if (guidedBuildTitle) await saveConversationRecord(initializedConversation);
     // Studio can select a participation mode before this conversation has an id. Bind that exact
     // split to the newly created conversation before a generate run starts (or Composer is shown).
     adoptSplit(NEW_TAB, conversation.id, bootstrap?.windowId);
-    setConversations((current) => [conversation, ...current]);
-    setActiveConversationId(conversation.id);
+    setConversations((current) => [initializedConversation, ...current]);
+    setActiveConversationId(initializedConversation.id);
     if (destination === 'generate') {
       setView('workspace');
-      const split = readStoredSplit(conversation.id, bootstrap?.windowId) ?? readLastSplit(bootstrap?.windowId);
+      const split = readStoredSplit(initializedConversation.id, bootstrap?.windowId) ?? readLastSplit(bootstrap?.windowId);
       if (architectSplitActive(split)) {
         await perform(
           () => window.kaiDesktop.runArchitect({
             projectId: launch.projectId,
-            conversationId: conversation.id,
+            conversationId: initializedConversation.id,
             prompt: launch.prompt,
             split,
             agent: selectedAgent,
@@ -1315,7 +1350,7 @@ export function App(): ReactNode {
           'Starting the Architect and Implementer',
         );
       } else {
-        await runConversation(conversation, launch.prompt);
+        await runConversation(initializedConversation, launch.prompt);
       }
       return true;
     }
@@ -2882,6 +2917,7 @@ export function App(): ReactNode {
                   windowId={windowId}
                   onOpenSettings={() => setView('settings')}
                   onLaunchProject={openStudioProject}
+                  onStartGuidedBuild={(studioProjectId, title) => openStudioProject(studioProjectId, 'composer', title)}
                   onPlanForTeam={(plan) => { setIncomingTeamPlan(plan); setView('workflows'); }}
                   onOpenConversation={(conversationId) => void openLinkedRunConversation(conversationId)}
                   onLearnCard={async (card, studioProjectId) => {
@@ -2904,6 +2940,7 @@ export function App(): ReactNode {
                 onOpenSettings={() => setView('settings')}
                 onCreateReviewFollowup={(prompt) => { updateComposerDraft(prompt); setView('workspace'); }}
                 learnRequest={codeLearnRequest}
+                guidedBuild={activeConversation?.guidedBuild ?? null}
               />
             </div>
           </main>

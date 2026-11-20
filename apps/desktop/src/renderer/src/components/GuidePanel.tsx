@@ -19,6 +19,7 @@ interface Props {
   busy: boolean;
   onExplain: () => void;
   onAction: (action: GuideAction) => void;
+  onStartGuidedBuild?: () => void;
 }
 
 function StepMark({ state }: { state: StudioGuideStep['state'] }): ReactNode {
@@ -51,7 +52,7 @@ function Step({ step, index, busy, onAction }: { step: StudioGuideStep; index: n
   );
 }
 
-export function GuidePanel({ view, explaining, busy, onExplain, onAction }: Props): ReactNode {
+export function GuidePanel({ view, explaining, busy, onExplain, onAction, onStartGuidedBuild }: Props): ReactNode {
   const [showHistory, setShowHistory] = useState(false);
 
   if (!view) {
@@ -71,6 +72,7 @@ export function GuidePanel({ view, explaining, busy, onExplain, onAction }: Prop
         Reads this project — the brief, the plan, the board and the design — and says where it has got to and what to do
         next. The steps come from the project itself; the explanation is written for you.
       </p>
+      {onStartGuidedBuild && <UiButton type="button" className="primary-button" onClick={onStartGuidedBuild} disabled={busy}>Start Guided Build in Workspace</UiButton>}
 
       <div className="guide-now">
         <h3>{view.narrative?.headline ?? current?.title ?? 'Where you are'}</h3>

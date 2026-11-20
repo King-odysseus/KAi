@@ -23,6 +23,7 @@ import type {
   CodeFormatResult,
   CodeGuideAction,
   CodeGuideView,
+  GuidedBuild,
   GitFileInfo,
   GitChange,
   EditorWindowSnapshot,
@@ -249,11 +250,13 @@ export function CodeView({
   onCreateReviewFollowup,
   openRequest = null,
   learnRequest = null,
+  guidedBuild = null,
 }: {
   /** A file another part of the app wants shown; a new `nonce` asks again even for the same path. */
   openRequest?: { path: string; nonce: number } | null;
   /** A Studio card to learn from, with the project that owns it already open; a new `nonce` asks again for it. */
   learnRequest?: { cardId: string; title: string; stale: boolean; staleReason: string | null; nonce: number } | null;
+  guidedBuild?: GuidedBuild | null;
   activeProject: ProjectRecord | null;
   editorState: EditorWindowSnapshot | null;
   autoSave: boolean;
@@ -2312,6 +2315,7 @@ export function CodeView({
             onAction={(action) => void runCodeGuideAction(action)}
             stripHidden={guideStripHidden}
             onToggleStrip={() => toggleGuideStrip(!guideStripHidden)}
+            guidedBuild={guidedBuild}
           /> : sidePanel === 'review' ? <GuidedReviewPanel
             projectId={activeProject.id}
             changes={reviewChanges}
