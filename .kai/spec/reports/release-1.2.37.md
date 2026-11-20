@@ -15,4 +15,8 @@
 
 ## Build record
 
-Build and installation results will be recorded after packaging and installing this version.
+- Built from clean commit `4cec62b` with the desktop release workflow. Electron Vite and electron-builder completed successfully; the proxy was compiled from its pinned source before staging.
+- Pinned engines: Cognitive1 `51f6797740c16d1b3df5ddcb24393eb6197c2ce4`; Universal Agent Proxy `a8c2443dee3e9c8d268475fe6387cc25fd67a0bb`.
+- Installer: `apps/desktop/release/KAI-Setup-1.2.37.exe`, 197,905,966 bytes, SHA-256 `C53B67FD614324116CFDE316ECDA7ECC216E49BC66544D92B8DFC118B52E54EF`.
+- Installed from the unpacked build with `node apps/desktop/scripts/install-local.mjs --from <release-build> --close`. All 9,161 files matched byte for byte; KAI relaunched with seven processes.
+- Rollback: install KAI 1.2.36 after closing KAI.
