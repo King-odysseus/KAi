@@ -8,6 +8,7 @@ import { UiButton } from './UiButton';
 import { CUSTOM_ROLE_MODEL, roleModelOptions, targetFromValue, targetOptions, targetValue, withModel } from './architect-settings';
 import { promptDialog } from './AppDialog';
 import { Markdown } from './Markdown';
+import { guidedBuildText, parseGuidedBuildObject, visibleGuidedBuildReply } from './guided-build-format';
 import { unwrap } from '../types';
 
 type BuildMode = 'coach' | 'plan' | 'review' | 'show-code' | 'write-code';
@@ -91,8 +92,8 @@ export function GuidedBuildLearnPanel(props: {
           id: typeof item.id === 'string' ? item.id : `guided-step-${index + 1}`,
           title: item.title,
           why: typeof item.why === 'string' ? item.why : '',
-          where: typeof item.where === 'string' ? item.where : '',
-          instructions: typeof item.instructions === 'string' ? item.instructions : '',
+          where: guidedBuildText(item.where),
+          instructions: guidedBuildText(item.instructions),
           ...(typeof item.code === 'string' ? { code: item.code } : {}),
           acceptanceCriteria: Array.isArray(item.acceptanceCriteria) ? item.acceptanceCriteria.filter((entry): entry is string => typeof entry === 'string') : [],
           status: index === 0 ? 'active' : 'pending',
@@ -246,7 +247,10 @@ export function GuidedBuildLearnPanel(props: {
         <div className="guided-build-step-footer"><span>{build.review?.summary ?? 'When you finish, ask Coach to check the saved file.'}</span><UiButton type="button" className="secondary-button" disabled={Boolean(working)} onClick={askForReview}>{working === 'review' ? 'Coach is checking…' : 'Ask Coach to check my edit'}</UiButton><UiButton type="button" className="secondary-button" disabled={!build.review || build.currentStep >= build.steps.length - 1} onClick={() => update({ ...build, currentStep: Math.min(build.steps.length - 1, build.currentStep + 1), review: null })}>Next step</UiButton></div>
       </section> : <section className="guided-build-empty"><h3>Start with your idea</h3><p>Tell Coach what you want to build. Coach will make the plan and choose the first file to open.</p></section>}
 
-      {chatTurns.length > 0 && <div className="guided-build-chat" aria-label="Guided Build conversation">{chatTurns.map(({ turn }, index) => <article className={`guided-build-chat-turn ${turn.role}`} key={turn.id}><strong>{turn.role === 'user' ? 'You' : roleLabelFor(index)}</strong><Markdown text={turn.text} /></article>)}</div>}
+      {chatTurns.length > 0 && <div className="guided-build-chat" aria-label="Guided Build conversation">{chatTurns.map(({ turn }, index) => {
+        const visibleText = turn.role === 'assistant' ? visibleGuidedBuildReply(turn.text) : turn.text;
+        return visibleText ? <article className={`guided-build-chat-turn ${turn.role}`} key={turn.id}><strong>{turn.role === 'user' ? 'You' : roleLabelFor(index)}</strong><Markdown text={visibleText} /></article> : null;
+      })}</div>}
       {working && <div className="guided-build-working" role="status"><Loader2 size={14} className="spin" /> {currentSpeaker} is {working === 'plan' ? 'planning your steps' : working === 'review' ? 'checking your edit' : working === 'show-code' ? 'preparing code for you to type' : working === 'write-code' ? 'editing the file' : 'answering you'}.</div>}
 
       <Composer className="guided-build-mini-composer">
@@ -289,9 +293,7 @@ function emptyBuild(agent: AgentId, target: RoleTarget): GuidedBuild {
 }
 
 function parseObject(text: string): Record<string, unknown> | null {
-  const start = text.indexOf('{'); const end = text.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-  try { return JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>; } catch { return null; }
+  return parseGuidedBuildObject(text);
 }
 
 function isStructuredResponse(text: string): boolean {

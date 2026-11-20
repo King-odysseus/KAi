@@ -10,6 +10,7 @@ import { steerWaitingNotice } from '../run-controls';
 import { PlanStrip, usePlanProgress } from './PlanStrip';
 import { EqualizerPanel } from './EqualizerPanel';
 import { Markdown } from './Markdown';
+import { guidedBuildText, parseGuidedBuildObject } from './guided-build-format';
 import { Pill } from './Pill';
 import {
   Archive,
@@ -513,9 +514,9 @@ export function WorkspaceView({
     const answer = answerTurn?.text;
     if (!answer || !answerTurn) return;
     setGuidedPlanBusy(false);
-    const json = answer.slice(answer.indexOf('{'), answer.lastIndexOf('}') + 1);
     try {
-      const plan = JSON.parse(json) as { title?: unknown; steps?: unknown };
+      const plan = parseGuidedBuildObject(answer) as { title?: unknown; steps?: unknown } | null;
+      if (!plan) return;
       if (typeof plan.title !== 'string' || !Array.isArray(plan.steps)) return;
       const steps: GuidedBuildStep[] = plan.steps.flatMap((raw, index) => {
         if (!raw || typeof raw !== 'object') return [];
@@ -525,8 +526,8 @@ export function WorkspaceView({
           id: typeof value.id === 'string' ? value.id : `step-${index + 1}-${crypto.randomUUID()}`,
           title: value.title,
           why: typeof value.why === 'string' ? value.why : '',
-          where: typeof value.where === 'string' ? value.where : '',
-          instructions: typeof value.instructions === 'string' ? value.instructions : '',
+          where: guidedBuildText(value.where),
+          instructions: guidedBuildText(value.instructions),
           ...(typeof value.code === 'string' ? { code: value.code } : {}),
           acceptanceCriteria: Array.isArray(value.acceptanceCriteria) ? value.acceptanceCriteria.filter((item): item is string => typeof item === 'string') : [],
           status: index === 0 ? 'active' : 'pending',
@@ -3550,16 +3551,7 @@ function guidedStepStatusLabel(status: string): string {
 }
 
 function isGuidedBuildJson(text: string): boolean {
-  const first = text.indexOf('{');
-  const last = text.lastIndexOf('}');
-  if (first < 0 || last <= first) return false;
-  try {
-    const value = JSON.parse(text.slice(first, last + 1)) as Record<string, unknown>;
-    return (typeof value.title === 'string' && Array.isArray(value.steps))
-      || (typeof value.summary === 'string' && ['ready', 'changes-needed', 'unverified'].includes(String(value.status)));
-  } catch {
-    return false;
-  }
+  return Boolean(parseGuidedBuildObject(text));
 }
 
 function BrainIcon(): ReactNode {
