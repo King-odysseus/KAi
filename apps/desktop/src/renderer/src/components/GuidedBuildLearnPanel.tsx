@@ -26,7 +26,7 @@ export function GuidedBuildLearnPanel(props: {
   agentCapabilities: readonly AgentCapability[];
   selectedAgent: AgentId;
   onUpdateGuidedBuild: (build: GuidedBuild) => void;
-  onRunGuidedBuild: (prompt: string, build: GuidedBuild, mode: BuildMode) => void | Promise<void>;
+  onRunGuidedBuild: (prompt: string, build: GuidedBuild, mode: BuildMode, userMessage?: string) => void | Promise<void>;
   onOpenFile: (path: string, line?: number) => void;
 }): ReactNode {
   const {
@@ -79,7 +79,7 @@ export function GuidedBuildLearnPanel(props: {
 
   useEffect(() => {
     if (!conversation || planStart === null || conversation.turns.length <= planStart) return;
-    const answer = [...conversation.turns].reverse().find((turn) => turn.role === 'assistant');
+    const answer = [...conversation.turns.slice(planStart)].reverse().find((turn) => turn.role === 'assistant');
     if (!answer) return;
     const data = parseObject(answer.text);
     if (data && typeof data.title === 'string' && Array.isArray(data.steps)) {
@@ -106,7 +106,7 @@ export function GuidedBuildLearnPanel(props: {
 
   useEffect(() => {
     if (!conversation || reviewStart === null || conversation.turns.length <= reviewStart) return;
-    const answer = [...conversation.turns].reverse().find((turn) => turn.role === 'assistant');
+    const answer = [...conversation.turns.slice(reviewStart)].reverse().find((turn) => turn.role === 'assistant');
     if (!answer) return;
     const data = parseObject(answer.text);
     if (data && ['ready', 'changes-needed', 'unverified'].includes(String(data.status)) && typeof data.summary === 'string') {
@@ -156,7 +156,8 @@ export function GuidedBuildLearnPanel(props: {
     if (mode === 'plan') setPlanStart(turnCount);
     if (mode === 'review') setReviewStart(turnCount);
     if (mode === 'review') setReviewStart(turnCount);
-    try { await onRunGuidedBuild(prompt, build, mode); }
+    const userMessage = mode === 'review' ? 'Check my edit' : message.trim() || step?.title || 'Continue Guided Build';
+    try { await onRunGuidedBuild(prompt, build, mode, userMessage); }
     catch { setWorking(null); setPlanStart(null); setReviewStart(null); }
     setMessage('');
   };
@@ -173,7 +174,10 @@ export function GuidedBuildLearnPanel(props: {
     const question = message.trim();
     if (!question) return;
     if (!build.steps.length) void run('plan', planPrompt(question, false));
-    else void run('coach', `Answer this question about my project and current coding plan. Be clear and beginner-friendly. Do not ask me a question back; if information is missing, say what you assumed. My question: ${question}\nCurrent step: ${step?.title ?? 'none'}.`);
+    else {
+      const questionRule = build.questions === 'blocked' ? 'Ask for clarification only if you are blocked.' : build.questions === 'decisions' ? 'Ask me before a major decision.' : 'Ask once before each new step.';
+      void run('coach', `Answer this question about my project and current coding plan conversationally. Be clear and use my selected explanation detail. ${questionRule} My question: ${question}\nCurrent step: ${step?.title ?? 'none'}.`);
+    }
   };
   const addIdea = (): void => {
     const idea = message.trim();
@@ -196,11 +200,31 @@ export function GuidedBuildLearnPanel(props: {
     void run('review', prompt);
   };
 
-  const lastAssistant = [...(conversation?.turns ?? [])].reverse().find((turn) => turn.role === 'assistant' && !isStructuredResponse(turn.text));
-  const chatTurns = (conversation?.turns ?? []).slice(-8).filter((turn) => !isStructuredResponse(turn.text));
+  // Learn & Code shares a project with ordinary Workspace runs. Only render exchanges that were
+  // explicitly sent through Guided Build; this prevents unrelated Builder output appearing here.
+  const guidedLabels = new Set([
+    'Create my coding plan', 'Create a coding plan', 'Add an idea to my plan', 'Ask the Coach', 'Check this edit', 'Check my changes', 'Builder task',
+    'Show me the code to type', 'Write this change in the file', 'Builder: implement this step',
+  ]);
+  const allTurns = conversation?.turns ?? [];
+  const guidedIndexes = new Set<number>();
+  let currentGuided = false;
+  for (let index = 0; index < allTurns.length; index += 1) {
+    const turn = allTurns[index]!;
+    if (turn.role === 'user') {
+      const label = turn.text.trim();
+      currentGuided = guidedLabels.has(label) || label.startsWith('Coach: ') || label.startsWith('Builder: ');
+    }
+    if (currentGuided) guidedIndexes.add(index);
+  }
+  const guidedEntries = [...guidedIndexes].map((index) => ({ turn: allTurns[index]!, index }));
+  const chatTurns = guidedEntries.slice(-16);
+  const lastAssistant = [...chatTurns].reverse().find(({ turn }) => turn.role === 'assistant' && !isStructuredResponse(turn.text))?.turn;
   const roleLabelFor = (index: number): string => {
-    const previousUser = chatTurns.slice(0, index).reverse().find((turn) => turn.role === 'user')?.text.toLowerCase() ?? '';
-    return previousUser.includes('coach') || previousUser.includes('plan') || previousUser.includes('question') ? 'Coach' : 'Builder';
+    const current = chatTurns[index];
+    if (!current || current.turn.role === 'user') return 'You';
+    const previousUser = [...chatTurns.slice(0, index)].reverse().find((entry) => entry.turn.role === 'user')?.turn.text.toLowerCase() ?? '';
+    return previousUser.includes('builder') || previousUser.includes('write this change') ? 'Builder' : 'Coach';
   };
   const currentSpeaker = working === 'plan' || working === 'coach' || working === 'review' ? 'Coach' : working ? 'Builder' : '';
   const settingsOptions = [
@@ -222,7 +246,7 @@ export function GuidedBuildLearnPanel(props: {
         <div className="guided-build-step-footer"><span>{build.review?.summary ?? 'When you finish, ask Coach to check the saved file.'}</span><UiButton type="button" className="secondary-button" disabled={Boolean(working)} onClick={askForReview}>{working === 'review' ? 'Coach is checking…' : 'Ask Coach to check my edit'}</UiButton><UiButton type="button" className="secondary-button" disabled={!build.review || build.currentStep >= build.steps.length - 1} onClick={() => update({ ...build, currentStep: Math.min(build.steps.length - 1, build.currentStep + 1), review: null })}>Next step</UiButton></div>
       </section> : <section className="guided-build-empty"><h3>Start with your idea</h3><p>Tell Coach what you want to build. Coach will make the plan and choose the first file to open.</p></section>}
 
-      {chatTurns.length > 0 && <div className="guided-build-chat" aria-label="Coach and Builder conversation">{chatTurns.map((turn, index) => <article className={`guided-build-chat-turn ${turn.role}`} key={turn.id}><strong>{turn.role === 'user' ? 'You' : roleLabelFor(index)}</strong><Markdown text={turn.text} /></article>)}</div>}
+      {chatTurns.length > 0 && <div className="guided-build-chat" aria-label="Guided Build conversation">{chatTurns.map(({ turn }, index) => <article className={`guided-build-chat-turn ${turn.role}`} key={turn.id}><strong>{turn.role === 'user' ? 'You' : roleLabelFor(index)}</strong><Markdown text={turn.text} /></article>)}</div>}
       {working && <div className="guided-build-working" role="status"><Loader2 size={14} className="spin" /> {currentSpeaker} is {working === 'plan' ? 'planning your steps' : working === 'review' ? 'checking your edit' : working === 'show-code' ? 'preparing code for you to type' : working === 'write-code' ? 'editing the file' : 'answering you'}.</div>}
 
       <Composer className="guided-build-mini-composer">

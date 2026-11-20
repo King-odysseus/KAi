@@ -269,7 +269,7 @@ export function CodeView({
   agentCapabilities: readonly AgentCapability[];
   selectedAgent: AgentId;
   onUpdateGuidedBuild: (build: GuidedBuild) => void;
-  onRunGuidedBuild: (prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code') => void | Promise<void>;
+  onRunGuidedBuild: (prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code', userMessage?: string) => void | Promise<void>;
   activeProject: ProjectRecord | null;
   editorState: EditorWindowSnapshot | null;
   autoSave: boolean;

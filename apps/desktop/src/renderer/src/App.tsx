@@ -1320,7 +1320,7 @@ export function App(): ReactNode {
     setView('workspace');
   }
 
-  async function runCodeGuidedBuild(prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code'): Promise<void> {
+  async function runCodeGuidedBuild(prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code', userMessage?: string): Promise<void> {
     if (!bootstrap || !activeProject) return;
     let conversation = activeConversation?.projectId === activeProject.id ? activeConversation : null;
     if (!conversation) {
@@ -1334,7 +1334,7 @@ export function App(): ReactNode {
     const state = { ...build, enabled: true, builderTarget: build.builderTarget ?? target, coachTarget: build.coachTarget ?? target };
     const prepared = { ...conversation, guidedBuild: state, updatedAt: new Date().toISOString() };
     await saveConversationRecord(prepared);
-    const displayText = mode === 'plan' ? (build.steps.length ? 'Add an idea to my plan' : 'Create my coding plan') : mode === 'review' ? 'Check this edit' : mode === 'coach' ? 'Ask the Coach' : mode === 'show-code' ? 'Show me the code to type' : 'Write this change in the file';
+    const displayText = (mode === 'review' ? 'Coach: check my edit' : mode === 'show-code' ? `Builder: show code${userMessage ? ` for ${userMessage}` : ''}` : mode === 'write-code' ? `Builder: implement ${userMessage || 'this step'}` : `Coach: ${userMessage || (mode === 'plan' ? 'make my coding plan' : 'answer my question')}`).slice(0, 500);
     await runConversation(prepared, prompt, {
       agent: target.agent ?? selectedAgent,
       execution: target.execution,
@@ -1371,6 +1371,21 @@ export function App(): ReactNode {
       setCrewGoalRequest({ goal: launch.prompt, nonce: Date.now() });
       setView('crew');
       return true;
+    }
+
+    // Reopen the project's existing Guided Build session when moving from Studio back to code.
+    // Starting a fresh conversation here used to discard the Coach discussion and current step.
+    if (guidedBuildTitle) {
+      const existingSummary = conversations.find((item) => item.projectId === launch.projectId && item.guidedBuild?.enabled);
+      if (existingSummary) {
+        const existing = await perform(() => window.kaiDesktop.getConversation(existingSummary.id).then(unwrap), 'Opening your Guided Build');
+        if (existing) {
+          setConversations((current) => [existing, ...current.filter((item) => item.id !== existing.id)]);
+          setActiveConversationId(existing.id);
+          setView('workspace');
+          return true;
+        }
+      }
     }
 
     const conversation = await perform(
@@ -1740,7 +1755,7 @@ export function App(): ReactNode {
         result.conversation,
         ...current.filter((item) => item.id !== result.conversation.id),
       ]);
-      if (conversation.guidedBuild?.enabled && (options.displayText === 'Builder task' || options.displayText === 'Write this change in the file')) {
+      if (conversation.guidedBuild?.enabled && (options.displayText === 'Builder task' || options.displayText === 'Write this change in the file' || options.displayText?.startsWith('Builder: implement'))) {
         const changedPaths = [...new Set(result.conversation.turns.at(-1)?.fileChanges?.map((change) => change.path) ?? [])];
         if (changedPaths.length) {
           setCodeOpenRequest({ path: changedPaths[0]!, paths: changedPaths, nonce: Date.now() });
@@ -3041,7 +3056,7 @@ export function App(): ReactNode {
                 agentCapabilities={agentCapabilities}
                 selectedAgent={selectedAgent}
                 onUpdateGuidedBuild={(build) => { void updateGuidedBuildFromCode(build); }}
-                onRunGuidedBuild={(prompt, build, mode) => { void runCodeGuidedBuild(prompt, build, mode); }}
+                onRunGuidedBuild={(prompt, build, mode, userMessage) => { void runCodeGuidedBuild(prompt, build, mode, userMessage); }}
               />
             </div>
           </main>
