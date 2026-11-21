@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { ArrowRight, Check, Code2, Cpu, FileText, ListChecks, Pencil, ShieldCheck, Sparkles, Users, X } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, ChevronUp, Code2, Cpu, FileText, ListChecks, Pencil, ShieldCheck, Sparkles, Users, X } from 'lucide-react';
 import type { GuidedBuild, GuidedBuildStep } from '@kai/contracts';
 import { UiButton } from './UiButton';
 import { Pill } from './Pill';
@@ -72,11 +72,25 @@ const VERDICT: Record<NonNullable<GuidedBuild['review']>['status'], { tone: 'suc
   unverified: { tone: 'neutral', label: 'Could not verify' },
 };
 
+const COLLAPSED_KEY = 'kai.guidedBuildCollapsed';
+
+function readCollapsed(): boolean {
+  try { return window.localStorage.getItem(COLLAPSED_KEY) === 'true'; } catch { return false; }
+}
+
 export function GuidedBuildCard(props: GuidedBuildCardProps): ReactNode {
   const { state, disabled, planBusy, reviewBusy, coachLabel, builderLabel, builderIsLocal, hasBrief, stuckReason, escalateLabel, onEscalate, handsOn, withOptions, onBuildWith, onChange, onOpenFile, onGeneratePlan, onAddIdea, onDismiss, onOpenTeam, onBuild, onShowCode, onReview, onNext } = props;
   const [planOpen, setPlanOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [ideaOpen, setIdeaOpen] = useState(false);
+  // Folded, the card is one slim bar (step, progress, Plan and team) and the conversation gets the room. Remembered.
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const toggleCollapsed = (): void => {
+    setCollapsed((value) => {
+      try { window.localStorage.setItem(COLLAPSED_KEY, String(!value)); } catch { /* the choice just is not remembered */ }
+      return !value;
+    });
+  };
   const [idea, setIdea] = useState('');
   const step = state.steps[state.currentStep];
   const total = state.steps.length;
@@ -109,7 +123,7 @@ export function GuidedBuildCard(props: GuidedBuildCardProps): ReactNode {
   }
 
   return (
-    <section className="guided-build-panel mx-4 my-2 max-h-[62vh] shrink-0 overflow-y-auto rounded-xl border border-[color:var(--border-soft)] bg-[var(--bg-panel)]" aria-label="Guided Build">
+    <section className="guided-build-panel mx-4 my-2 max-h-[50vh] shrink-0 overflow-y-auto rounded-xl border border-[color:var(--border-soft)] bg-[var(--bg-panel)]" aria-label="Guided Build">
       {/* Where you are */}
       <div className="sticky top-0 z-10 border-b border-[color:var(--border-soft)] bg-[var(--bg-panel)] px-4 pb-3 pt-3">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -118,7 +132,8 @@ export function GuidedBuildCard(props: GuidedBuildCardProps): ReactNode {
           {state.planTitle && <span className="text-xs text-[var(--text-dim)]">{state.planTitle}</span>}
           {onOpenTeam && <UiButton type="button" className="secondary-button" onClick={onOpenTeam}><Users size={14} /> Plan and team</UiButton>}
           <UiButton type="button" className="secondary-button" aria-expanded={planOpen} onClick={() => setPlanOpen((value) => !value)}><ListChecks size={14} /> {planOpen ? 'Hide plan' : 'Show plan'}</UiButton>
-          {onDismiss && <IconButton aria-label="Hide Guided Build" title="Hide this panel; Guided Build stays on" onClick={onDismiss} icon={<X size={14} />} />}
+          <IconButton aria-label={collapsed ? 'Expand Guided Build' : 'Collapse Guided Build'} aria-expanded={!collapsed} title={collapsed ? 'Show the Coach and the buttons' : 'Fold this to one line and give the conversation the room'} onClick={toggleCollapsed} icon={collapsed ? <ChevronDown size={15} /> : <ChevronUp size={15} />} />
+          {onDismiss && <IconButton aria-label="Hide Guided Build" title="Hide this panel completely; Guided Build stays on and comes back when you open it from the toolbar" onClick={onDismiss} icon={<X size={14} />} />}
         </div>
         <div className="mt-3 flex gap-1.5" role="list" aria-label="Plan progress">
           {state.steps.map((item, index) => {
@@ -128,7 +143,7 @@ export function GuidedBuildCard(props: GuidedBuildCardProps): ReactNode {
               className={`h-1.5 flex-1 rounded-full ${done ? 'bg-[var(--accent)] opacity-60' : current ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'}`} />;
           })}
         </div>
-        {ideaOpen && (
+        {ideaOpen && !collapsed && (
           <form className="mt-3 flex flex-wrap items-center gap-2" aria-label="Add an idea to the plan"
             onSubmit={(event) => { event.preventDefault(); const text = idea.trim(); if (!text || disabled) return; onAddIdea(text); setIdea(''); setIdeaOpen(false); }}>
             <input aria-label="Your idea for the plan" autoFocus className="guided-build-field-control min-w-0 flex-1" placeholder="For example: add a dark-mode toggle to Settings" value={idea} onChange={(event) => setIdea(event.target.value)} />
@@ -137,16 +152,16 @@ export function GuidedBuildCard(props: GuidedBuildCardProps): ReactNode {
             <p className="m-0 basis-full text-xs text-[var(--text-dim)]">The Coach fits it in at the right place and keeps the steps that are still useful.</p>
           </form>
         )}
-        {planOpen && (
+        {planOpen && !collapsed && (
           <ol className="m-0 mt-3 grid list-none gap-1 p-0">
             {state.steps.map((item, index) => (
               <li key={item.id}>
                 <button type="button" disabled={disabled} aria-current={index === state.currentStep ? 'step' : undefined}
-                  className={`flex w-full items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-left text-sm hover:bg-[var(--bg-raised)] ${index === state.currentStep ? 'bg-[var(--bg-raised)] font-semibold' : ''}`}
+                  className={`flex w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-left text-sm !text-[var(--text)] disabled:opacity-60 ${index === state.currentStep ? '!border-[color:var(--accent)] !bg-[var(--bg-raised)] font-semibold' : '!border-[color:var(--border-soft)] !bg-transparent hover:!bg-[var(--bg-raised)]'}`}
                   onClick={() => { onChange({ ...state, currentStep: index, review: null }); setEditing(false); }}>
                   <span className="w-5 text-xs text-[var(--text-dim)]">{index + 1}</span>
                   <span className="min-w-0 flex-1">{item.title}</span>
-                  {(item.status === 'complete') && <Check size={14} aria-label="Done" />}
+                  {(item.status === 'complete') && <Check size={14} className="text-[var(--accent)]" aria-label="Done" />}
                   <span className="text-xs text-[var(--text-dim)]">{splitWhere(planLocation(item.where).where).path}</span>
                 </button>
               </li>
@@ -157,7 +172,7 @@ export function GuidedBuildCard(props: GuidedBuildCardProps): ReactNode {
       </div>
 
       {/* The Coach speaks */}
-      <div className="flex gap-3 px-4 py-4">
+      <div className={`flex gap-3 px-4 py-4 ${collapsed ? 'hidden' : ''}`}>
         <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[var(--bg-raised)]" aria-hidden="true"><Sparkles size={16} className="text-[var(--accent)]" /></div>
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex flex-wrap items-center gap-2"><strong>Coach</strong><span className="text-[11px] text-[var(--text-dim)]">{coachLabel}</span></div>
