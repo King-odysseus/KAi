@@ -3,6 +3,7 @@ import { ArrowRight, Check, Code2, Cpu, FileText, ListChecks, Pencil, ShieldChec
 import type { GuidedBuild, GuidedBuildStep } from '@kai/contracts';
 import { UiButton } from './UiButton';
 import { Pill } from './Pill';
+import { planLocation } from './guided-build-engine';
 import { IconButton } from './ui/IconButton';
 import { ActionsMenu } from './ui/ActionsMenu';
 import { Textarea } from 'flowbite-react';
@@ -77,7 +78,9 @@ export function GuidedBuildCard(props: GuidedBuildCardProps): ReactNode {
   const step = state.steps[state.currentStep];
   const total = state.steps.length;
   const last = state.currentStep >= total - 1;
-  const where = step ? splitWhere(step.where) : null;
+  // A plan saved by an older build can hold two file names run together; the first is the one to show and open.
+  const stepFile = step ? planLocation(step.where).where : '';
+  const where = step ? splitWhere(stepFile) : null;
   const review = state.review;
   const stepDone = step?.status === 'complete' || review?.status === 'ready';
 
@@ -103,9 +106,9 @@ export function GuidedBuildCard(props: GuidedBuildCardProps): ReactNode {
   }
 
   return (
-    <section className="guided-build-panel mx-4 my-2 overflow-hidden rounded-xl border border-[color:var(--border-soft)] bg-[var(--bg-panel)]" aria-label="Guided Build">
+    <section className="guided-build-panel mx-4 my-2 max-h-[62vh] shrink-0 overflow-y-auto rounded-xl border border-[color:var(--border-soft)] bg-[var(--bg-panel)]" aria-label="Guided Build">
       {/* Where you are */}
-      <div className="border-b border-[color:var(--border-soft)] px-4 pb-3 pt-3">
+      <div className="sticky top-0 z-10 border-b border-[color:var(--border-soft)] bg-[var(--bg-panel)] px-4 pb-3 pt-3">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--accent)]">Step {state.currentStep + 1} of {total}</span>
           <strong className="min-w-0 flex-1 text-sm">{step.title}</strong>
@@ -132,7 +135,7 @@ export function GuidedBuildCard(props: GuidedBuildCardProps): ReactNode {
                   <span className="w-5 text-xs text-[var(--text-dim)]">{index + 1}</span>
                   <span className="min-w-0 flex-1">{item.title}</span>
                   {(item.status === 'complete') && <Check size={14} aria-label="Done" />}
-                  <span className="text-xs text-[var(--text-dim)]">{splitWhere(item.where).path}</span>
+                  <span className="text-xs text-[var(--text-dim)]">{splitWhere(planLocation(item.where).where).path}</span>
                 </button>
               </li>
             ))}
@@ -150,7 +153,7 @@ export function GuidedBuildCard(props: GuidedBuildCardProps): ReactNode {
           {step.instructions && <p className="m-0 mt-2 whitespace-pre-line text-sm text-[var(--text)]">{step.instructions}</p>}
           {where?.path && (
             <button type="button" onClick={open} disabled={disabled} className="mt-3 inline-flex items-center gap-2 rounded-md bg-[var(--bg-raised)] px-2 py-1 font-mono text-xs text-[var(--text)] hover:underline" title="Open this file in the editor">
-              <FileText size={13} aria-hidden="true" />{step.where}
+              <FileText size={13} aria-hidden="true" />{stepFile}
             </button>
           )}
           {step.acceptanceCriteria.length > 0 && (
