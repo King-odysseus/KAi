@@ -52,7 +52,22 @@ export function describeRole(target: RoleTarget | null | undefined, agentNames: 
   const preset = directProviderPreset(api.provider);
   const model = api.model ?? preset.defaultModel ?? '';
   const local = isLocalProvider(api.provider);
-  return { label: `${model || preset.displayName}${local ? ' (on this computer)' : ` · ${preset.displayName}`}`, local };
+  // Never the provider's name twice: with no model known the label is just the provider, not "Gateway · Gateway".
+  const label = local ? `${model || preset.displayName} (on this computer)` : model && model !== preset.displayName ? `${model} · ${preset.displayName}` : preset.displayName;
+  return { label, local };
+}
+
+/**
+ * A target with the model KAI will really use filled in. Choosing a provider from a menu gives a target with no model, and
+ * the run then uses the model saved in Settings (the direct API's, or the first remembered for that server), so the label
+ * and the request should say so instead of showing nothing.
+ */
+export function withSettingsModel(target: RoleTarget, settings: Pick<AppSettings, 'directApi' | 'savedLocalModels'>): RoleTarget {
+  if (target.execution !== 'api' || !target.api || target.api.model) return target;
+  const { provider } = target.api;
+  const direct = settings.directApi.provider === provider ? settings.directApi.model.trim() : '';
+  const model = direct || settings.savedLocalModels[provider]?.[0] || '';
+  return model ? { ...target, api: { ...target.api, model } } : target;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -383,4 +398,24 @@ export function describeModelCheck(
   if (window === undefined) return { tone: 'success', text: `The server answered and lists "${model}". It did not say how large its context window is.` };
   if (window < SMALL_CONTEXT_TOKENS) return { tone: 'warning', text: `The server lists "${model}" with a ${window.toLocaleString()}-token window. That is small: steps that touch several files may not fit.` };
   return { tone: 'success', text: `The server lists "${model}" with a ${window.toLocaleString()}-token window.` };
+}
+
+/**
+ * A new version of the plan (the Coach fitted an idea in, or the person asked for the plan again) with the person's
+ * progress kept. A step matches an earlier one by id, else by title, so a finished step stays finished, a step the person
+ * already said yes to is not asked about again, and the current step is the first one still to do. With no earlier plan
+ * every step is new and the first is active, as when a plan is first made.
+ */
+export function mergePlanProgress(next: readonly GuidedBuildStep[], previous: readonly GuidedBuildStep[]): { steps: GuidedBuildStep[]; currentStep: number } {
+  const key = (step: Pick<GuidedBuildStep, 'title'>): string => step.title.trim().toLowerCase();
+  const merged = next.map((step): GuidedBuildStep => {
+    const earlier = previous.find((item) => item.id === step.id) ?? previous.find((item) => key(item) === key(step));
+    const { needsApproval, ...rest } = step;
+    if (!earlier) return { ...rest, status: 'pending', ...(needsApproval ? { needsApproval } : {}) };
+    // Said yes to once, it stays yes; still waiting, it keeps waiting.
+    return { ...rest, status: earlier.status === 'complete' ? 'complete' : 'pending', ...(earlier.needsApproval ? { needsApproval: earlier.needsApproval } : {}) };
+  });
+  const first = merged.findIndex((step) => step.status !== 'complete');
+  const currentStep = first === -1 ? Math.max(0, merged.length - 1) : first;
+  return { steps: merged.map((step, index) => (index === currentStep && step.status !== 'complete' ? { ...step, status: 'active' } : step)), currentStep };
 }

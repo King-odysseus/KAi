@@ -23,8 +23,9 @@ export function NoticeBanner({ tone = 'info', children, primary, more, onDismiss
   onDismiss?: () => void;
 }): ReactNode {
   return (
-    <div role="status" className={`flex w-full items-center gap-2 rounded-[var(--radius-control)] border px-3 py-1.5 text-xs text-[var(--text-muted)] ${TONE[tone]}`}>
-      <span className="min-w-0 flex-1">{children}</span>
+    <div role="status" className={`flex w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-[var(--radius-control)] border px-3 py-1.5 text-xs text-[var(--text-muted)] ${TONE[tone]}`}>
+      {/* The sentence keeps a readable width: when the buttons beside it would squeeze it, they drop to the next line instead. */}
+      <span className="min-w-[min(100%,16rem)] flex-1 basis-64 whitespace-normal [overflow-wrap:anywhere]">{children}</span>
       {primary}
       {more && more.length > 0 && (
         <ActionsMenu

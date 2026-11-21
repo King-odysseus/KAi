@@ -3063,6 +3063,7 @@ export function App(): ReactNode {
                 activeProject={activeProject}
                 editorState={bootstrap.editor}
                 autoSave={bootstrap.settings.editor.autoSave}
+                modelSettings={bootstrap.settings}
                 autoSaveDelayMs={bootstrap.settings.editor.autoSaveDelayMs}
                 formatOnSave={bootstrap.settings.editor.formatOnSave}
                 editorView={bootstrap.settings.editor}

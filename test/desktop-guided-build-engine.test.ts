@@ -387,3 +387,89 @@ describe('describeModelCheck', () => {
     expect(describeModelCheck(live(), '').tone).toBe('warning');
   });
 });
+
+describe('the model a role will really use', () => {
+  const settings = (provider: string, model: string, saved: Record<string, string[]> = {}) => ({
+    directApi: { enabled: true, provider, model, baseUrl: 'http://192.168.1.20:8080/v1', credentialId: 'provider.local' },
+    savedLocalModels: saved,
+  }) as never;
+
+  it('fills in the model from Settings when a provider was picked without one', async () => {
+    const { withSettingsModel } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
+    const picked = { execution: 'api' as const, api: { provider: 'lmstudio' as const } };
+    expect(withSettingsModel(picked, settings('lmstudio', 'gateway/coding'))).toEqual({ execution: 'api', api: { provider: 'lmstudio', model: 'gateway/coding' } });
+  });
+
+  it('uses the first model remembered for that server when it is not the direct API', async () => {
+    const { withSettingsModel } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
+    const picked = { execution: 'api' as const, api: { provider: 'ollama' as const } };
+    expect(withSettingsModel(picked, settings('openai', 'gpt-x', { ollama: ['qwen3-coder', 'other'] })).api?.model).toBe('qwen3-coder');
+  });
+
+  it('leaves a target that already has a model, a CLI target, and an unknown model alone', async () => {
+    const { withSettingsModel } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
+    const chosen = { execution: 'api' as const, api: { provider: 'lmstudio' as const, model: 'mine' } };
+    expect(withSettingsModel(chosen, settings('lmstudio', 'gateway/coding'))).toBe(chosen);
+    const cli = { execution: 'cli' as const, agent: 'codex' as const };
+    expect(withSettingsModel(cli, settings('lmstudio', 'x'))).toBe(cli);
+    const nothing = { execution: 'api' as const, api: { provider: 'ollama' as const } };
+    expect(withSettingsModel(nothing, settings('openai', 'gpt-x'))).toBe(nothing);
+  });
+
+  it('never repeats the provider name in the label', async () => {
+    const { describeRole } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
+    const { directProviderPreset } = await import('@kai/contracts');
+    const name = directProviderPreset('openai').displayName;
+    expect(describeRole({ execution: 'api', api: { provider: 'openai', model: 'gpt-x' } }).label).toBe('gpt-x · ' + name);
+    const parts = describeRole({ execution: 'api', api: { provider: 'openai' } }).label.split(' · ');
+    expect(parts.length).toBeLessThanOrEqual(2);
+    expect(new Set(parts).size).toBe(parts.length);
+  });
+});
+
+describe('mergePlanProgress', () => {
+  const step = (id: string, title: string, status: 'pending' | 'active' | 'review' | 'complete' = 'pending', needsApproval?: string) => ({
+    id, title, why: '', where: 'src/a.ts', instructions: 'Do it.', acceptanceCriteria: [], status, ...(needsApproval ? { needsApproval } : {}),
+  });
+
+  it('keeps finished steps finished and moves to the first one still to do', async () => {
+    const { mergePlanProgress } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
+    const before = [step('a', 'Save a theme', 'complete'), step('b', 'Send it to the window', 'active'), step('c', 'Add the toggle')];
+    const after = [step('a', 'Save a theme'), step('x', 'Add a settings page'), step('b', 'Send it to the window'), step('c', 'Add the toggle')];
+    const merged = mergePlanProgress(after, before);
+    expect(merged.steps.map((item) => item.status)).toEqual(['complete', 'active', 'pending', 'pending']);
+    expect(merged.currentStep).toBe(1);
+    expect(merged.steps[1]!.title).toBe('Add a settings page');
+  });
+
+  it('matches by title when the Coach gives a step a new id', async () => {
+    const { mergePlanProgress } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
+    const merged = mergePlanProgress([step('new-1', '  save a theme ')], [step('a', 'Save a theme', 'complete')]);
+    expect(merged.steps[0]!.status).toBe('complete');
+  });
+
+  it('does not ask again about a step the person already approved, and keeps asking about one still waiting', async () => {
+    const { mergePlanProgress } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
+    const before = [step('a', 'Mark paid by hand'), step('b', 'Send reminders', 'pending', 'Emails are out of scope.')];
+    const after = [step('a', 'Mark paid by hand', 'pending', 'Payments are not handled.'), step('b', 'Send reminders', 'pending', 'Emails are out of scope.'), step('c', 'Export CSV', 'pending', 'Is CSV enough?')];
+    const merged = mergePlanProgress(after, before);
+    expect(merged.steps[0]!.needsApproval).toBeUndefined();
+    expect(merged.steps[1]!.needsApproval).toBe('Emails are out of scope.');
+    expect(merged.steps[2]!.needsApproval).toBe('Is CSV enough?');
+  });
+
+  it('behaves like a first plan when there is no earlier one', async () => {
+    const { mergePlanProgress } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
+    const merged = mergePlanProgress([step('a', 'One'), step('b', 'Two')], []);
+    expect(merged.steps.map((item) => item.status)).toEqual(['active', 'pending']);
+    expect(merged.currentStep).toBe(0);
+  });
+
+  it('stays on the last step when everything is already done', async () => {
+    const { mergePlanProgress } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
+    const done = [step('a', 'One', 'complete'), step('b', 'Two', 'complete')];
+    const merged = mergePlanProgress(done, done);
+    expect(merged.currentStep).toBe(1);
+    expect(merged.steps.every((item) => item.status === 'complete')).toBe(true);
+  });
+});

@@ -21,6 +21,7 @@ interface Props {
   onUpdateGuidedBuild: (build: GuidedBuild) => void;
   onRunGuidedBuild: (prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code', userMessage?: string, override?: GuidedRunOverride) => void | Promise<void>;
   projectId: string | null;
+  modelSettings?: Pick<import('@kai/contracts').AppSettings, 'directApi' | 'savedLocalModels'>;
   onOpenFile: (path: string, line?: number) => void;
 }
 

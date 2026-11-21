@@ -12,7 +12,7 @@ import { parseGuidedBuildObject, visibleGuidedBuildReply } from './guided-build-
 import { GuidedBuildCard } from './GuidedBuildCard';
 import { GuidedBuildTeamPanel } from './GuidedBuildTeamPanel';
 import { collectCheck, collectDiffs } from './guided-build-evidence';
-import { guidedUsage, addIdeaPrompt, builderStepPrompt, builderStuckReason, coachPrompt, describeRole, diffText, evidenceText, gateReview, guidedTurnIndexes, learnPrompt, localBuilderStepPrompt, planFromBriefPrompt, planPrompt as buildPlanPrompt, readGuidedPlan, readGuidedReview, reviewPrompt, showCodePrompt, writeCodePrompt, type CheckEvidence, type GuidedRunOverride, type LearnAction } from './guided-build-engine';
+import { mergePlanProgress, withSettingsModel, guidedUsage, addIdeaPrompt, builderStepPrompt, builderStuckReason, coachPrompt, describeRole, diffText, evidenceText, gateReview, guidedTurnIndexes, learnPrompt, localBuilderStepPrompt, planFromBriefPrompt, planPrompt as buildPlanPrompt, readGuidedPlan, readGuidedReview, reviewPrompt, showCodePrompt, writeCodePrompt, type CheckEvidence, type GuidedRunOverride, type LearnAction } from './guided-build-engine';
 import { unwrap } from '../types';
 
 type BuildMode = 'coach' | 'plan' | 'review' | 'show-code' | 'write-code';
@@ -35,10 +35,12 @@ export function GuidedBuildLearnPanel(props: {
   onOpenFile: (path: string, line?: number) => void;
   /** The open project, so a review can run its check and read the real diff. */
   projectId: string | null;
+  /** The saved model choices; a target picked without a model is shown (and sent) with the one saved here. */
+  modelSettings?: Pick<import('@kai/contracts').AppSettings, 'directApi' | 'savedLocalModels'>;
 }): ReactNode {
   const {
     view, explaining, busy, error, onExplain, stripHidden, onToggleStrip, guidedBuild, conversation,
-    agentCapabilities, selectedAgent, onUpdateGuidedBuild, onRunGuidedBuild, onOpenFile, projectId,
+    agentCapabilities, selectedAgent, onUpdateGuidedBuild, onRunGuidedBuild, onOpenFile, projectId, modelSettings,
   } = props;
   const fallbackTarget = useMemo<RoleTarget>(() => ({ execution: 'cli', agent: selectedAgent }), [selectedAgent]);
   const [build, setBuild] = useState<GuidedBuild>(() => guidedBuild ?? emptyBuild(selectedAgent));
@@ -92,7 +94,11 @@ export function GuidedBuildLearnPanel(props: {
     const answer = [...conversation.turns.slice(planStart)].reverse().find((turn) => turn.role === 'assistant');
     if (!answer) return;
     const plan = readGuidedPlan(answer.text, (index) => `guided-step-${index + 1}`);
-    if (plan && plan.steps.length) update({ ...build, enabled: true, planTitle: plan.title, steps: plan.steps, currentStep: 0, review: null });
+    if (plan && plan.steps.length) {
+      // Progress is kept when the plan is updated: finished steps stay finished and the place is kept.
+      const merged = mergePlanProgress(plan.steps, build.steps);
+      update({ ...build, enabled: true, planTitle: plan.title, steps: merged.steps, currentStep: merged.currentStep, review: null });
+    }
     setPlanStart(null);
     setWorking(null);
   }, [conversation?.turns.length, planStart]);
@@ -143,13 +149,13 @@ export function GuidedBuildLearnPanel(props: {
     update(role === 'coach' ? { ...build, coachTarget: next, coachModel: value } : { ...build, builderTarget: next, builderModel: value });
   };
 
-  const run = async (mode: BuildMode, prompt: string, override?: GuidedRunOverride): Promise<void> => {
+  const run = async (mode: BuildMode, prompt: string, override?: GuidedRunOverride, label?: string): Promise<void> => {
     if (!prompt.trim() || working) return;
     setWorking(mode);
     const turnCount = conversation?.turns.length ?? 0;
     if (mode === 'plan') setPlanStart(turnCount);
     if (mode === 'review') setReviewStart(turnCount);
-    const userMessage = mode === 'review' ? 'Check my edit' : message.trim() || step?.title || 'Continue Guided Build';
+    const userMessage = mode === 'review' ? 'Check my edit' : label ?? (message.trim() || step?.title || 'Continue Guided Build');
     try { await onRunGuidedBuild(prompt, build, mode, userMessage, override); }
     catch { setWorking(null); setPlanStart(null); setReviewStart(null); }
     setMessage('');
@@ -166,10 +172,11 @@ export function GuidedBuildLearnPanel(props: {
       void run('coach', coachPrompt(question, build.style, build.detail, build.questions, step));
     }
   };
-  const addIdea = (): void => {
-    const idea = message.trim();
+  // The idea comes from the card's own box, or from the message box when the button beside it is used.
+  const addIdea = (typed?: string): void => {
+    const idea = (typed ?? message).trim();
     if (!idea) return;
-    void run('plan', planPrompt(idea, true));
+    void run('plan', planPrompt(idea, true), undefined, idea);
   };
   const sendToBuilder = (mode: 'show-code' | 'write-code'): void => {
     const request = message.trim() || step?.instructions || step?.title || '';
@@ -192,8 +199,10 @@ export function GuidedBuildLearnPanel(props: {
     })().catch(() => setWorking(null));
   };
   /** Builds the current step with the saved Builder, or with a model picked for this one step only. */
-  const buildStep = (target: RoleTarget, justThisStep = false): void => {
+  const buildStep = (picked: RoleTarget, justThisStep = false): void => {
     if (!step) return;
+    // A provider picked from the menu has no model of its own; the run uses the one saved in Settings, so say which.
+    const target = modelSettings ? withSettingsModel(picked, modelSettings) : picked;
     const role = describeRole(target, agentNames);
     void run('write-code', role.local ? localBuilderStepPrompt(step) : builderStepPrompt(step), justThisStep ? { target, local: role.local } : undefined);
   };
@@ -220,8 +229,8 @@ export function GuidedBuildLearnPanel(props: {
   };
   const currentSpeaker = working === 'plan' || working === 'coach' || working === 'review' ? 'Coach' : working ? 'Builder' : '';
   const agentNames = Object.fromEntries(agentCapabilities.map((agent) => [agent.id, agent.displayName]));
-  const coachRole = describeRole(coach, agentNames);
-  const builderRole = describeRole(builder, agentNames);
+  const coachRole = describeRole(modelSettings ? withSettingsModel(coach, modelSettings) : coach, agentNames);
+  const builderRole = describeRole(modelSettings ? withSettingsModel(builder, modelSettings) : builder, agentNames);
   const lastTurn = allTurns.at(-1);
   const lastAsked = [...allTurns].reverse().find((turn) => turn.role === 'user')?.text ?? '';
   const builderStuck = lastTurn?.role === 'assistant' && lastAsked.startsWith('Builder: implement') ? builderStuckReason(lastTurn.text) : null;
@@ -314,7 +323,7 @@ export function GuidedBuildLearnPanel(props: {
             </>}
           </>}
           actions={<>
-            {build.steps.length > 0 && <UiButton type="button" className="secondary-button" disabled={!message.trim() || Boolean(working)} onClick={addIdea}>Add idea to plan</UiButton>}
+            {build.steps.length > 0 && <UiButton type="button" className="secondary-button" disabled={!message.trim() || Boolean(working)} onClick={() => addIdea()}>Add idea to plan</UiButton>}
             {build.steps.length > 0 && <UiButton type="button" className="secondary-button" disabled={(!message.trim() && !step) || Boolean(working)} onClick={() => sendToBuilder('show-code')}>Show me code</UiButton>}
             {build.steps.length > 0 && <UiButton type="button" className="primary-button" disabled={(!message.trim() && !step) || Boolean(working)} onClick={() => sendToBuilder('write-code')}>Builder, edit the file</UiButton>}
             <ComposerSend label={build.steps.length ? 'Ask Coach' : 'Create plan with Coach'} title={build.steps.length ? 'Ask Coach a question' : 'Turn your idea into a step-by-step plan'} disabled={!message.trim() || Boolean(working)} onClick={askCoach} />

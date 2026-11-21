@@ -260,6 +260,7 @@ export function CodeView({
   selectedAgent,
   onUpdateGuidedBuild,
   onRunGuidedBuild,
+  modelSettings,
 }: {
   /** A file another part of the app wants shown; a new `nonce` asks again even for the same path. */
   openRequest?: { path: string; paths?: string[]; nonce: number } | null;
@@ -270,6 +271,8 @@ export function CodeView({
   agentCapabilities: readonly AgentCapability[];
   selectedAgent: AgentId;
   onUpdateGuidedBuild: (build: GuidedBuild) => void;
+  /** The saved model choices, so a plan's Builder shows the model that will really run. */
+  modelSettings?: Pick<import('@kai/contracts').AppSettings, 'directApi' | 'savedLocalModels'>;
   onRunGuidedBuild: (prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code', userMessage?: string, override?: GuidedRunOverride) => void | Promise<void>;
   activeProject: ProjectRecord | null;
   editorState: EditorWindowSnapshot | null;
@@ -2338,6 +2341,7 @@ export function CodeView({
             onUpdateGuidedBuild={onUpdateGuidedBuild}
             onRunGuidedBuild={onRunGuidedBuild}
             projectId={activeProject.id}
+            {...(modelSettings ? { modelSettings } : {})}
             onOpenFile={(path) => { void openFile(path); }}
           /> : sidePanel === 'review' ? <GuidedReviewPanel
             projectId={activeProject.id}

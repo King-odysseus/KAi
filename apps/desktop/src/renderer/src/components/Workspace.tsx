@@ -15,7 +15,7 @@ import { GuidedBuildCard } from './GuidedBuildCard';
 import { GuidedBuildTeamPanel } from './GuidedBuildTeamPanel';
 import { collectCheck, collectDiffs } from './guided-build-evidence';
 import { startingTargets } from '../model-team';
-import { guidedUsage, planFromBriefPrompt as guidedPlanFromBriefPrompt, LOCAL_BUILDER_ROUNDS, builderStuckReason as guidedStuckReason, localBuilderStepPrompt as guidedLocalBuilderPrompt, diffText as guidedDiffText, evidenceText as guidedEvidenceText, gateReview as guidedGateReview, type CheckEvidence as GuidedCheckEvidence, addIdeaPrompt as guidedAddIdeaPrompt, defaultLocalBuilder, describeRole, showCodePrompt as guidedShowCodePrompt, builderStepPrompt as guidedBuilderStepPrompt, coachPrompt as guidedCoachPrompt, isGuidedLabel, planPrompt as guidedPlanPrompt, readGuidedPlan, readGuidedReview, reviewPrompt as guidedReviewPrompt } from './guided-build-engine';
+import { mergePlanProgress, withSettingsModel, guidedUsage, planFromBriefPrompt as guidedPlanFromBriefPrompt, LOCAL_BUILDER_ROUNDS, builderStuckReason as guidedStuckReason, localBuilderStepPrompt as guidedLocalBuilderPrompt, diffText as guidedDiffText, evidenceText as guidedEvidenceText, gateReview as guidedGateReview, type CheckEvidence as GuidedCheckEvidence, addIdeaPrompt as guidedAddIdeaPrompt, defaultLocalBuilder, describeRole, showCodePrompt as guidedShowCodePrompt, builderStepPrompt as guidedBuilderStepPrompt, coachPrompt as guidedCoachPrompt, isGuidedLabel, planPrompt as guidedPlanPrompt, readGuidedPlan, readGuidedReview, reviewPrompt as guidedReviewPrompt } from './guided-build-engine';
 import { Pill } from './Pill';
 import {
   Archive,
@@ -509,8 +509,8 @@ export function WorkspaceView({
   const runModel = guidedBuild?.enabled ? guidedBuild.coachModel || coachTarget?.api?.model || selectedModel : selectedModel;
   const guidedStep = guidedBuild?.steps[guidedBuild.currentStep];
   const guidedAgentNames = Object.fromEntries(agentCapabilities.map((agent) => [agent.id, agent.displayName]));
-  const guidedCoachRole = describeRole(coachTarget ?? { execution: 'cli', agent: coachAgent, ...(guidedBuild?.coachModel ? { model: guidedBuild.coachModel } : {}) }, guidedAgentNames);
-  const guidedBuilderRole = describeRole(builderTarget ?? { execution: 'cli', agent: builderAgent, ...(builderModel ? { model: builderModel } : {}) }, guidedAgentNames);
+  const guidedCoachRole = describeRole(withSettingsModel(coachTarget ?? { execution: 'cli', agent: coachAgent, ...(guidedBuild?.coachModel ? { model: guidedBuild.coachModel } : {}) }, settings), guidedAgentNames);
+  const guidedBuilderRole = describeRole(withSettingsModel(builderTarget ?? { execution: 'cli', agent: builderAgent, ...(builderModel ? { model: builderModel } : {}) }, settings), guidedAgentNames);
   /** The Builder's last reply, when it stopped and said it was stuck: the card then offers a way forward. */
   const guidedBuilderStuck = (() => {
     const turns = activeConversation?.turns ?? [];
@@ -540,11 +540,13 @@ export function WorkspaceView({
     try {
       const plan = readGuidedPlan(answer, (index) => `step-${index + 1}-${crypto.randomUUID()}`);
       if (!plan) return;
-      const steps = plan.steps;
+      // Progress is kept when the plan is updated (an idea fitted in): finished steps stay finished and the place is kept.
+      const merged = mergePlanProgress(plan.steps, activeConversation.guidedBuild?.steps ?? []);
+      const steps = merged.steps;
       if (steps.length > 0) {
         setHiddenGuidedTurnIds((current) => new Set(current).add(answerTurn.id));
         const current = activeConversation.guidedBuild ?? { enabled: true, coachTarget: startingTargets(settings).coach, builderTarget: startingTargets(settings).builder, coachAgent, coachModel: '', builderAgent: selectedAgent, builderModel: selectedModel, style: 'tutor' as const, detail: 'step-by-step' as const, questions: 'blocked' as const, followEdits: true, handsOn: 'guided' as const, builderLock: 'escalate' as const, planTitle: '', steps: [], currentStep: 0, review: null };
-        void onUpdateConversation({ ...activeConversation, guidedBuild: { ...current, enabled: true, planTitle: plan.title, steps, currentStep: 0, review: null }, updatedAt: new Date().toISOString() });
+        void onUpdateConversation({ ...activeConversation, guidedBuild: { ...current, enabled: true, planTitle: plan.title, steps, currentStep: merged.currentStep, review: null }, updatedAt: new Date().toISOString() });
       }
       setGuidedPlanBusy(false);
     } catch {
@@ -591,8 +593,10 @@ export function WorkspaceView({
    * Builds the current step with the given model: the saved Builder, or one the person picked for this step only. A small
    * local model gets the short step prompt and a round limit; a larger one gets the plain step.
    */
-  function buildGuidedStepWith(target: RoleTarget, justThisStep = false): void {
+  function buildGuidedStepWith(picked: RoleTarget, justThisStep = false): void {
     if (!guidedStep) return;
+    // A provider chosen from the menu has no model of its own; the run would use the one saved in Settings, so say which.
+    const target = withSettingsModel(picked, settings);
     const role = describeRole(target, guidedAgentNames);
     const prompt = role.local ? guidedLocalBuilderPrompt(guidedStep) : guidedBuilderStepPrompt(guidedStep);
     const model = target.execution === 'cli' ? target.model : target.api?.model;
@@ -2007,7 +2011,7 @@ export function WorkspaceView({
           }}
           onChange={setGuidedBuild}
           onOpenFile={onOpenFile}
-          onAddIdea={() => onComposerDraftChange('Add an idea to my plan: ')}
+          onAddIdea={(idea) => queueOrSend(`Add an idea to my plan: ${idea}`)}
           onDismiss={() => setDismissedGuidedBuildConversation(activeConversation.id)}
           onGeneratePlan={() => {
             // What the person typed, not Guided Build's own labels. With none and a Studio brief, the brief is the request.

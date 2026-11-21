@@ -45,7 +45,8 @@ export interface GuidedBuildCardProps {
   onChange: (state: GuidedBuild) => void;
   onOpenFile: (path: string, line?: number) => void;
   onGeneratePlan: () => void;
-  onAddIdea: () => void;
+  /** The person's idea for the plan, typed in the card. The host asks the Coach to fit it in at the right place. */
+  onAddIdea: (idea: string) => void;
   /** Hides the card. Left out where the card is the whole panel (Learn & Code), so no hide button is drawn. */
   onDismiss?: () => void;
   /** Opens Plan and team: the dial, the roles and the plan in one place. */
@@ -75,6 +76,8 @@ export function GuidedBuildCard(props: GuidedBuildCardProps): ReactNode {
   const { state, disabled, planBusy, reviewBusy, coachLabel, builderLabel, builderIsLocal, hasBrief, stuckReason, escalateLabel, onEscalate, handsOn, withOptions, onBuildWith, onChange, onOpenFile, onGeneratePlan, onAddIdea, onDismiss, onOpenTeam, onBuild, onShowCode, onReview, onNext } = props;
   const [planOpen, setPlanOpen] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [ideaOpen, setIdeaOpen] = useState(false);
+  const [idea, setIdea] = useState('');
   const step = state.steps[state.currentStep];
   const total = state.steps.length;
   const last = state.currentStep >= total - 1;
@@ -125,6 +128,15 @@ export function GuidedBuildCard(props: GuidedBuildCardProps): ReactNode {
               className={`h-1.5 flex-1 rounded-full ${done ? 'bg-[var(--accent)] opacity-60' : current ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'}`} />;
           })}
         </div>
+        {ideaOpen && (
+          <form className="mt-3 flex flex-wrap items-center gap-2" aria-label="Add an idea to the plan"
+            onSubmit={(event) => { event.preventDefault(); const text = idea.trim(); if (!text || disabled) return; onAddIdea(text); setIdea(''); setIdeaOpen(false); }}>
+            <input aria-label="Your idea for the plan" autoFocus className="guided-build-field-control min-w-0 flex-1" placeholder="For example: add a dark-mode toggle to Settings" value={idea} onChange={(event) => setIdea(event.target.value)} />
+            <UiButton type="submit" className="primary-button" disabled={disabled || !idea.trim()}>Add to the plan</UiButton>
+            <UiButton type="button" className="secondary-button" onClick={() => { setIdeaOpen(false); setIdea(''); }}>Cancel</UiButton>
+            <p className="m-0 basis-full text-xs text-[var(--text-dim)]">The Coach fits it in at the right place and keeps the steps that are still useful.</p>
+          </form>
+        )}
         {planOpen && (
           <ol className="m-0 mt-3 grid list-none gap-1 p-0">
             {state.steps.map((item, index) => (
@@ -139,7 +151,7 @@ export function GuidedBuildCard(props: GuidedBuildCardProps): ReactNode {
                 </button>
               </li>
             ))}
-            <li><UiButton type="button" className="secondary-button" disabled={disabled} onClick={onAddIdea}>Add an idea to the plan</UiButton></li>
+            <li><UiButton type="button" className="secondary-button" disabled={disabled} onClick={() => { setIdeaOpen(true); setPlanOpen(false); }}>Add an idea to the plan</UiButton></li>
           </ol>
         )}
       </div>
@@ -234,7 +246,7 @@ export function GuidedBuildCard(props: GuidedBuildCardProps): ReactNode {
 
           <div className="mt-4 flex flex-wrap gap-4 text-xs">
             <button type="button" className="link-button" aria-expanded={editing} onClick={() => setEditing((value) => !value)}>{editing ? 'Done editing' : 'Edit this step'}</button>
-            <button type="button" className="link-button" disabled={disabled} onClick={onAddIdea}>Add an idea to the plan</button>
+            <button type="button" className="link-button" disabled={disabled} aria-expanded={ideaOpen} title={disabled ? 'Available when the current run has finished' : undefined} onClick={() => setIdeaOpen(true)}>Add an idea to the plan</button>
           </div>
 
           {editing && (
