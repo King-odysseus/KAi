@@ -101,7 +101,7 @@ describe('crew runner', () => {
     expect(run.tasks.map((task) => task.status)).toEqual(['accepted', 'accepted']);
   });
 
-  it('sends an explicitly stuck local builder to the Lead immediately', async () => {
+  it('sends an explicitly stuck local builder to the Lead immediately, and the stronger model rescues the card', async () => {
     const f = fixture({ buildOutput: 'I cannot continue.\n<<KAI_STUCK>>missing project file' });
     const localConfig = crewConfigSchema.parse({
       ...f.config,
@@ -112,8 +112,143 @@ describe('crew runner', () => {
     const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: localConfig }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(f.requests.some((request) => request.prompt.includes('A task has failed or been sent back too many times'))).toBe(true);
+    // The local builder gets two attempts per card; the third goes to the stronger model, which finishes it.
+    expect(run.tasks.map((task) => task.status)).toEqual(['accepted', 'accepted']);
+    expect(run.tasks.every((task) => task.escalated)).toBe(true);
+    // The questions raised while a card was stuck are gone with it: nothing waits on a task that is done.
+    expect(run.ask).toBeNull();
+    expect(run.status).toBe('completed');
+  });
+
+  it('still hands a stuck local builder to the person when local first is off', async () => {
+    const f = fixture({ buildOutput: 'I cannot continue.\n<<KAI_STUCK>>missing project file' });
+    const localConfig = crewConfigSchema.parse({
+      ...f.config,
+      savings: { ...f.config.savings, localFirst: false },
+      roles: f.config.roles.map((role) => role.id === 'builder'
+        ? { ...role, execution: 'api', api: { provider: 'ollama', model: 'qwen3-coder' } }
+        : role),
+    });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: localConfig }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(f.requests.some((request) => request.prompt.includes('A task has failed or been sent back too many times'))).toBe(true);
     expect(run.status).toBe('needsYou');
     expect(run.tasks[0]?.status).toBe('needsYou');
+    expect(run.tiers.escalations).toBe(0);
+  });
+
+  describe('the model ladder', () => {
+    const localBuilder = (config: CrewConfig, savings: Partial<CrewConfig['savings']> = {}): CrewConfig => crewConfigSchema.parse({
+      ...config,
+      savings: { ...config.savings, ...savings },
+      roles: config.roles.map((role) => (role.id === 'builder' ? { ...role, execution: 'api', api: { provider: 'ollama', model: 'qwen3-coder' } } : role)),
+    });
+    const sendBacks = ['{"verdict":"sendBack","feedback":"The schema misses an index."}', '{"verdict":"sendBack","feedback":"The migration has no rollback."}', '{"verdict":"accept"}'];
+
+    it('keeps a card local for its first attempts, then lets the stronger model take that card only', async () => {
+      const f = fixture({ lead: sendBacks, plan: [JSON.stringify({ tasks: [{ id: 'schema', title: 'Log schema', role: 'builder', description: 'Tables', acceptance: ['Migrations run'], dependsOn: [] }, { id: 'ingest', title: 'Ingestion endpoint', role: 'builder', description: 'POST /logs', acceptance: ['Rate limit 100/min'], dependsOn: ['schema'] }] })] });
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: localBuilder(f.config) }, 1);
+      const run = await runToIdle(f.runner, started.id);
+      const schemaBuilds = f.requests.filter((request) => request.displayText === 'Build: Log schema');
+      expect(schemaBuilds).toHaveLength(3);
+      expect(schemaBuilds.slice(0, 2).every((request) => request.execution === 'api' && request.toolRoundLimit === 30)).toBe(true);
+      expect(schemaBuilds[2]).toMatchObject({ execution: 'cli', agent: 'claude' });
+      expect(schemaBuilds[2]?.toolRoundLimit).toBeUndefined();
+      // The next card starts on the local model again.
+      expect(f.requests.find((request) => request.displayText === 'Build: Ingestion endpoint')).toMatchObject({ execution: 'api', toolRoundLimit: 30 });
+      expect(run.tasks.find((task) => task.id === 'schema')).toMatchObject({ escalated: true, tier: 'cloud' });
+      expect(run.tasks.find((task) => task.id === 'ingest')).toMatchObject({ escalated: false, tier: 'local' });
+      expect(run.tiers).toEqual({ localBuilds: 3, cloudBuilds: 1, escalations: 1 });
+      expect(run.feed.some((entry) => entry.text.includes('The next card starts on the local model again'))).toBe(true);
+    });
+
+    it('stays on the local model when local first is turned off', async () => {
+      const f = fixture({ lead: sendBacks });
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: localBuilder(f.config, { localFirst: false }) }, 1);
+      const run = await runToIdle(f.runner, started.id);
+      const builds = f.requests.filter((request) => request.displayText === 'Build: Log schema');
+      expect(builds).toHaveLength(3);
+      expect(builds.every((request) => request.execution === 'api')).toBe(true);
+      expect(run.tiers.escalations).toBe(0);
+    });
+
+    it('waits one more attempt when the crew is set to allow three on the local model', async () => {
+      const f = fixture({ lead: [...sendBacks.slice(0, 2), '{"verdict":"sendBack","feedback":"The seed data is missing."}', '{"verdict":"accept"}'] }, { limits: { ...createDefaultCrewConfig('claude', 'codex').limits, maxSendBacks: 5 } });
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: localBuilder(f.config, { escalateAfter: 3 }) }, 1);
+      await runToIdle(f.runner, started.id);
+      const builds = f.requests.filter((request) => request.displayText === 'Build: Log schema');
+      expect(builds.map((request) => request.execution)).toEqual(['api', 'api', 'api', 'cli']);
+    });
+  });
+
+  describe('code attached to a small model\'s card', () => {
+    const cardPlan = JSON.stringify({ tasks: [{ id: 'schema', title: 'Log schema', role: 'builder', description: 'Add the tables in src/db/schema.ts and update package.json.', acceptance: ['Migrations run'], dependsOn: [] }] });
+    const withLocalBuilder = (config: CrewConfig): CrewConfig => crewConfigSchema.parse({
+      ...config,
+      roles: config.roles.map((role) => (role.id === 'builder' ? { ...role, execution: 'api', api: { provider: 'ollama', model: 'qwen3-coder' } } : role)),
+    });
+
+    it('gives a local builder the start of the files its card names', async () => {
+      const f = fixture({ plan: [cardPlan] });
+      const asked: string[][] = [];
+      f.ports.excerpts = async (_project, paths) => { asked.push([...paths]); return paths.map((path) => ({ path, text: `// contents of ${path}`, cut: false })); };
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: withLocalBuilder(f.config) }, 1);
+      await runToIdle(f.runner, started.id);
+      expect(asked[0]).toEqual(['src/db/schema.ts', 'package.json']);
+      const build = f.requests.find((request) => request.displayText === 'Build: Log schema');
+      expect(build?.prompt).toContain('Code this card names, read for you');
+      expect(build?.prompt).toContain('--- src/db/schema.ts\n// contents of src/db/schema.ts');
+    });
+
+    it('does not read anything for a builder that is not local', async () => {
+      const f = fixture({ plan: [cardPlan] });
+      let reads = 0;
+      f.ports.excerpts = async () => { reads += 1; return []; };
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+      await runToIdle(f.runner, started.id);
+      expect(reads).toBe(0);
+    });
+
+    it('still builds when the files cannot be read', async () => {
+      const f = fixture({ plan: [cardPlan] });
+      f.ports.excerpts = async () => { throw new Error('disk gone'); };
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: withLocalBuilder(f.config) }, 1);
+      const run = await runToIdle(f.runner, started.id);
+      expect(run.tasks[0]?.status).toBe('accepted');
+      expect(f.requests.find((request) => request.displayText === 'Build: Log schema')?.prompt).not.toContain('Code this card names');
+    });
+  });
+
+  describe('skipping a second review of identical work', () => {
+    it('sends the task back without paying for another review when nothing in the project changed', async () => {
+      const f = fixture({ lead: ['{"verdict":"sendBack","feedback":"The schema misses an index."}', '{"verdict":"accept"}'] });
+      f.ports.fingerprint = async () => 'same-tree';
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+      const run = await runToIdle(f.runner, started.id);
+      const leadReviews = f.requests.filter((request) => request.prompt.includes('You are the Lead. Check this finished task'));
+      // One real review of the first task; every later hand-in of identical work was sent back unpaid.
+      expect(leadReviews).toHaveLength(1);
+      const first = run.tasks.find((task) => task.id === 'schema')!;
+      expect(first.reviews.some((review) => review.feedback.includes('Nothing in the project changed'))).toBe(true);
+      expect(first.status).not.toBe('accepted');
+    });
+
+    it('still reviews work that did change', async () => {
+      const f = fixture({ lead: ['{"verdict":"sendBack","feedback":"The schema misses an index."}', '{"verdict":"accept"}'] });
+      let build = 0;
+      f.ports.fingerprint = async () => `tree-${build++}`;
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+      const run = await runToIdle(f.runner, started.id);
+      expect(run.tasks.map((task) => task.status)).toEqual(['accepted', 'accepted']);
+    });
+
+    it('does nothing when the setting is off', async () => {
+      const f = fixture({ lead: ['{"verdict":"sendBack","feedback":"The schema misses an index."}', '{"verdict":"accept"}'] }, { savings: { ...createDefaultCrewConfig('claude', 'codex').savings, skipUnchangedReview: false } });
+      f.ports.fingerprint = async () => 'same-tree';
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+      const run = await runToIdle(f.runner, started.id);
+      expect(run.tasks.map((task) => task.status)).toEqual(['accepted', 'accepted']);
+    });
   });
 
   it('captures the Studio brief when a crew starts and accepts later lead guidance', async () => {

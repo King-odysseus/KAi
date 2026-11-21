@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { apiConnectionSchema } from './architect';
+import { apiConnectionSchema, roleTargetSchema } from './architect';
 import { agentIdSchema, autonomyModeSchema, executionModeSchema, routeModeSchema, timestampSchema } from './primitives';
 
 /**
@@ -89,6 +89,11 @@ export const crewSavingsSchema = z
     skipUnchangedReview: z.boolean().default(true),
     // The run asks the user once the same task has failed for the same reason twice.
     stopOnRepeatedFailure: z.boolean().default(true),
+    // A card built by a small local model that keeps failing is tried once on a stronger model, and only that card.
+    // The next card starts local again, so the paid model is used where it is needed and nowhere else.
+    localFirst: z.boolean().default(true),
+    // How many attempts the local model gets on one card before the stronger model takes the next one.
+    escalateAfter: z.number().int().min(1).max(5).default(2),
   })
   .strict();
 export type CrewSavings = z.infer<typeof crewSavingsSchema>;
@@ -102,6 +107,8 @@ export const crewConfigSchema = z
     roles: z.array(crewRoleSchema).min(1).max(MAX_CREW_ROLES),
     limits: crewLimitsSchema.default({}),
     savings: crewSavingsSchema.default({}),
+    // Who takes a card a local builder could not finish. Left empty, the Lead's own agent and model are used.
+    escalation: roleTargetSchema.nullable().default(null),
     // A command that must pass (for example "npm test") before the Lead may call the project done.
     checkCommand: z.string().trim().max(1_000).default(''),
     // How to run and install what was built, so a finished crew can offer Run and Install buttons. Both are optional.
@@ -168,6 +175,10 @@ export const crewTaskSchema = z
     // The project as it was before this task first started, so the work can be undone. Absent for work done in a copy.
     checkpoint: z.object({ ref: z.string().min(1).max(300), untracked: z.array(z.string().min(1).max(500)).max(2_000).default([]), createdAt: z.string().min(1) }).strict().nullable().default(null),
     costUsd: z.number().min(0).default(0),
+    // Who built it last: a model on this computer or network, or a paid one. Null until it has been built.
+    tier: z.enum(['local', 'cloud']).nullable().default(null),
+    // True once the stronger model took this card because the local one could not finish it.
+    escalated: z.boolean().default(false),
     note: z.string().max(1_000).default(''),
     updatedAt: timestampSchema,
   })
@@ -364,12 +375,32 @@ export const crewRunSchema = z
     // The conversations the crew's agents are running in right now, so the screen can show what they are doing.
     liveConversations: z.array(z.string().min(1)).max(60).optional(),
     spentUsd: z.number().min(0).default(0),
+    // Builds by tier, so the screen can say how much of the work ran on the person's own models.
+    tiers: z.object({ localBuilds: z.number().int().min(0).default(0), cloudBuilds: z.number().int().min(0).default(0), escalations: z.number().int().min(0).default(0) }).strict().default({ localBuilds: 0, cloudBuilds: 0, escalations: 0 }),
     startedAt: timestampSchema,
     updatedAt: timestampSchema,
     completedAt: timestampSchema.nullable().default(null),
   })
   .strict();
 export type CrewRun = z.infer<typeof crewRunSchema>;
+
+/**
+ * What the run spent and how much of its building stayed on the person's own models. The estimate compares each local
+ * build with what the paid builds in this same run cost on average, so it is never a guess from a price list, and it is
+ * null until at least one paid build exists to compare against.
+ */
+export function crewSavings(run: Pick<CrewRun, 'tasks' | 'tiers' | 'spentUsd'>): { localBuilds: number; cloudBuilds: number; escalations: number; spentUsd: number; estimatedSavedUsd: number | null } {
+  const { localBuilds, cloudBuilds, escalations } = run.tiers;
+  const paid = run.tasks.filter((task) => task.tier === 'cloud' && task.costUsd > 0);
+  const average = paid.length > 0 ? paid.reduce((sum, task) => sum + task.costUsd, 0) / paid.length : null;
+  return {
+    localBuilds,
+    cloudBuilds,
+    escalations,
+    spentUsd: Math.round(run.spentUsd * 100) / 100,
+    estimatedSavedUsd: average === null ? null : Math.round(localBuilds * average * 100) / 100,
+  };
+}
 
 /** The role set a new crew starts with: the Lead and the reviewers on the strongest agent, builders on the default. */
 export function createDefaultCrewRoles(defaultAgent: z.infer<typeof agentIdSchema> = 'claude', builderAgent: z.infer<typeof agentIdSchema> = defaultAgent): CrewRole[] {

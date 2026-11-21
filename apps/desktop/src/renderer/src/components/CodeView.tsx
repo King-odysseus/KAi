@@ -64,6 +64,7 @@ import { LearningPanel, type LearningSelectionPreview, type TutorConversationTur
 import type { SecurityScanRequest } from './SecurityAuditorPanel';
 import { projectLessons } from './learning-path';
 import { GuidedReviewPanel } from './GuidedReviewPanel';
+import type { GuidedRunOverride } from './guided-build-engine';
 import { CodeGuidePanel, CodeGuideStrip } from './CodeGuidePanel';
 import { confirmDialog, promptDialog } from './AppDialog';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
@@ -269,7 +270,7 @@ export function CodeView({
   agentCapabilities: readonly AgentCapability[];
   selectedAgent: AgentId;
   onUpdateGuidedBuild: (build: GuidedBuild) => void;
-  onRunGuidedBuild: (prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code', userMessage?: string) => void | Promise<void>;
+  onRunGuidedBuild: (prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code', userMessage?: string, override?: GuidedRunOverride) => void | Promise<void>;
   activeProject: ProjectRecord | null;
   editorState: EditorWindowSnapshot | null;
   autoSave: boolean;
@@ -2336,6 +2337,7 @@ export function CodeView({
             selectedAgent={selectedAgent}
             onUpdateGuidedBuild={onUpdateGuidedBuild}
             onRunGuidedBuild={onRunGuidedBuild}
+            projectId={activeProject.id}
             onOpenFile={(path) => { void openFile(path); }}
           /> : sidePanel === 'review' ? <GuidedReviewPanel
             projectId={activeProject.id}

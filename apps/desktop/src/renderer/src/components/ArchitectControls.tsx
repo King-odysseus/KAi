@@ -1,3 +1,4 @@
+import { readModelTeam } from '../model-team';
 import { Compass, Hammer, LifeBuoy, Loader2, Square, Wrench, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
@@ -110,7 +111,16 @@ export function useArchitectSplit(input: {
     writeStoredSplit(tab, next, windowId);
   }, [tab, windowId]);
 
-  const setEnabled = useCallback((enabled: boolean) => update({ ...split, enabled }), [split, update]);
+  // Switching the split on starts a role with nothing chosen from the person's saved Model team; a role already chosen is left alone.
+  const setEnabled = useCallback((enabled: boolean) => {
+    const team = enabled ? readModelTeam() : null;
+    update({
+      ...split,
+      enabled,
+      ...(team && !split.architect && team.coach ? { architect: team.coach } : {}),
+      ...(team && !split.implementer && team.builder ? { implementer: team.builder } : {}),
+    });
+  }, [split, update]);
   const setParticipation = useCallback((participation: 'automatic' | 'handsOn') => update({ ...split, participation }), [split, update]);
   const setRole = useCallback((role: ArchitectRole, target: RoleTarget | null) => update(withRole(split, role, target)), [split, update]);
 

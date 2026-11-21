@@ -56,7 +56,7 @@ export const TOUR_LESSONS: TourLesson[] = [
       { title: 'Artifacts', body: 'Click an artifact to read or edit it. Generate all writes what is missing, and Regenerate all rewrites everything from the brief. The flows artifact opens as a diagram.' },
       { target: '.studio-tabs', title: 'Land on the board', body: 'After you approve generation, Studio plans the board from the artifacts and opens it. Cards move from Backlog to Done through the board’s checks.' },
       { title: 'Design and open-pencil', body: 'Connect open-pencil under Settings, Design tools. Then copy the foundation prompt and one prompt per screen into the Workspace composer, letting each finish before the next. Pull the design to tick off the screens it finds.' },
-      { title: 'Senior dev and automation', body: 'The Senior dev tab helps turn the plan into coding work. The board can hand cards to agents, while you inspect the brief, artifacts, checks and design as work progresses.' },
+      { title: 'Guided Build and automation', body: 'The Guided Build tab helps turn the plan into coding work. The board can hand cards to agents, while you inspect the brief, artifacts, checks and design as work progresses.' },
     ],
   },
   {

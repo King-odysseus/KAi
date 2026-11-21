@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import type { AgentCapability, AgentId, CodeGuideAction, CodeGuideView, ConversationRecord, GuidedBuild } from '@kai/contracts';
 import { UiButton } from './UiButton';
 import { GuidedBuildLearnPanel } from './GuidedBuildLearnPanel';
+import type { GuidedRunOverride } from './guided-build-engine';
 
 interface Props {
   view: CodeGuideView | null;
@@ -18,7 +19,8 @@ interface Props {
   agentCapabilities: readonly AgentCapability[];
   selectedAgent: AgentId;
   onUpdateGuidedBuild: (build: GuidedBuild) => void;
-  onRunGuidedBuild: (prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code') => void | Promise<void>;
+  onRunGuidedBuild: (prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code', userMessage?: string, override?: GuidedRunOverride) => void | Promise<void>;
+  projectId: string | null;
   onOpenFile: (path: string, line?: number) => void;
 }
 

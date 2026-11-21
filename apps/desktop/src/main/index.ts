@@ -59,6 +59,8 @@ import { autoUpdater } from 'electron-updater';
 import { hashFile, recordVerification, runCheckCommand, suggestTestCommand, VerificationStore } from './verification';
 import { runToolHooks, type ToolHookCall } from './automation';
 import { gitDiffAgainstHead, gitOverview } from './git-tools';
+import { projectFingerprint } from './project-fingerprint';
+import { EXCERPT_CHARS, type Excerpt } from './crew-excerpts';
 import type { ArchitectReadiness, ArchitectSplit, ArchitectStatus, RoleTarget } from '@kai/contracts';
 import { NotificationCenter } from './notification-rules';
 import { DesktopServiceController } from './service-controller';
@@ -1116,6 +1118,28 @@ async function startApplication(): Promise<void> {
       const project = (await ipcContext!.projects.list()).find((candidate) => candidate.id === projectId);
       return project ? (await gitOverview(project.path)).changes.map((change) => change.path) : [];
     },
+    // The start of the files a card names, for a small local builder (see crew-excerpts.ts). Only plain text files inside
+    // the project are read; a path that leaves the project, is missing, is large or is binary is left out.
+    excerpts: async (projectId, paths) => {
+      const root = path.resolve(await projectRootFor(projectId));
+      const found: Excerpt[] = [];
+      for (const relative of paths) {
+        const target = path.resolve(root, relative);
+        if (target !== root && !target.startsWith(`${root}${path.sep}`)) continue;
+        try {
+          const info = await stat(target);
+          if (!info.isFile() || info.size > 512 * 1024) continue;
+          const text = await readFile(target, 'utf8');
+          if (text.includes('\0')) continue;
+          found.push({ path: relative, text: text.slice(0, EXCERPT_CHARS), cut: text.length > EXCERPT_CHARS });
+        } catch {
+          // A file the card names that does not exist yet is simply not attached.
+        }
+      }
+      return found;
+    },
+    // The project's changed files by content, so an unchanged task is not paid for twice (see project-fingerprint.ts).
+    fingerprint: async (projectId) => projectFingerprint(await projectRootFor(projectId)),
     worktrees: { prepare: async (projectId, key) => createParallelSession(await projectRootFor(projectId), key) },
     // Undo: the project as it was before a task started, what would change if it were put back, and putting it back.
     checkpoint: async (projectId) => createProjectCheckpoint(await projectRootFor(projectId)),

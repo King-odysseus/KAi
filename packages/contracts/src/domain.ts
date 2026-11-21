@@ -530,6 +530,8 @@ export const guidedBuildStepSchema = z.object({
   code: z.string().optional(),
   acceptanceCriteria: z.array(z.string()),
   status: z.enum(['pending', 'active', 'review', 'complete']).default('pending'),
+  // Set when the step rests on an assumption the person has not confirmed (from a Studio brief): the step waits for their OK.
+  needsApproval: z.string().optional(),
 }).strict();
 
 export const guidedBuildSchema = z.object({
@@ -544,7 +546,14 @@ export const guidedBuildSchema = z.object({
   detail: z.enum(['brief', 'step-by-step', 'line-by-line']).default('step-by-step'),
   questions: z.enum(['blocked', 'decisions', 'each-step']).default('blocked'),
   followEdits: z.boolean().default(true),
+  // How much the person wants to do: auto = the Builder does each step and KAI checks it; guided = the Coach explains and
+  // the person chooses per step; manual = the person types and the Coach checks.
+  handsOn: z.enum(['auto', 'guided', 'manual']).default('guided'),
+  // escalate = a stuck or failed step offers the Coach's stronger model for one run; pinned = the Builder never switches.
+  builderLock: z.enum(['escalate', 'pinned']).default('escalate'),
   planTitle: z.string().default(''),
+  // A Project Studio brief the plan is made from, when Guided Build was started from Studio. Empty otherwise.
+  brief: z.string().max(30_000).optional(),
   steps: z.array(guidedBuildStepSchema).default([]),
   currentStep: z.number().int().nonnegative().default(0),
   review: z.object({ status: z.enum(['ready', 'changes-needed', 'unverified']), summary: z.string(), checkedAt: timestampSchema }).strict().nullable().default(null),

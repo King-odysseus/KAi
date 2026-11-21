@@ -3,9 +3,10 @@ import { ARCHITECT_STUCK_SENTINEL, DEFAULT_AWAY_POLICY, classifyWork, crewConfig
 import type { AgentRunRequest, AgentRunResult, ConversationOrigin, CrewAwayPolicy, CrewRevertPreview, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask, CrewTaskDiff } from '@kai/contracts';
 import {
   acceptPhase, addNotes, clearNotes, phaseToPauseAfter, setPauseAfter, openTasks, reopenOpenTasks, addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, isBareContinue, mergeChat, phaseFromFollowUp, requestApprovals, resetForRevert, ruleBlock, isUsageLimit, setTaskCheckpoint, tasksToRebuild, teachBlockers, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
-  reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun, offerOptions, awayEligible, applyAwayPick, applyTriage, repeatsFailure, setAway, parkAsk, parkableAsk, queueAsks, askTaskSpend, isConnectionDrop, recordAwayDecision,
+  clearSettledAsk, escalatedRole, noteBuild, noteEscalation, shouldEscalate, reassignReadOnlyTasks, resolveStuck, roleAccess, settle, startFollowUp, stuckTask, startTask, uniqueTaskIds, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun, offerOptions, awayEligible, applyAwayPick, applyTriage, repeatsFailure, setAway, parkAsk, parkableAsk, queueAsks, askTaskSpend, isConnectionDrop, recordAwayDecision,
 } from './crew-engine';
 import { askPrompt, awayPrompt, parseAwayChoice, coveragePrompt, parseCoverage, parsePlanFull, parseStuckDecision, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt, stuckPrompt } from './crew-prompts';
+import { excerptSection, pathsMentioned, type Excerpt } from './crew-excerpts';
 import type { ParallelSession } from './parallel-session';
 import { implementerIsStuck, repeatsItself, stuckReason } from './architect-loop';
 
@@ -25,6 +26,10 @@ export interface CrewRunnerPorts {
   conventions?(projectId: string, goal: string): Promise<string>;
   /** Paths with uncommitted changes, so a task's files can be told apart from what was already changed. */
   changedFiles?(projectId: string): Promise<string[]>;
+  /** The start of each named file, read for a small local builder. A path that is missing, outside the project or not text is left out. */
+  excerpts?(projectId: string, paths: readonly string[]): Promise<Excerpt[]>;
+  /** A fingerprint of the project's changed files by content. With it, a task whose work has not changed since its last review is not reviewed again. */
+  fingerprint?(projectId: string): Promise<string>;
   /** Separate copies let independent builders work at once without sharing a writable tree. */
   worktrees?: { prepare(projectId: string, key: string): Promise<ParallelSession | null> };
   /** Open Pencil, through the one connection Studio already holds. Without it a Designer cannot draw. */
@@ -77,6 +82,11 @@ export const LOCAL_CREW_TASK_ROUND_LIMIT = 30;
 function isLocalCrewRole(role: CrewRole): boolean {
   return role.execution === 'api' && Boolean(role.api && isLocalProvider(role.api.provider));
 }
+/** The model a role runs on, as a person reads it: "qwen3-coder", "claude opus". */
+function roleModelLabel(role: CrewRole): string {
+  if (role.execution === 'api' && role.api) return role.api.model ?? role.model ?? role.api.provider;
+  return role.model ? `${role.agent} ${role.model}` : role.agent;
+}
 /** What a Lead call is called in the conversation log, in place of the brief it was sent. */
 const ASK_LABEL: Record<'plan' | 'review' | 'stuck' | 'coverage' | 'away', string> = {
   plan: 'Plan the tasks',
@@ -119,6 +129,8 @@ export class DesktopCrewRunner {
   private readonly builderReply = new Map<string, string>();
   /** What the per-task project check found, for the Lead's review of the same task. */
   private readonly checkNote = new Map<string, string>();
+  /** The project's content fingerprint when each task was last reviewed, so identical work is not reviewed (and paid for) twice. */
+  private readonly reviewedAt = new Map<string, string>();
 
   /** How many times the Lead has been asked about a task that failed the same way twice, so each task gets at most two. */
   private readonly triaged = new Map<string, number>();
@@ -777,7 +789,7 @@ export class DesktopCrewRunner {
     await this.preflightTasks(active);
     for (;;) {
       if (active.cancelled) return;
-      let run = reassignReadOnlyTasks(enforceLimits(active.run, this.now()), this.now().toISOString());
+      let run = clearSettledAsk(reassignReadOnlyTasks(enforceLimits(active.run, this.now()), this.now().toISOString()), this.now().toISOString());
       if (run !== active.run) await this.commit(active, run);
       // A task that ran out of retries goes to the Lead before it goes to the user, once per task per run.
       if (run.status === 'needsYou' && await this.leadUnsticks(active)) continue;
@@ -860,6 +872,7 @@ export class DesktopCrewRunner {
     await this.commit(active, run);
     type Outcome = { taskId: string; status: 'success' | 'failed' | 'checkFailed'; commit?: string; files: string[]; output: string; costUsd: number; error?: string; checkOutput?: string };
     const outcomes = new Map<string, Outcome>();
+    const tiers = new Map<string, { tier: 'local' | 'cloud'; escalated: boolean; label: string; attempts: number }>();
     try {
       await Promise.all(tasks.map(async (task) => {
         const role = active.run.config.roles.find((item) => item.id === task.role);
@@ -875,7 +888,15 @@ export class DesktopCrewRunner {
           this.announce(active);
           if (active.cancelled) return;
           const conventions = (await this.ports.conventions?.(active.run.projectId, `${active.run.goal} ${task.title}`).catch(() => '')) ?? '';
-          const result = await this.call(active, role, taskBrief(active.run, task.id, conventions), { effortFrom: `${task.title}\n${task.description}`, fresh: true, cwd, conversationId, label: `Build: ${task.title}` });
+          // The same ladder as a single build: this attempt is the task's round plus one (it was read before it started).
+          let builder = role;
+          let escalated = false;
+          if (shouldEscalate(active.run.config, role, task.round + 1)) {
+            const stronger = escalatedRole(active.run.config, role);
+            if (stronger) { builder = stronger; escalated = true; }
+          }
+          tiers.set(task.id, { tier: isLocalCrewRole(builder) ? 'local' : 'cloud', escalated, label: roleModelLabel(builder), attempts: task.round });
+          const result = await this.call(active, builder, taskBrief(active.run, task.id, conventions), { effortFrom: `${task.title}\n${task.description}`, fresh: true, cwd, conversationId, label: `Build: ${task.title}` });
           if (active.cancelled) return;
           if (result.status === 'failed') {
             outcomes.set(task.id, { taskId: task.id, status: 'failed', files: [], output: result.output, costUsd: result.costUsd ?? 0, error: result.error ?? 'The agent stopped without finishing.' });
@@ -914,6 +935,12 @@ export class DesktopCrewRunner {
           if (!active.serialRetryTasks.includes(task.id)) active.serialRetryTasks.push(task.id);
           await this.commit(active, { ...active.run, tasks: active.run.tasks.map((item) => item.id === task.id ? { ...item, status: 'backlog' as const, note: 'Its changes conflicted with another independent task. It will be retried alone on top of the integrated work.' } : item), feed: [...active.run.feed, { id: `feed_${randomUUID()}`, at: at(), who: 'crew', kind: 'info' as const, taskId: task.id, text: `The changes for "${task.title}" conflicted with another task, so it will be retried on its own.` }] });
           continue;
+        }
+        const built = tiers.get(task.id);
+        if (built) {
+          let counted = noteBuild(active.run, task.id, built.tier, built.escalated, at());
+          if (built.escalated) counted = noteEscalation(counted, task.id, built.label, built.attempts, at());
+          await this.commit(active, counted);
         }
         if (outcome.status === 'failed') {
           await this.recordFailure(active, addSpend(active.run, task.id, outcome.costUsd, at()), task.id, outcome.error ?? 'The agent stopped without finishing.');
@@ -1064,15 +1091,34 @@ export class DesktopCrewRunner {
     const conventions = (await this.ports.conventions?.(active.run.projectId, `${active.run.goal} ${task.title}`).catch(() => '')) ?? '';
     const before = await this.changed(active.run.projectId);
     const brief = taskBrief(active.run, taskId, conventions);
-    const localBuilder = roleAccess(role) === 'edit' && isLocalCrewRole(role);
+    // The model ladder: a local builder that has had its attempts on this card hands it to the stronger model, this card
+    // only. `task` was read before the round was counted, so this attempt is its round plus one.
+    const attempt = task.round + 1;
+    let builder = role;
+    let escalated = false;
+    if (role.kind !== 'designer' && shouldEscalate(active.run.config, role, attempt)) {
+      const stronger = escalatedRole(active.run.config, role);
+      if (stronger) {
+        builder = stronger;
+        escalated = true;
+        await this.commit(active, noteEscalation(active.run, taskId, roleModelLabel(stronger), attempt - 1, at()));
+      }
+    }
+    const localBuilder = roleAccess(builder) === 'edit' && isLocalCrewRole(builder);
+    // A small model is given the code the card names, so it does not spend its turn (and its context) searching for it.
+    const attachedCode = localBuilder && this.ports.excerpts
+      ? excerptSection(await this.ports.excerpts(active.run.projectId, pathsMentioned(`${task.title}\n${task.description}\n${task.acceptance.join('\n')}`)).catch(() => []))
+      : '';
     const buildPrompt = localBuilder
-      ? `${brief}\n\nThis is a deliberately small Crew task for a local model. Make only the change described on this card; do not start later tasks or broaden the work. Work in short, concrete tool steps. If you are blocked or would otherwise repeat yourself, stop and report the exact blocker using this line:\n${ARCHITECT_STUCK_SENTINEL} <one-sentence blocker>`
+      ? `${brief}${attachedCode ? `\n\n${attachedCode}` : ''}\n\nThis is a deliberately small Crew task for a local model. Make only the change described on this card; do not start later tasks or broaden the work. Work in short, concrete tool steps. If you are blocked or would otherwise repeat yourself, stop and report the exact blocker using this line:\n${ARCHITECT_STUCK_SENTINEL} <one-sentence blocker>`
       : brief;
     const result = role.kind === 'designer' && this.ports.design
       ? await this.draw(active, task, brief)
-      : await this.call(active, role, buildPrompt, { effortFrom: `${task.title}\n${task.description}`, fresh: true, label: `Build: ${task.title}`, escalate: task.round >= 2 });
+      : await this.call(active, builder, buildPrompt, { effortFrom: `${task.title}\n${task.description}`, fresh: true, label: `Build: ${task.title}`, escalate: task.round >= 2 });
     if (active.cancelled) return;
     let run = addSpend(active.run, taskId, result.costUsd ?? 0, at());
+    // Who built it, for the savings line and the card's badge. A designer draws in Open Pencil, which is not a model choice.
+    if (role.kind !== 'designer') run = noteBuild(run, taskId, isLocalCrewRole(builder) ? 'local' : 'cloud', escalated, at());
     if (result.status === 'failed') {
       await this.recordFailure(active, run, taskId, result.error ?? 'The agent stopped without finishing.');
       return;
@@ -1101,6 +1147,22 @@ export class DesktopCrewRunner {
     const task = (): CrewTask => active.run.tasks.find((item) => item.id === taskId)!;
     const builder = roles.find((role) => role.id === task().assignedTo);
     const mayChangeFiles = builder ? roleAccess(builder) === 'edit' : true;
+
+    // Work that has not changed since its last review would get the same verdict, so it is sent back without paying for
+    // another one. The fingerprint reads file contents, so a changed line anywhere counts as a change. The task's review
+    // count still rises, so a builder that keeps handing in the same work reaches the send-back limit and asks the person.
+    if (active.run.config.savings.skipUnchangedReview && this.ports.fingerprint && task().reviews.length > 0) {
+      const now = await this.ports.fingerprint(active.run.projectId).catch(() => null);
+      if (now && this.reviewedAt.get(taskId) === now) {
+        const lastFeedback = [...task().reviews].reverse().find((review) => review.verdict !== 'accept' && review.feedback)?.feedback ?? '';
+        await this.commit(active, reviewTask(active.run, taskId, { verdict: 'sendBack', feedback: `Nothing in the project changed since this task was last reviewed, so the same findings still apply.${lastFeedback ? ` ${lastFeedback}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
+        return;
+      }
+      if (now) this.reviewedAt.set(taskId, now);
+    } else if (active.run.config.savings.skipUnchangedReview && this.ports.fingerprint) {
+      const now = await this.ports.fingerprint(active.run.projectId).catch(() => null);
+      if (now) this.reviewedAt.set(taskId, now);
+    }
 
     // The project's own check comes before any opinion: a task that breaks it is sent back with the output, so a break
     // is found one task after it happens, not after every task has been accepted. Runs once per round.

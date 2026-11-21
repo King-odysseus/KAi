@@ -707,8 +707,8 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     if (!projectId || !state) return null;
     return <section className="studio-card studio-handoff" aria-label="Guided Build workspace">
       <h2><Sparkles size={16} /> Guided Build</h2>
-      <p className="studio-note">Coach turns your Studio brief into a coding plan in the linked project. In Workspace, chat with Coach, open each suggested file, and choose when Builder applies the current step. Coach and Builder choices stay in Guided Build composer settings.</p>
-      <UiButton type="button" className="primary-button" disabled={busy !== null} onClick={() => void onStartGuidedBuild(projectId, projectTitle)}>Continue this plan in Workspace</UiButton>
+      <p className="studio-note">Coach turns your Studio brief into a coding plan in the linked project, keeping what you decided and asking before anything rests on a risky assumption. In Workspace, chat with Coach, open each suggested file, and choose when Builder applies the current step. Coach and Builder choices stay in Guided Build composer settings.</p>
+      <UiButton type="button" className="primary-button" disabled={busy !== null} onClick={() => void onStartGuidedBuild(projectId, projectTitle)}>Start in Workspace</UiButton>
     </section>;
   }
 

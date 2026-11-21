@@ -2118,7 +2118,8 @@ export async function runConversationAgent(
   };
   // A thread opened with the + button starts unnamed; its first message is what names it, so tabs read as topics.
   if (isPlaceholderTitle(conversation.title) && !conversation.turns.some((turn) => turn.role === 'user')) {
-    conversation.title = titleFromPrompt(request.prompt);
+    // The words the person typed, not the long instructions KAI wrapped around them (a Guided Build plan request).
+    conversation.title = titleFromPrompt(request.displayText?.replace(/^(?:Coach|Builder):\s*/i, '').trim() || request.prompt);
   }
   conversation.turns.push(userTurn);
   writtenTurnId = userTurn.id;

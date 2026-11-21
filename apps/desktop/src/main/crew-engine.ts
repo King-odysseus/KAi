@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_AWAY_POLICY, MAX_SUB_AGENTS_TOTAL, buildRoadmap, phaseKey, roleAccess } from '@kai/contracts';
+import { DEFAULT_AWAY_POLICY, MAX_SUB_AGENTS_TOTAL, buildRoadmap, isLocalProvider, phaseKey, roleAccess } from '@kai/contracts';
 import type { CrewAsk, CrewAwayPolicy, CrewChatEntry, CrewConfig, CrewFeedEntry, CrewReview, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
 
 /**
@@ -93,7 +93,7 @@ export function addTasks(run: CrewRun, drafts: readonly CrewTaskDraft[], at: str
     if (next.tasks.some((task) => task.id === draft.id)) { refused.push(`${draft.title}: a task with id ${draft.id} already exists.`); continue; }
     const task: CrewTask = {
       description: '', dependsOn: [], status: 'backlog', round: 0, reviews: [], designRef: null, proposed: false,
-      assignedTo: null, files: [], costUsd: 0, note: '', phase: null, checkpoint: null, ...draft, createdBy: by, updatedAt: at,
+      assignedTo: null, files: [], costUsd: 0, tier: null, escalated: false, note: '', phase: null, checkpoint: null, ...draft, createdBy: by, updatedAt: at,
     };
     // A task for a role that cannot edit could never be built, so it starts with a role that can.
     const drafted = roleOf(run.config, draft.role);
@@ -602,6 +602,25 @@ export function parkAsk(run: CrewRun, at: string): CrewRun | null {
 }
 
 /**
+ * A question about a task that has since been accepted or skipped is settled by what happened, not by an answer: a local
+ * builder that got stuck and was then rescued by the stronger model leaves its question behind, and the run would wait on
+ * a task that is already done. Drops such questions and lets the next one that is still open come up. Limits, approvals
+ * and anything not tied to one task are never dropped here.
+ */
+export function clearSettledAsk(run: CrewRun, at: string): CrewRun {
+  const settled = (ask: CrewAsk | null | undefined): boolean => {
+    if (!ask?.taskId || !parkableAsk(ask)) return false;
+    const status = run.tasks.find((task) => task.id === ask.taskId)?.status;
+    return status === 'accepted' || status === 'skipped';
+  };
+  if (!settled(run.ask) && !run.queuedAsks.some(settled)) return run;
+  const cleared: CrewRun = { ...run, ask: settled(run.ask) ? null : run.ask, queuedAsks: run.queuedAsks.filter((ask) => !settled(ask)), updatedAt: at };
+  const promoted = queueAsks(run, cleared);
+  // With no question left to wait on, a run that was stopped on one is free to carry on.
+  return !promoted.ask && promoted.status === 'needsYou' ? { ...promoted, status: 'running' } : promoted;
+}
+
+/**
  * Keeps every open question: a new question about another task, raised while one was parked, puts the older one in a
  * queue instead of over it; once the current question is answered, the next one still open comes up.
  */
@@ -832,6 +851,59 @@ export function helperChoiceFor(subAgents: number): 'off' | '2' | '3' | '4' | '5
 }
 
 /** Adds what a review cost to the task and the run, so the spend limit sees reviewers as well as builders. */
+// ---------------------------------------------------------------------------------------------------------------------
+// The model ladder: local first, the stronger model only for a card the local one could not finish
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** A role that runs on this computer or the home network: a small model that needs small cards and a round limit. */
+export function isLocalRole(role: Pick<CrewRole, 'execution' | 'api'>): boolean {
+  return role.execution === 'api' && Boolean(role.api && isLocalProvider(role.api.provider));
+}
+
+/**
+ * Whether this attempt at a card goes to the stronger model. `attempt` counts builds of the card including this one.
+ * Only a local builder escalates, only when the crew is set to local first, and only after it has had its attempts.
+ */
+export function shouldEscalate(config: CrewConfig, role: Pick<CrewRole, 'execution' | 'api'>, attempt: number): boolean {
+  return config.savings.localFirst && isLocalRole(role) && attempt > config.savings.escalateAfter;
+}
+
+/**
+ * The role to build an escalated attempt as. The card keeps its owner, label and instructions; the agent, route and model
+ * are the stronger target's: the crew's chosen one, else the Lead's. Null when there is nothing stronger to use (no Lead
+ * target, or the chosen target is itself local), so a card is never "escalated" to the same kind of model.
+ */
+export function escalatedRole(config: CrewConfig, role: CrewRole): CrewRole | null {
+  const lead = config.roles.find((item) => item.kind === 'lead');
+  const target = config.escalation
+    ?? (lead ? { execution: lead.execution, agent: lead.agent, ...(lead.model ? { model: lead.model } : {}), ...(lead.api ? { api: lead.api } : {}) } : null);
+  if (!target) return null;
+  const { api: _api, model: _model, ...rest } = role;
+  const stronger: CrewRole = target.execution === 'api' && target.api
+    ? { ...rest, execution: 'api', route: 'direct', agent: target.agent ?? lead?.agent ?? role.agent, api: target.api, ...(target.api.model ? { model: target.api.model } : {}) }
+    : { ...rest, execution: 'cli', route: lead?.route ?? 'direct', agent: target.agent ?? lead?.agent ?? role.agent, ...(target.model ? { model: target.model } : {}) };
+  return isLocalRole(stronger) ? null : stronger;
+}
+
+/** Records who built a card and counts it, so the screen can say how much of the building stayed on the person's models. */
+export function noteBuild(run: CrewRun, taskId: string, tier: 'local' | 'cloud', escalated: boolean, at: string): CrewRun {
+  const moved = patchTask(run, taskId, (task) => ({ ...task, tier, escalated: task.escalated || escalated }), at);
+  return {
+    ...moved,
+    tiers: {
+      localBuilds: moved.tiers.localBuilds + (tier === 'local' ? 1 : 0),
+      cloudBuilds: moved.tiers.cloudBuilds + (tier === 'cloud' ? 1 : 0),
+      escalations: moved.tiers.escalations + (escalated ? 1 : 0),
+    },
+  };
+}
+
+/** A line for the feed when a card moves up to the stronger model, so the person sees why a paid call happened. */
+export function noteEscalation(run: CrewRun, taskId: string, label: string, attempts: number, at: string): CrewRun {
+  const task = taskOf(run, taskId);
+  return feed(run, { who: 'crew', kind: 'info', text: `"${task.title}" is being built by ${label} after ${attempts} ${attempts === 1 ? 'attempt' : 'attempts'} on the local model. The next card starts on the local model again.`, taskId }, at);
+}
+
 export function addSpend(run: CrewRun, taskId: string, costUsd: number, at: string): CrewRun {
   if (!(costUsd > 0)) return run;
   const moved = patchTask(run, taskId, (task) => ({ ...task, costUsd: task.costUsd + costUsd }), at);

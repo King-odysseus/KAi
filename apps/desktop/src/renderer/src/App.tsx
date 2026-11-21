@@ -2,6 +2,8 @@ import { AlertTriangle, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { Dialog } from './components/ui/Dialog';
 import { isCrewConversation } from './crew-conversation';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction } from 'react';
+import { startingTargets } from './model-team';
+import { LOCAL_BUILDER_ROUNDS, briefFromLaunchPrompt, describeRole, type GuidedRunOverride } from './components/guided-build-engine';
 import type {
   AgentCapability,
   AgentTeam,
@@ -1298,8 +1300,9 @@ export function App(): ReactNode {
     }
     const guidedBuild = {
       enabled: true,
-      coachTarget: conversation.guidedBuild?.coachTarget ?? null,
-      builderTarget: conversation.guidedBuild?.builderTarget ?? null,
+      // A new plan starts with the person's saved Model team, else a local Builder; one already set up keeps what it has.
+      coachTarget: conversation.guidedBuild?.coachTarget ?? (bootstrap ? startingTargets(bootstrap.settings).coach : null),
+      builderTarget: conversation.guidedBuild?.builderTarget ?? (bootstrap ? startingTargets(bootstrap.settings).builder : null),
       coachAgent: conversation.guidedBuild?.coachAgent ?? selectedAgent,
       coachModel: conversation.guidedBuild?.coachModel ?? '',
       builderAgent: conversation.guidedBuild?.builderAgent ?? selectedAgent,
@@ -1308,6 +1311,8 @@ export function App(): ReactNode {
       detail: conversation.guidedBuild?.detail ?? 'step-by-step' as const,
       questions: conversation.guidedBuild?.questions ?? 'blocked' as const,
       followEdits: conversation.guidedBuild?.followEdits ?? true,
+      handsOn: conversation.guidedBuild?.handsOn ?? 'guided' as const,
+      builderLock: conversation.guidedBuild?.builderLock ?? 'escalate' as const,
       planTitle: conversation.guidedBuild?.planTitle ?? '',
       steps: conversation.guidedBuild?.steps ?? [],
       currentStep: conversation.guidedBuild?.currentStep ?? 0,
@@ -1320,7 +1325,7 @@ export function App(): ReactNode {
     setView('workspace');
   }
 
-  async function runCodeGuidedBuild(prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code', userMessage?: string): Promise<void> {
+  async function runCodeGuidedBuild(prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code', userMessage?: string, override?: GuidedRunOverride): Promise<void> {
     if (!bootstrap || !activeProject) return;
     let conversation = activeConversation?.projectId === activeProject.id ? activeConversation : null;
     if (!conversation) {
@@ -1329,9 +1334,15 @@ export function App(): ReactNode {
       setConversations((current) => [conversation!, ...current.filter((item) => item.id !== conversation!.id)]);
       setActiveConversationId(conversation.id);
     }
-    const target = (mode === 'coach' || mode === 'plan' || mode === 'review' ? build.coachTarget ?? build.builderTarget : build.builderTarget)
-      ?? ({ execution: 'cli', agent: selectedAgent } satisfies RoleTarget);
-    const state = { ...build, enabled: true, builderTarget: build.builderTarget ?? target, coachTarget: build.coachTarget ?? target };
+    // The Coach never falls back to the Builder: with a local default Builder that would hand planning to a small model.
+    const fallback: RoleTarget = { execution: 'cli', agent: selectedAgent };
+    const coachSide = mode === 'coach' || mode === 'plan' || mode === 'review';
+    const team = bootstrap ? startingTargets(bootstrap.settings) : { coach: null, builder: null };
+    const savedBuilder = build.builderTarget ?? team.builder ?? fallback;
+    const saved = coachSide ? build.coachTarget ?? team.coach ?? fallback : savedBuilder;
+    // A one-run choice (the "With..." menu, or a retry on the stronger model) is used for this run and never saved.
+    const target = override?.target ?? saved;
+    const state = { ...build, enabled: true, builderTarget: savedBuilder, coachTarget: build.coachTarget ?? team.coach ?? fallback };
     const prepared = { ...conversation, guidedBuild: state, updatedAt: new Date().toISOString() };
     await saveConversationRecord(prepared);
     const displayText = (mode === 'review' ? 'Coach: check my edit' : mode === 'show-code' ? `Builder: show code${userMessage ? ` for ${userMessage}` : ''}` : mode === 'write-code' ? `Builder: implement ${userMessage || 'this step'}` : `Coach: ${userMessage || (mode === 'plan' ? 'make my coding plan' : 'answer my question')}`).slice(0, 500);
@@ -1340,6 +1351,7 @@ export function App(): ReactNode {
       execution: target.execution,
       route: 'direct',
       autonomy: mode === 'show-code' || mode === 'plan' || mode === 'review' || mode === 'coach' ? 'plan' : selectedAutonomy,
+      ...(mode === 'write-code' && (override ? override.local : describeRole(target).local) ? { toolRoundLimit: LOCAL_BUILDER_ROUNDS } : {}),
       ...(target.execution === 'api' && target.api ? { apiConnection: target.api, ...(target.api.model ? { model: target.api.model } : {}) } : {}),
       ...(target.execution === 'cli' && target.model ? { model: target.model } : {}),
       displayText,
@@ -1397,8 +1409,9 @@ export function App(): ReactNode {
       ...conversation,
       guidedBuild: {
         enabled: true,
-        coachTarget: null,
-        builderTarget: null,
+        // A new plan starts with the person's saved Model team, else a local Builder.
+        coachTarget: bootstrap ? startingTargets(bootstrap.settings).coach : null,
+        builderTarget: bootstrap ? startingTargets(bootstrap.settings).builder : null,
         coachAgent: selectedAgent,
         coachModel: '',
         builderAgent: selectedAgent,
@@ -1407,7 +1420,12 @@ export function App(): ReactNode {
         detail: 'step-by-step' as const,
         questions: 'decisions' as const,
         followEdits: true,
+        handsOn: 'guided' as const,
+        builderLock: 'escalate' as const,
         planTitle: guidedBuildTitle,
+        // The plan is made from the Studio brief, with the person's decisions kept and risky assumptions flagged.
+        // Clipped to what the saved record allows: a brief edited by hand can be long, and a record over the limit would not load.
+        brief: briefFromLaunchPrompt(launch.prompt).slice(0, 30_000),
         steps: [],
         currentStep: 0,
         review: null,
@@ -1598,7 +1616,7 @@ export function App(): ReactNode {
   async function createConversation(prompt: string, options: WorkspaceSendOptions = {}): Promise<void> {
     if (!bootstrap || !activeProject) return;
     const conversation = await perform(
-      () => window.kaiDesktop.createConversation(activeProject.id, prompt).then(unwrap),
+      () => window.kaiDesktop.createConversation(activeProject.id, options.displayText?.replace(/^(?:Coach|Builder):\s*/i, '').trim() || prompt).then(unwrap),
       'Creating conversation',
     );
     if (!conversation) return;
@@ -1723,6 +1741,7 @@ export function App(): ReactNode {
           prompt,
           ...(options.clientMessageId ? { clientMessageId: options.clientMessageId } : {}),
           ...(options.displayText ? { displayText: options.displayText } : {}),
+          ...(options.toolRoundLimit ? { toolRoundLimit: options.toolRoundLimit } : {}),
           agent: runAgentId,
           execution: runExecution,
           route: runRoute,
@@ -3056,7 +3075,7 @@ export function App(): ReactNode {
                 agentCapabilities={agentCapabilities}
                 selectedAgent={selectedAgent}
                 onUpdateGuidedBuild={(build) => { void updateGuidedBuildFromCode(build); }}
-                onRunGuidedBuild={(prompt, build, mode, userMessage) => { void runCodeGuidedBuild(prompt, build, mode, userMessage); }}
+                onRunGuidedBuild={(prompt, build, mode, userMessage, override) => { void runCodeGuidedBuild(prompt, build, mode, userMessage, override); }}
               />
             </div>
           </main>

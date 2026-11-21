@@ -26,7 +26,9 @@ import { CrewApprovals } from './CrewApprovals';
 import { CrewChat } from './CrewChat';
 import { CrewDone } from './CrewDone';
 import { CrewRoadmap } from './CrewRoadmap';
+import { hasModelTeam, readModelTeam, withTeamOnCrew } from '../model-team';
 import { CrewNotes } from './CrewNotes';
+import { CrewSavingsStrip } from './CrewSavings';
 import { CrewTaskDetail } from './CrewTaskDetail';
 import { confirmDialog } from './AppDialog';
 import { CrewInterviewPanel } from './CrewInterviewPanel';
@@ -263,7 +265,12 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
   // A saved default replaces the built-in roles for new crews; the conventions are read from the developer's own projects.
   useEffect(() => {
     if (!activeProject) return;
-    void window.kaiDesktop.crewDefaults(activeProject.id).then(unwrap).then((saved) => { if (saved) setDraft(saved); }).catch(() => undefined);
+    void window.kaiDesktop.crewDefaults(activeProject.id).then(unwrap).then((saved) => {
+      if (saved) { setDraft(saved); return; }
+      // No team saved for this project: a new crew starts from the person's own Model team, when they have saved one.
+      const team = readModelTeam();
+      if (hasModelTeam(team)) setDraft((current) => withTeamOnCrew(current, team));
+    }).catch(() => undefined);
   }, [activeProject?.id]);
 
   useEffect(() => {
@@ -479,6 +486,7 @@ export function CrewView({ activeProject, agentCapabilities, settings, goalReque
                 <CrewRoadmap run={activeRun} busy={working} onStart={(name) => void guardedAction(() => startPhase(name))} onExplain={(name) => void guardedAction(() => explainPhase(name))} onAccept={(name, then) => void guardedAction(() => acceptPhase(name, then))} onPauseAfter={(name, on) => void run(async () => unwrap(await window.kaiDesktop.setCrewPauseAfter(activeRun.id, name, on)))} />
                 <CrewNotes run={activeRun} busy={working} onClear={() => void run(async () => unwrap(await window.kaiDesktop.clearCrewNotes(activeRun.id)))} />
                 {selectedTask && <CrewTaskDetail run={activeRun} task={selectedTask} busy={working} onClose={() => setSelectedTaskId(null)} onRevert={(id) => void guardedAction(() => revertTask(id))} />}
+                <CrewSavingsStrip run={activeRun} />
                 <Board run={activeRun} onSelect={setSelectedTaskId} />
               </>
             )
@@ -775,6 +783,8 @@ function BoardCard({ task, roleLabel, onSelect }: { task: CrewRun['tasks'][numbe
       {long && <button type="button" className="crew-card-more" aria-expanded={open} onClick={(event) => { event.stopPropagation(); setOpen((value) => !value); }}>{open ? 'Show less' : 'Show more'}</button>}
       <span className="crew-task-foot">
         {task.status !== 'accepted' && task.status !== 'backlog' && <Pill tone={status.tone}>{status.label}</Pill>}
+        {task.tier === 'local' && <Pill tone="neutral" title={task.escalated ? 'The local model could not finish this, so a stronger one did' : 'Built on your own model'}>{task.escalated ? 'Local, then stronger' : 'Local'}</Pill>}
+        {task.tier === 'cloud' && <Pill tone={task.escalated ? 'warning' : 'info'} title={task.escalated ? 'The local model could not finish this, so a stronger one did' : 'Built on a paid model'}>{task.escalated ? 'Local, then stronger' : 'Paid model'}</Pill>}
         {task.costUsd > 0 && <small>{money(task.costUsd)}</small>}
       </span>
     </article>
@@ -1017,14 +1027,16 @@ function CostTab({ config, readOnly, run, onLimits, onPhaseBudget, onSavings }: 
     for (const task of run?.tasks ?? []) totals.set(task.role, (totals.get(task.role) ?? 0) + task.costUsd);
     return [...totals.entries()].sort((a, b) => b[1] - a[1]);
   }, [run]);
-  const savings: ReadonlyArray<{ key: keyof CrewConfig['savings']; title: string; detail: string }> = [
+  const savings: ReadonlyArray<{ key: Exclude<keyof CrewConfig['savings'], 'escalateAfter'>; title: string; detail: string }> = [
+    { key: 'localFirst', title: 'Local models first', detail: 'A card built by a model on your computer that keeps failing is tried once on a stronger model, and only that card. The next card starts local again.' },
     { key: 'workFromBoard', title: 'Work from the board, not the chat history', detail: 'Each agent gets its task, the criteria and a board summary.' },
-    { key: 'lightModelForRoutine', title: 'Lighter model for routine tasks', detail: 'Planning and review stay on your chosen models; simple builds can use less.' },
-    { key: 'skipUnchangedReview', title: 'Skip re-review of unchanged work', detail: 'An accepted task is not checked again unless its files change.' },
+    { key: 'lightModelForRoutine', title: 'Lighter model for routine tasks', detail: 'Planning and review stay on your chosen models; simple builds can use less. Roles with a chosen model keep it.' },
+    { key: 'skipUnchangedReview', title: 'Skip a second review of identical work', detail: 'If the project has not changed at all since a task was last reviewed, it is sent back without paying for another review.' },
     { key: 'stopOnRepeatedFailure', title: 'Stop on a repeated failure', detail: 'Ask you once the same task fails for the same reason twice.' },
   ];
   return (
     <section className="ops-panel">
+      {run && <CrewSavingsStrip run={run} />}
       <p className="tasks-tab-help">Limits are checked between tasks. Ask mode offers Continue or Finish; Finish mode stops with accepted work. No task is cut off halfway. Zero means no limit.</p>
       <div className="crew-limits">
         <label className="workflow-field"><span>Spend limit (USD)</span><UiTextInput type="number" min={0} step={1} disabled={readOnly} value={config.limits.maxUsd} onChange={(event) => onLimits({ maxUsd: Math.max(0, Number(event.target.value) || 0) })} /></label>
@@ -1044,6 +1056,13 @@ function CostTab({ config, readOnly, run, onLimits, onPhaseBudget, onSavings }: 
           <Switch checked={config.savings[item.key]} disabled={readOnly} onChange={(event) => onSavings({ [item.key]: event.target.checked })} />
         </label>
       ))}
+      {config.savings.localFirst && (
+        <label className="workflow-field"><span>Attempts on the local model before a stronger one takes the card</span>
+          <Select aria-label="Attempts on the local model before a stronger one takes the card" disabled={readOnly} value={String(config.savings.escalateAfter)} onChange={(event) => onSavings({ escalateAfter: clampInt(event.target.value, 1, 5) })}>
+            {[1, 2, 3, 4, 5].map((count) => <option key={count} value={String(count)}>{count} {count === 1 ? 'attempt' : 'attempts'}</option>)}
+          </Select>
+        </label>
+      )}
       {run && (
         <>
           <h3 className="crew-subheading">Where the money went</h3>

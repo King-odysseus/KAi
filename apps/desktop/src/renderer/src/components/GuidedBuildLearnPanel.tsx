@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowRight, Cpu, Loader2, MessageCircle, Sparkles } from 'lucide-react';
 import type { AgentCapability, AgentId, CodeGuideAction, CodeGuideView, ConversationRecord, GuidedBuild, GuidedBuildStep, RoleTarget } from '@kai/contracts';
 import { directProviderPreset } from '@kai/contracts';
@@ -8,7 +8,11 @@ import { UiButton } from './UiButton';
 import { CUSTOM_ROLE_MODEL, roleModelOptions, targetFromValue, targetOptions, targetValue, withModel } from './architect-settings';
 import { promptDialog } from './AppDialog';
 import { Markdown } from './Markdown';
-import { guidedBuildText, parseGuidedBuildObject, visibleGuidedBuildReply } from './guided-build-format';
+import { parseGuidedBuildObject, visibleGuidedBuildReply } from './guided-build-format';
+import { GuidedBuildCard } from './GuidedBuildCard';
+import { GuidedBuildTeamPanel } from './GuidedBuildTeamPanel';
+import { collectCheck, collectDiffs } from './guided-build-evidence';
+import { guidedUsage, addIdeaPrompt, builderStepPrompt, builderStuckReason, coachPrompt, describeRole, diffText, evidenceText, gateReview, guidedTurnIndexes, learnPrompt, localBuilderStepPrompt, planFromBriefPrompt, planPrompt as buildPlanPrompt, readGuidedPlan, readGuidedReview, reviewPrompt, showCodePrompt, writeCodePrompt, type CheckEvidence, type GuidedRunOverride, type LearnAction } from './guided-build-engine';
 import { unwrap } from '../types';
 
 type BuildMode = 'coach' | 'plan' | 'review' | 'show-code' | 'write-code';
@@ -27,15 +31,17 @@ export function GuidedBuildLearnPanel(props: {
   agentCapabilities: readonly AgentCapability[];
   selectedAgent: AgentId;
   onUpdateGuidedBuild: (build: GuidedBuild) => void;
-  onRunGuidedBuild: (prompt: string, build: GuidedBuild, mode: BuildMode, userMessage?: string) => void | Promise<void>;
+  onRunGuidedBuild: (prompt: string, build: GuidedBuild, mode: BuildMode, userMessage?: string, override?: GuidedRunOverride) => void | Promise<void>;
   onOpenFile: (path: string, line?: number) => void;
+  /** The open project, so a review can run its check and read the real diff. */
+  projectId: string | null;
 }): ReactNode {
   const {
     view, explaining, busy, error, onExplain, stripHidden, onToggleStrip, guidedBuild, conversation,
-    agentCapabilities, selectedAgent, onUpdateGuidedBuild, onRunGuidedBuild, onOpenFile,
+    agentCapabilities, selectedAgent, onUpdateGuidedBuild, onRunGuidedBuild, onOpenFile, projectId,
   } = props;
   const fallbackTarget = useMemo<RoleTarget>(() => ({ execution: 'cli', agent: selectedAgent }), [selectedAgent]);
-  const [build, setBuild] = useState<GuidedBuild>(() => guidedBuild ?? emptyBuild(selectedAgent, fallbackTarget));
+  const [build, setBuild] = useState<GuidedBuild>(() => guidedBuild ?? emptyBuild(selectedAgent));
   const [message, setMessage] = useState('');
   const [credentialIds, setCredentialIds] = useState<readonly string[]>([]);
   const [providerModels, setProviderModels] = useState<ReadonlyMap<string, readonly string[]>>(new Map());
@@ -43,6 +49,9 @@ export function GuidedBuildLearnPanel(props: {
   const [planStart, setPlanStart] = useState<number | null>(null);
   const [reviewStart, setReviewStart] = useState<number | null>(null);
   const [composerSettingsOpen, setComposerSettingsOpen] = useState(false);
+  const [teamOpen, setTeamOpen] = useState(false);
+  /** The check KAI ran for the review in flight, so a failing run can overrule a "ready" from the Coach. */
+  const checkRef = useRef<CheckEvidence | null>(null);
   const step = build.steps[build.currentStep];
   const coach = build.coachTarget ?? fallbackTarget;
   const builder = build.builderTarget ?? fallbackTarget;
@@ -82,25 +91,8 @@ export function GuidedBuildLearnPanel(props: {
     if (!conversation || planStart === null || conversation.turns.length <= planStart) return;
     const answer = [...conversation.turns.slice(planStart)].reverse().find((turn) => turn.role === 'assistant');
     if (!answer) return;
-    const data = parseObject(answer.text);
-    if (data && typeof data.title === 'string' && Array.isArray(data.steps)) {
-      const steps: GuidedBuildStep[] = data.steps.flatMap((raw, index) => {
-        if (!raw || typeof raw !== 'object') return [];
-        const item = raw as Record<string, unknown>;
-        if (typeof item.title !== 'string') return [];
-        return [{
-          id: typeof item.id === 'string' ? item.id : `guided-step-${index + 1}`,
-          title: item.title,
-          why: typeof item.why === 'string' ? item.why : '',
-          where: guidedBuildText(item.where),
-          instructions: guidedBuildText(item.instructions),
-          ...(typeof item.code === 'string' ? { code: item.code } : {}),
-          acceptanceCriteria: Array.isArray(item.acceptanceCriteria) ? item.acceptanceCriteria.filter((entry): entry is string => typeof entry === 'string') : [],
-          status: index === 0 ? 'active' : 'pending',
-        }];
-      });
-      if (steps.length) update({ ...build, enabled: true, planTitle: data.title, steps, currentStep: 0, review: null });
-    }
+    const plan = readGuidedPlan(answer.text, (index) => `guided-step-${index + 1}`);
+    if (plan && plan.steps.length) update({ ...build, enabled: true, planTitle: plan.title, steps: plan.steps, currentStep: 0, review: null });
     setPlanStart(null);
     setWorking(null);
   }, [conversation?.turns.length, planStart]);
@@ -109,9 +101,10 @@ export function GuidedBuildLearnPanel(props: {
     if (!conversation || reviewStart === null || conversation.turns.length <= reviewStart) return;
     const answer = [...conversation.turns.slice(reviewStart)].reverse().find((turn) => turn.role === 'assistant');
     if (!answer) return;
-    const data = parseObject(answer.text);
-    if (data && ['ready', 'changes-needed', 'unverified'].includes(String(data.status)) && typeof data.summary === 'string') {
-      update({ ...build, review: { status: data.status as 'ready' | 'changes-needed' | 'unverified', summary: data.summary, checkedAt: new Date().toISOString() } });
+    const review = readGuidedReview(answer.text);
+    if (review) {
+      const gated = gateReview(review, checkRef.current);
+      update({ ...build, steps: build.steps.map((item, index) => (index === build.currentStep && gated.status === 'ready' ? { ...item, status: 'complete' as const } : item)), review: { status: gated.status, summary: gated.summary, checkedAt: new Date().toISOString() } });
     }
     setReviewStart(null);
     setWorking(null);
@@ -150,37 +143,27 @@ export function GuidedBuildLearnPanel(props: {
     update(role === 'coach' ? { ...build, coachTarget: next, coachModel: value } : { ...build, builderTarget: next, builderModel: value });
   };
 
-  const run = async (mode: BuildMode, prompt: string): Promise<void> => {
+  const run = async (mode: BuildMode, prompt: string, override?: GuidedRunOverride): Promise<void> => {
     if (!prompt.trim() || working) return;
     setWorking(mode);
     const turnCount = conversation?.turns.length ?? 0;
     if (mode === 'plan') setPlanStart(turnCount);
     if (mode === 'review') setReviewStart(turnCount);
-    if (mode === 'review') setReviewStart(turnCount);
     const userMessage = mode === 'review' ? 'Check my edit' : message.trim() || step?.title || 'Continue Guided Build';
-    try { await onRunGuidedBuild(prompt, build, mode, userMessage); }
+    try { await onRunGuidedBuild(prompt, build, mode, userMessage, override); }
     catch { setWorking(null); setPlanStart(null); setReviewStart(null); }
     setMessage('');
   };
 
-  const planPrompt = (idea: string, addToPlan: boolean): string => {
-    const existing = build.steps.map((item, index) => `${index + 1}. ${item.title}: ${item.instructions}`).join('\n');
-    const questionRule = build.questions === 'blocked' ? 'Ask me only if you cannot safely continue.' : build.questions === 'decisions' ? 'Ask me before a major decision.' : 'Ask me once before each new step.';
-    const teachingStyle = `Explain in a ${build.style === 'senior-dev' ? 'senior developer' : 'tutor'} style with ${build.detail} detail.`;
-    return addToPlan
-      ? `Fit this new idea into my current coding plan. Add, combine, or reorder steps as needed, and keep the other useful steps. Current plan: ${build.planTitle}\n${existing}\nNew idea: ${idea}\nFor each step explain why it matters, name the exact file and place to edit, give clear instructions, and say how to check it. ${teachingStyle} ${questionRule} Return only JSON with title and steps; each step needs title, why, where, instructions, optional code, and acceptanceCriteria.`
-      : `Make a beginner-friendly, step-by-step coding plan for my idea: ${idea}\n
-First map the project: list its files, read top-level instructions, README, manifests and workspace configuration, and identify its major apps, packages, services, entry points and tests. Use search and file-reading tools to inspect the code that implements the relevant behavior and trace its imports and tests. The compact repository map may be truncated, so use it only as an index. Do not claim to have read every file if you did not; state coverage limits in the plan introduction.
-
-For each small Builder-sized step explain why it matters, name exactly one project-relative file in where (optionally with a symbol or line anchor), give clear instructions, and say how to check it. If related files matter, name them in instructions rather than concatenating paths in where. ${teachingStyle} ${questionRule} Return valid JSON only with title and steps; each step needs id, title, why, where, instructions, optional code, and acceptanceCriteria.`;
-  };
+  const planPrompt = (idea: string, addToPlan: boolean): string => addToPlan
+    ? addIdeaPrompt(idea, build.planTitle, build.steps, build.style, build.detail, build.questions)
+    : buildPlanPrompt(idea, build.style, build.detail, build.questions);
   const askCoach = (): void => {
     const question = message.trim();
     if (!question) return;
     if (!build.steps.length) void run('plan', planPrompt(question, false));
     else {
-      const questionRule = build.questions === 'blocked' ? 'Ask for clarification only if you are blocked.' : build.questions === 'decisions' ? 'Ask me before a major decision.' : 'Ask once before each new step.';
-      void run('coach', `Answer this question about my project and current coding plan conversationally. Be clear and use my selected explanation detail. ${questionRule} My question: ${question}\nCurrent step: ${step?.title ?? 'none'}.`);
+      void run('coach', coachPrompt(question, build.style, build.detail, build.questions, step));
     }
   };
   const addIdea = (): void => {
@@ -191,36 +174,41 @@ For each small Builder-sized step explain why it matters, name exactly one proje
   const sendToBuilder = (mode: 'show-code' | 'write-code'): void => {
     const request = message.trim() || step?.instructions || step?.title || '';
     if (!request) return;
-    const stepContext = step ? `Current plan step: ${step.title}. Why: ${step.why}. Instructions: ${step.instructions}. Check it by: ${step.acceptanceCriteria.join('; ')}.` : '';
-    const file = step?.where ? `Open this file: ${step.where}.` : 'Find the right file and tell me which one you chose.';
-    const prompt = mode === 'show-code'
-      ? `Help me make this change myself: ${request}\n${stepContext}\n${file}\nDo not edit files. Show me exactly where to type and the exact code to enter, then explain briefly what it does. Do not ask me questions.`
-      : `Make this change in the project: ${request}\n${stepContext}\n${file}\nEdit the file for me. Do not ask me questions; make a sensible assumption if needed.`;
+    const prompt = mode === 'show-code' ? showCodePrompt(step, request) : writeCodePrompt(step, request);
     void run(mode, prompt);
   };
   const askForReview = (): void => {
+    if (!step || working) return;
+    const latest = [...(conversation?.events ?? [])].reverse().find((event) => event.type === 'turn.changes');
+    const reported = latest && 'files' in latest ? latest.files.map((file) => file.path) : [];
+    setWorking('review');
+    void (async () => {
+      const { check, notRun } = await collectCheck(projectId);
+      const files = await collectDiffs(projectId, step.where, reported);
+      checkRef.current = check;
+      const evidence = diffText(files) + '\n\n' + evidenceText(check, notRun);
+      setWorking(null);
+      await run('review', reviewPrompt(step, files.map((file) => file.path), evidence));
+    })().catch(() => setWorking(null));
+  };
+  /** Builds the current step with the saved Builder, or with a model picked for this one step only. */
+  const buildStep = (target: RoleTarget, justThisStep = false): void => {
     if (!step) return;
-    const prompt = `Check whether my saved code meets this step. Step: ${step.title}. Instructions: ${step.instructions}. File: ${step.where}. Checks: ${step.acceptanceCriteria.join('; ')}. Do not edit files or ask questions. Return only JSON with status ready, changes-needed, or unverified and a short summary.`;
-    void run('review', prompt);
+    const role = describeRole(target, agentNames);
+    void run('write-code', role.local ? localBuilderStepPrompt(step) : builderStepPrompt(step), justThisStep ? { target, local: role.local } : undefined);
+  };
+  const learn = (kind: LearnAction): void => {
+    void run('coach', learnPrompt(kind, step, build.style, build.detail));
+  };
+  const generatePlan = (): void => {
+    if (message.trim()) { askCoach(); return; }
+    if (build.brief) void run('plan', planFromBriefPrompt(build.brief, build.style, build.detail, build.questions));
   };
 
   // Learn & Code shares a project with ordinary Workspace runs. Only render exchanges that were
   // explicitly sent through Guided Build; this prevents unrelated Builder output appearing here.
-  const guidedLabels = new Set([
-    'Create my coding plan', 'Create a coding plan', 'Add an idea to my plan', 'Ask the Coach', 'Check this edit', 'Check my changes', 'Builder task',
-    'Show me the code to type', 'Write this change in the file', 'Builder: implement this step',
-  ]);
   const allTurns = conversation?.turns ?? [];
-  const guidedIndexes = new Set<number>();
-  let currentGuided = false;
-  for (let index = 0; index < allTurns.length; index += 1) {
-    const turn = allTurns[index]!;
-    if (turn.role === 'user') {
-      const label = turn.text.trim();
-      currentGuided = guidedLabels.has(label) || label.startsWith('Coach: ') || label.startsWith('Builder: ');
-    }
-    if (currentGuided) guidedIndexes.add(index);
-  }
+  const guidedIndexes = guidedTurnIndexes(allTurns);
   const guidedEntries = [...guidedIndexes].map((index) => ({ turn: allTurns[index]!, index }));
   const chatTurns = guidedEntries.slice(-16);
   const lastAssistant = [...chatTurns].reverse().find(({ turn }) => turn.role === 'assistant' && !isStructuredResponse(turn.text))?.turn;
@@ -231,6 +219,12 @@ For each small Builder-sized step explain why it matters, name exactly one proje
     return previousUser.includes('builder') || previousUser.includes('write this change') ? 'Builder' : 'Coach';
   };
   const currentSpeaker = working === 'plan' || working === 'coach' || working === 'review' ? 'Coach' : working ? 'Builder' : '';
+  const agentNames = Object.fromEntries(agentCapabilities.map((agent) => [agent.id, agent.displayName]));
+  const coachRole = describeRole(coach, agentNames);
+  const builderRole = describeRole(builder, agentNames);
+  const lastTurn = allTurns.at(-1);
+  const lastAsked = [...allTurns].reverse().find((turn) => turn.role === 'user')?.text ?? '';
+  const builderStuck = lastTurn?.role === 'assistant' && lastAsked.startsWith('Builder: implement') ? builderStuckReason(lastTurn.text) : null;
   const settingsOptions = [
     { value: 'tutor', label: 'Tutor' }, { value: 'senior-dev', label: 'Senior Dev' },
   ];
@@ -241,15 +235,60 @@ For each small Builder-sized step explain why it matters, name exactly one proje
         <UiButton type="button" className="link-button" onClick={onToggleStrip}>{stripHidden ? 'Show guide above the editor' : 'Hide guide above the editor'}</UiButton>
       </header>
       {error && <p className="studio-note error" role="alert">{error}</p>}
-      {step ? <section className="guided-build-active-step" aria-label="Current coding step">
-        <div className="guided-build-step-heading"><span>STEP {build.currentStep + 1} OF {build.steps.length}</span><h3>{step.title}</h3></div>
-        {build.steps.length > 1 && <nav className="flex flex-wrap gap-1" aria-label="Choose a plan step">{build.steps.map((item, index) => <UiButton key={item.id} type="button" className={index === build.currentStep ? 'primary-button' : 'secondary-button'} aria-current={index === build.currentStep ? 'step' : undefined} disabled={Boolean(working)} onClick={() => update({ ...build, currentStep: index, review: null })}>{index + 1}. {item.title}</UiButton>)}</nav>}
-        {step.why && <p>{step.why}</p>}
-        {step.where && <div className="guided-build-file-row"><code>{step.where}</code><UiButton type="button" className="secondary-button" onClick={() => onOpenFile(step.where.split(':')[0]!, Number(step.where.split(':')[1]) || undefined)}>Open file</UiButton></div>}
-        {step.instructions && <div className="guided-build-instructions"><strong>What to do</strong><p>{step.instructions}</p></div>}
-        {step.acceptanceCriteria.length > 0 && <div className="guided-build-instructions"><strong>How to check it</strong><ul>{step.acceptanceCriteria.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ul></div>}
-        <div className="guided-build-step-footer"><span>{build.review?.summary ?? 'When you finish, ask Coach to check the saved file.'}</span><UiButton type="button" className="secondary-button" disabled={Boolean(working)} onClick={askForReview}>{working === 'review' ? 'Coach is checking…' : 'Ask Coach to check my edit'}</UiButton><UiButton type="button" className="secondary-button" disabled={!build.review || build.currentStep >= build.steps.length - 1} onClick={() => update({ ...build, currentStep: Math.min(build.steps.length - 1, build.currentStep + 1), review: null })}>Next step</UiButton></div>
-      </section> : <section className="guided-build-empty"><h3>Start with your idea</h3><p>Tell Coach what you want to build. Coach will make the plan and choose the first file to open.</p></section>}
+      <GuidedBuildCard
+        state={build}
+        disabled={Boolean(working)}
+        planBusy={working === 'plan'}
+        reviewBusy={working === 'review'}
+        coachLabel={coachRole.label}
+        builderLabel={builderRole.label}
+        builderIsLocal={builderRole.local}
+        hasBrief={Boolean(build.brief)}
+        stuckReason={builderStuck}
+        escalateLabel={builderRole.local && build.builderLock !== 'pinned' ? coachRole.label : null}
+        onEscalate={() => { if (step) void run('write-code', builderStepPrompt(step), { target: coach, local: false }); }}
+        handsOn={build.handsOn}
+        withOptions={targetOptions('implementer', { capabilities: agentCapabilities, credentialIds, current: [coach, builder] })}
+        onBuildWith={(value) => { const target = targetFromValue(value, null); if (target) buildStep(target, true); }}
+        onChange={update}
+        onOpenFile={onOpenFile}
+        onGeneratePlan={generatePlan}
+        onAddIdea={addIdea}
+        onBuild={() => buildStep(builder)}
+        onShowCode={() => sendToBuilder('show-code')}
+        onReview={askForReview}
+        onOpenTeam={() => setTeamOpen(true)}
+        onNext={() => update({ ...build, currentStep: Math.min(build.steps.length - 1, build.currentStep + 1), review: null })}
+      />
+      {teamOpen && (
+        <GuidedBuildTeamPanel
+          state={build}
+          disabled={Boolean(working)}
+          projectId={projectId}
+          coachLabel={coachRole.label}
+          builderLabel={builderRole.label}
+          builderIsLocal={builderRole.local}
+          builderTarget={builder}
+          coachTarget={coach}
+          usage={guidedUsage(allTurns)}
+          onChange={update}
+          onClose={() => setTeamOpen(false)}
+          rolePickers={<div className="flex flex-wrap items-center gap-2">
+            <OptionMenu ariaLabel="Coach agent" icon={<Sparkles size={12} />} onChange={(value) => chooseTarget('coach', value)} options={options('coach', coach)} title="Choose the Coach that makes plans and answers your questions" value={targetValue(coach)} />
+            <OptionMenu ariaLabel="Coach model" onChange={(value) => chooseModel('coach', coach, value)} options={modelOptions('coach', coach)} title="Choose Coach model" value={coach.execution === 'api' ? coach.api?.model ?? '' : coach.model ?? ''} />
+            <OptionMenu ariaLabel="Builder agent" icon={<Cpu size={12} />} onChange={(value) => chooseTarget('builder', value)} options={options('builder', builder)} title="Choose the Builder that provides code or edits files" value={targetValue(builder)} />
+            <OptionMenu ariaLabel="Builder model" onChange={(value) => chooseModel('builder', builder, value)} options={modelOptions('builder', builder)} title="Choose Builder model" value={builder.execution === 'api' ? builder.api?.model ?? '' : builder.model ?? ''} />
+          </div>}
+        />
+      )}
+      {step && (
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-2" aria-label="Learn from this step">
+          <span className="text-xs text-[var(--text-dim)]">Learn:</span>
+          <UiButton type="button" className="secondary-button" disabled={Boolean(working)} onClick={() => learn('walk')}>Walk me through it</UiButton>
+          <UiButton type="button" className="secondary-button" disabled={Boolean(working)} onClick={() => learn('quiz')}>Quiz me</UiButton>
+          <UiButton type="button" className="secondary-button" disabled={Boolean(working)} onClick={() => learn('simpler')}>Explain simpler</UiButton>
+        </div>
+      )}
 
       {chatTurns.length > 0 && <div className="guided-build-chat" aria-label="Guided Build conversation">{chatTurns.map(({ turn }, index) => {
         const visibleText = turn.role === 'assistant' ? visibleGuidedBuildReply(turn.text) : turn.text;
@@ -269,6 +308,8 @@ For each small Builder-sized step explain why it matters, name exactly one proje
               <OptionMenu ariaLabel="Builder model" onChange={(value) => chooseModel('builder', builder, value)} options={modelOptions('builder', builder)} title="Choose Builder model" value={builder.execution === 'api' ? builder.api?.model ?? '' : builder.model ?? ''} />
               <OptionMenu ariaLabel="Coach style" onChange={(value) => update({ ...build, style: value as GuidedBuild['style'] })} options={settingsOptions} title="Choose how Coach explains the steps" value={build.style} />
               <OptionMenu ariaLabel="Explanation detail" onChange={(value) => update({ ...build, detail: value as GuidedBuild['detail'] })} options={[{ value: 'brief', label: 'Brief' }, { value: 'step-by-step', label: 'Step by step' }, { value: 'line-by-line', label: 'Line by line' }]} title="Choose how much detail Coach gives" value={build.detail} />
+              <OptionMenu ariaLabel="How hands-on" onChange={(value) => update({ ...build, handsOn: value as GuidedBuild['handsOn'] })} options={[{ value: 'auto', label: 'Do it for me' }, { value: 'guided', label: 'Walk me through it' }, { value: 'manual', label: "I'll type, you check" }]} title="Choose how much you want to do yourself" value={build.handsOn} />
+              <OptionMenu ariaLabel="If the Builder is stuck" onChange={(value) => update({ ...build, builderLock: value as GuidedBuild['builderLock'] })} options={[{ value: 'escalate', label: 'Offer a stronger model' }, { value: 'pinned', label: 'Always this model' }]} title="What to do when the Builder cannot finish a step" value={build.builderLock} />
               <OptionMenu ariaLabel="When Coach asks you questions" onChange={(value) => update({ ...build, questions: value as GuidedBuild['questions'] })} options={[{ value: 'blocked', label: 'Only when blocked' }, { value: 'decisions', label: 'Before big choices' }, { value: 'each-step', label: 'At each step' }]} title="Choose when Coach asks you for clarification" value={build.questions} />
             </>}
           </>}
@@ -292,8 +333,8 @@ For each small Builder-sized step explain why it matters, name exactly one proje
   );
 }
 
-function emptyBuild(agent: AgentId, target: RoleTarget): GuidedBuild {
-  return { enabled: true, coachTarget: target, builderTarget: target, coachAgent: agent, coachModel: '', builderAgent: agent, builderModel: '', style: 'tutor', detail: 'step-by-step', questions: 'blocked', followEdits: true, planTitle: '', steps: [], currentStep: 0, review: null };
+function emptyBuild(agent: AgentId): GuidedBuild {
+  return { enabled: true, coachTarget: null, builderTarget: null, coachAgent: agent, coachModel: '', builderAgent: agent, builderModel: '', style: 'tutor', detail: 'step-by-step', questions: 'blocked', followEdits: true, handsOn: 'guided', builderLock: 'escalate', planTitle: '', steps: [], currentStep: 0, review: null };
 }
 
 function parseObject(text: string): Record<string, unknown> | null {

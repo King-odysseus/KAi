@@ -29,14 +29,14 @@ import {
 } from './studio-guide';
 
 /**
- * The Senior Dev, wired to a real project.
+ * The Project guide, wired to a real project.
  *
  * The rules live in `studio-guide.ts` and are pure; this is the half that reads a project and pays for the words.
  * The split matters at the cost boundary: `read` never calls a provider, so the board's one-line strip and every
  * redraw are free, and `explain` is the only thing that spends — once per situation, not once per look.
  */
 
-const NAMES = { feature: 'the Senior Dev', card: 'Senior Dev' };
+const NAMES = { feature: 'the Project guide', card: 'Project guide' };
 
 const GUIDE_JSON_SCHEMA = {
   type: 'object',
@@ -172,10 +172,10 @@ function count(board: StudioBoard, status: StudioBoard['cards'][number]['status'
 
 /** Reads the model's reply. Anything else is an error rather than a guess, the way the interview reads its own. */
 export function parseGuideNarrative(content: string): StudioGuideNarrative {
-  const parsed = lenient(studioGuideNarrativeSchema).safeParse(parseJsonResponse(content, 'Senior Dev'));
+  const parsed = lenient(studioGuideNarrativeSchema).safeParse(parseJsonResponse(content, 'Project guide'));
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
-    throw new Error(`The Senior Dev reply did not match the expected shape (${issue ? `${issue.path.join('.') || 'reply'}: ${issue.message}` : 'unknown error'}).`);
+    throw new Error(`The Project guide reply did not match the expected shape (${issue ? `${issue.path.join('.') || 'reply'}: ${issue.message}` : 'unknown error'}).`);
   }
   return parsed.data;
 }
