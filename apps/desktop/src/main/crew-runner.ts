@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ARCHITECT_STUCK_SENTINEL, DEFAULT_AWAY_POLICY, classifyWork, crewConfigSchema, crewRunSchema, isLocalProvider, phaseReportMarkdown } from '@kai/contracts';
+import { ARCHITECT_STUCK_SENTINEL, DEFAULT_AWAY_POLICY, classifyWork, crewConfigSchema, crewRunSchema, isOwnNetworkApi, phaseReportMarkdown } from '@kai/contracts';
 import type { AgentRunRequest, AgentRunResult, ConversationOrigin, CrewAwayPolicy, CrewRevertPreview, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask, CrewTaskDiff } from '@kai/contracts';
 import {
   acceptPhase, addNotes, clearNotes, phaseToPauseAfter, setPauseAfter, openTasks, reopenOpenTasks, addChat, addCheckFix, addSpend, addTasks, continueToNextPhase, decideApproval, isBareContinue, mergeChat, phaseFromFollowUp, requestApprovals, resetForRevert, ruleBlock, isUsageLimit, setTaskCheckpoint, tasksToRebuild, teachBlockers, answerAsk, enforceLimits, failBuild, failBuildSmart, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
@@ -80,7 +80,7 @@ const CHECK_REVIEWER = 'check';
 export const LOCAL_CREW_TASK_ROUND_LIMIT = 30;
 
 function isLocalCrewRole(role: CrewRole): boolean {
-  return role.execution === 'api' && Boolean(role.api && isLocalProvider(role.api.provider));
+  return role.execution === 'api' && Boolean(role.api && isOwnNetworkApi(role.api));
 }
 /** The model a role runs on, as a person reads it: "qwen3-coder", "claude opus". */
 function roleModelLabel(role: CrewRole): string {

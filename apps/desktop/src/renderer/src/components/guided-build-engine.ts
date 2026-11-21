@@ -1,4 +1,4 @@
-import { ARCHITECT_STUCK_SENTINEL, LOCAL_PROVIDERS, directProviderPreset, isLocalProvider, type AppSettings, type GuidedBuild, type GuidedBuildStep, type RoleTarget } from '@kai/contracts';
+import { ARCHITECT_STUCK_SENTINEL, LOCAL_PROVIDERS, directProviderPreset, isLocalProvider, isLoopbackUrl, isOwnNetworkApi, type AgentCapability, type AppSettings, type GuidedBuild, type GuidedBuildStep, type RoleTarget } from '@kai/contracts';
 import { guidedBuildText, parseGuidedBuildObject } from './guided-build-format';
 
 /**
@@ -21,7 +21,8 @@ import { guidedBuildText, parseGuidedBuildObject } from './guided-build-format';
  */
 export function defaultLocalBuilder(settings: Pick<AppSettings, 'directApi' | 'savedLocalModels'>): RoleTarget | null {
   const direct = settings.directApi;
-  if (LOCAL_PROVIDERS.has(direct.provider)) {
+  // A gateway on the home or office network is the person's own, even though it is an "OpenAI-compatible" provider.
+  if (isOwnNetworkApi({ provider: direct.provider, baseUrl: direct.baseUrl })) {
     const preset = directProviderPreset(direct.provider);
     return {
       execution: 'api',
@@ -51,9 +52,11 @@ export function describeRole(target: RoleTarget | null | undefined, agentNames: 
   if (!api) return { label: 'API', local: false };
   const preset = directProviderPreset(api.provider);
   const model = api.model ?? preset.defaultModel ?? '';
-  const local = isLocalProvider(api.provider);
+  const local = isOwnNetworkApi(api);
+  // On this computer, or on the person's own network: either way it is theirs and not billed.
+  const where = local ? (isLoopbackUrl(api.baseUrl) || (isLocalProvider(api.provider) && !api.baseUrl) ? ' (on this computer)' : ' (on your network)') : '';
   // Never the provider's name twice: with no model known the label is just the provider, not "Gateway · Gateway".
-  const label = local ? `${model || preset.displayName} (on this computer)` : model && model !== preset.displayName ? `${model} · ${preset.displayName}` : preset.displayName;
+  const label = local ? `${model || preset.displayName}${where}` : model && model !== preset.displayName ? `${model} · ${preset.displayName}` : preset.displayName;
   return { label, local };
 }
 
@@ -63,11 +66,55 @@ export function describeRole(target: RoleTarget | null | undefined, agentNames: 
  * and the request should say so instead of showing nothing.
  */
 export function withSettingsModel(target: RoleTarget, settings: Pick<AppSettings, 'directApi' | 'savedLocalModels'>): RoleTarget {
-  if (target.execution !== 'api' || !target.api || target.api.model) return target;
+  if (target.execution !== 'api' || !target.api) return target;
   const { provider } = target.api;
-  const direct = settings.directApi.provider === provider ? settings.directApi.model.trim() : '';
-  const model = direct || settings.savedLocalModels[provider]?.[0] || '';
-  return model ? { ...target, api: { ...target.api, model } } : target;
+  const isDirect = settings.directApi.provider === provider;
+  // A model the person already named is kept; only a missing one is filled in.
+  const model = target.api.model ? '' : (isDirect ? settings.directApi.model.trim() : '') || settings.savedLocalModels[provider]?.[0] || '';
+  // The server's own address and credential come with it, so the run reaches that server (and it is known to be on the
+  // person's own network) rather than relying on a provider name alone.
+  const place = isDirect
+    ? { ...(target.api.baseUrl ? {} : { baseUrl: settings.directApi.baseUrl }), ...(target.api.credentialId ? {} : { credentialId: settings.directApi.credentialId }) }
+    : {};
+  if (!model && Object.keys(place).length === 0) return target;
+  return { ...target, api: { ...target.api, ...place, ...(model ? { model } : {}) } };
+}
+
+export interface StepModelChoice {
+  /** What the menu hands back when this is chosen. */
+  value: string;
+  label: string;
+  target: RoleTarget;
+}
+
+/**
+ * Every model one step could be built with, as the "With..." menu lists them: the models on the person's own gateway first
+ * (each by name, such as gateway/coding and gateway/auto), then the Coach's model, then each agent that is ready. Each is
+ * a whole choice, agent and model together, so picking one never asks a second question.
+ */
+export function stepModelChoices(input: {
+  settings: Pick<AppSettings, 'directApi' | 'savedLocalModels'>;
+  agents: ReadonlyArray<Pick<AgentCapability, 'id' | 'displayName' | 'available'>>;
+  /** Models the direct API's server lists right now, when they were fetched. */
+  liveModels?: readonly string[];
+  coach?: RoleTarget | null;
+  agentNames?: Readonly<Record<string, string>>;
+}): StepModelChoice[] {
+  const { settings, agents, liveModels = [], coach } = input;
+  const choices: Array<Omit<StepModelChoice, 'value'>> = [];
+  const direct = settings.directApi;
+  const providerName = directProviderPreset(direct.provider).displayName;
+  const models = [...new Set([direct.model.trim(), ...(settings.savedLocalModels[direct.provider] ?? []), ...liveModels].filter(Boolean))].slice(0, 12);
+  for (const model of models) {
+    const target = withSettingsModel({ execution: 'api', api: { provider: direct.provider, model } }, settings);
+    const own = target.execution === 'api' && target.api ? isOwnNetworkApi(target.api) : false;
+    choices.push({ label: `${providerName} · ${model}${own ? ' (your network)' : ''}`, target });
+  }
+  if (coach) choices.push({ label: `The Coach's model: ${describeRole(coach, input.agentNames).label}`, target: coach });
+  for (const agent of agents.filter((item) => item.available)) {
+    choices.push({ label: `${agent.displayName} (subscription)`, target: { execution: 'cli', agent: agent.id } });
+  }
+  return choices.map((choice, index) => ({ ...choice, value: `pick:${index}` }));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

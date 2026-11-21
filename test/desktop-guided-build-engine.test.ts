@@ -146,7 +146,7 @@ describe('reviewPrompt', () => {
 });
 
 describe('defaultLocalBuilder', () => {
-  const direct = (provider: string, model = '') => ({ enabled: true, provider, model, baseUrl: 'http://192.168.1.20:8080/v1', credentialId: 'provider.local' }) as never;
+  const direct = (provider: string, model = '', baseUrl = 'http://192.168.1.20:8080/v1') => ({ enabled: true, provider, model, baseUrl, credentialId: 'provider.local' }) as never;
 
   it('uses the direct API server when it runs on this network', () => {
     expect(defaultLocalBuilder({ directApi: direct('lmstudio', 'gateway/coding'), savedLocalModels: {} })).toEqual({
@@ -156,14 +156,23 @@ describe('defaultLocalBuilder', () => {
   });
 
   it('falls back to the first local server with a remembered model', () => {
-    expect(defaultLocalBuilder({ directApi: direct('openai'), savedLocalModels: { ollama: ['qwen3-coder'] } })).toEqual({
+    expect(defaultLocalBuilder({ directApi: direct('openai', '', 'https://api.openai.com/v1'), savedLocalModels: { ollama: ['qwen3-coder'] } })).toEqual({
       execution: 'api',
       api: { provider: 'ollama', model: 'qwen3-coder' },
     });
   });
 
   it('returns null when nothing local is set up, so the Builder keeps the agent in use', () => {
-    expect(defaultLocalBuilder({ directApi: direct('openai'), savedLocalModels: {} })).toBeNull();
+    expect(defaultLocalBuilder({ directApi: direct('openai', '', 'https://api.openai.com/v1'), savedLocalModels: {} })).toBeNull();
+  });
+
+  it('takes a gateway on the home network as the person\'s own, whatever the provider is called', () => {
+    const gateway = defaultLocalBuilder({ directApi: { enabled: true, provider: 'openai-compatible', model: 'gateway/coding', baseUrl: 'http://192.168.68.70:8000/v1', credentialId: 'provider.custom' } as never, savedLocalModels: {} });
+    expect(gateway).toEqual({ execution: 'api', api: { provider: 'openai-compatible', baseUrl: 'http://192.168.68.70:8000/v1', model: 'gateway/coding' } });
+  });
+
+  it('does not take a gateway on the public internet as local', () => {
+    expect(defaultLocalBuilder({ directApi: { enabled: true, provider: 'openai-compatible', model: 'x', baseUrl: 'https://gateway.example.com/v1', credentialId: 'provider.custom' } as never, savedLocalModels: {} })).toBeNull();
   });
 });
 
@@ -389,31 +398,33 @@ describe('describeModelCheck', () => {
 });
 
 describe('the model a role will really use', () => {
-  const settings = (provider: string, model: string, saved: Record<string, string[]> = {}) => ({
-    directApi: { enabled: true, provider, model, baseUrl: 'http://192.168.1.20:8080/v1', credentialId: 'provider.local' },
+  const settings = (provider: string, model: string, saved: Record<string, string[]> = {}, baseUrl = 'http://192.168.1.20:8080/v1') => ({
+    directApi: { enabled: true, provider, model, baseUrl, credentialId: 'provider.local' },
     savedLocalModels: saved,
   }) as never;
 
   it('fills in the model from Settings when a provider was picked without one', async () => {
     const { withSettingsModel } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
     const picked = { execution: 'api' as const, api: { provider: 'lmstudio' as const } };
-    expect(withSettingsModel(picked, settings('lmstudio', 'gateway/coding'))).toEqual({ execution: 'api', api: { provider: 'lmstudio', model: 'gateway/coding' } });
+    expect(withSettingsModel(picked, settings('lmstudio', 'gateway/coding'))).toEqual({ execution: 'api', api: { provider: 'lmstudio', baseUrl: 'http://192.168.1.20:8080/v1', credentialId: 'provider.local', model: 'gateway/coding' } });
   });
 
   it('uses the first model remembered for that server when it is not the direct API', async () => {
     const { withSettingsModel } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
     const picked = { execution: 'api' as const, api: { provider: 'ollama' as const } };
-    expect(withSettingsModel(picked, settings('openai', 'gpt-x', { ollama: ['qwen3-coder', 'other'] })).api?.model).toBe('qwen3-coder');
+    expect(withSettingsModel(picked, settings('openai', 'gpt-x', { ollama: ['qwen3-coder', 'other'] }, 'https://api.openai.com/v1')).api?.model).toBe('qwen3-coder');
   });
 
   it('leaves a target that already has a model, a CLI target, and an unknown model alone', async () => {
     const { withSettingsModel } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
-    const chosen = { execution: 'api' as const, api: { provider: 'lmstudio' as const, model: 'mine' } };
+    const chosen = { execution: 'api' as const, api: { provider: 'lmstudio' as const, model: 'mine', baseUrl: 'http://192.168.1.20:8080/v1', credentialId: 'provider.local' } };
     expect(withSettingsModel(chosen, settings('lmstudio', 'gateway/coding'))).toBe(chosen);
+    // A model that was named stays, even when its server has a different one saved; only the address is filled in.
+    expect(withSettingsModel({ execution: 'api', api: { provider: 'lmstudio', model: 'mine' } }, settings('lmstudio', 'gateway/coding')).api).toEqual({ provider: 'lmstudio', model: 'mine', baseUrl: 'http://192.168.1.20:8080/v1', credentialId: 'provider.local' });
     const cli = { execution: 'cli' as const, agent: 'codex' as const };
     expect(withSettingsModel(cli, settings('lmstudio', 'x'))).toBe(cli);
     const nothing = { execution: 'api' as const, api: { provider: 'ollama' as const } };
-    expect(withSettingsModel(nothing, settings('openai', 'gpt-x'))).toBe(nothing);
+    expect(withSettingsModel(nothing, settings('openai', 'gpt-x', {}, 'https://api.openai.com/v1'))).toBe(nothing);
   });
 
   it('never repeats the provider name in the label', async () => {
@@ -471,5 +482,51 @@ describe('mergePlanProgress', () => {
     const merged = mergePlanProgress(done, done);
     expect(merged.currentStep).toBe(1);
     expect(merged.steps.every((item) => item.status === 'complete')).toBe(true);
+  });
+});
+
+describe('the models a step can be built with', () => {
+  const gateway = {
+    directApi: { enabled: true, provider: 'openai-compatible', model: 'gateway/coding', baseUrl: 'http://192.168.68.70:8000/v1', credentialId: 'provider.custom' },
+    savedLocalModels: { 'openai-compatible': ['gateway/auto', 'gateway/coding', 'gateway/general', 'gateway/research'] },
+  } as never;
+  const agents = [{ id: 'codex', displayName: 'Codex', available: true }, { id: 'claude', displayName: 'Claude', available: true }, { id: 'qwen', displayName: 'Qwen Code', available: false }] as never;
+
+  it('lists each model on the gateway by name, with the one in Settings first', async () => {
+    const { stepModelChoices } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
+    const labels = stepModelChoices({ settings: gateway, agents }).map((choice) => choice.label);
+    expect(labels.slice(0, 4)).toEqual(['Gateway · gateway/coding (your network)', 'Gateway · gateway/auto (your network)', 'Gateway · gateway/general (your network)', 'Gateway · gateway/research (your network)']);
+  });
+
+  it('adds what the server lists right now, without repeating a model', async () => {
+    const { stepModelChoices } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
+    const labels = stepModelChoices({ settings: gateway, agents, liveModels: ['gateway/auto', 'gateway/vision'] }).map((choice) => choice.label);
+    expect(labels.filter((label) => label.includes('gateway/auto'))).toHaveLength(1);
+    expect(labels.some((label) => label.includes('gateway/vision'))).toBe(true);
+  });
+
+  it('puts the Coach\'s model after the gateway, then the agents that are ready, never one that is not', async () => {
+    const { stepModelChoices } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
+    const coach = { execution: 'cli' as const, agent: 'codex' as const, model: 'gpt-5.6-terra' };
+    const labels = stepModelChoices({ settings: gateway, agents, coach, agentNames: { codex: 'Codex' } }).map((choice) => choice.label);
+    expect(labels.indexOf("The Coach's model: Codex · gpt-5.6-terra")).toBeGreaterThan(3);
+    expect(labels).toContain('Claude (subscription)');
+    expect(labels.some((label) => label.includes('Qwen'))).toBe(false);
+  });
+
+  it('gives every choice the address and model it needs, and a value that names it', async () => {
+    const { stepModelChoices } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
+    const choices = stepModelChoices({ settings: gateway, agents });
+    expect(choices[1]!.target).toEqual({ execution: 'api', api: { provider: 'openai-compatible', model: 'gateway/auto', baseUrl: 'http://192.168.68.70:8000/v1', credentialId: 'provider.custom' } });
+    expect(new Set(choices.map((choice) => choice.value)).size).toBe(choices.length);
+    expect(choices[0]!.value).toBe('pick:0');
+  });
+
+  it('labels a gateway on the network as such, and this computer as this computer', async () => {
+    const { describeRole } = await import('../apps/desktop/src/renderer/src/components/guided-build-engine');
+    expect(describeRole({ execution: 'api', api: { provider: 'openai-compatible', model: 'gateway/coding', baseUrl: 'http://192.168.68.70:8000/v1' } })).toEqual({ label: 'gateway/coding (on your network)', local: true });
+    expect(describeRole({ execution: 'api', api: { provider: 'ollama', model: 'qwen3-coder' } })).toEqual({ label: 'qwen3-coder (on this computer)', local: true });
+    expect(describeRole({ execution: 'api', api: { provider: 'lmstudio', model: 'x', baseUrl: 'http://localhost:1234/v1' } }).label).toBe('x (on this computer)');
+    expect(describeRole({ execution: 'api', api: { provider: 'openai-compatible', model: 'x', baseUrl: 'https://gateway.example.com/v1' } }).local).toBe(false);
   });
 });

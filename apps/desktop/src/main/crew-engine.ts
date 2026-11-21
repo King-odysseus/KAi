@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_AWAY_POLICY, MAX_SUB_AGENTS_TOTAL, buildRoadmap, isLocalProvider, phaseKey, roleAccess } from '@kai/contracts';
+import { DEFAULT_AWAY_POLICY, MAX_SUB_AGENTS_TOTAL, buildRoadmap, isOwnNetworkApi, phaseKey, roleAccess } from '@kai/contracts';
 import type { CrewAsk, CrewAwayPolicy, CrewChatEntry, CrewConfig, CrewFeedEntry, CrewReview, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
 
 /**
@@ -857,7 +857,7 @@ export function helperChoiceFor(subAgents: number): 'off' | '2' | '3' | '4' | '5
 
 /** A role that runs on this computer or the home network: a small model that needs small cards and a round limit. */
 export function isLocalRole(role: Pick<CrewRole, 'execution' | 'api'>): boolean {
-  return role.execution === 'api' && Boolean(role.api && isLocalProvider(role.api.provider));
+  return role.execution === 'api' && Boolean(role.api && isOwnNetworkApi(role.api));
 }
 
 /**

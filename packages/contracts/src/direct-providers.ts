@@ -318,6 +318,42 @@ export function isLocalProvider(provider: ProviderId): boolean {
   return LOCAL_PROVIDERS.has(provider);
 }
 
+/** True for an address on this computer: localhost, a loopback address, or an IPv6 loopback. */
+export function isLoopbackUrl(url: string | undefined): boolean {
+  const host = hostOf(url);
+  return host === 'localhost' || host === '::1' || /^127\./.test(host);
+}
+
+function hostOf(url: string | undefined): string {
+  if (!url) return '';
+  try { return new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, ''); } catch { return ''; }
+}
+
+/**
+ * True for a server on this computer or the home or office network: a loopback or private-range address, a link-local
+ * one, a `.local`, `.lan` or `.home.arpa` name, or a bare name with no dots (a machine called "gateway"). Nothing on the
+ * public internet matches, so a paid cloud API never counts. Only the address is read; nothing is contacted.
+ */
+export function isPrivateNetworkUrl(url: string | undefined): boolean {
+  const host = hostOf(url);
+  if (!host) return false;
+  if (isLoopbackUrl(url)) return true;
+  if (/^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return true;
+  const second = /^172\.(\d{1,3})\./.exec(host);
+  if (second && Number(second[1]) >= 16 && Number(second[1]) <= 31) return true;
+  if (/^f[cd][0-9a-f]{2}:/.test(host) || /^fe80:/.test(host)) return true;
+  if (/\.(local|lan|home\.arpa|internal)$/.test(host)) return true;
+  return !host.includes('.') && !host.includes(':');
+}
+
+/**
+ * A model server that runs on this computer or the person's own network, so it is not billed: one of the keyless local
+ * providers, or any provider (a gateway in front of several models, say) whose address is a private one.
+ */
+export function isOwnNetworkApi(api: { provider: ProviderId; baseUrl?: string | undefined }): boolean {
+  return isLocalProvider(api.provider) || isPrivateNetworkUrl(api.baseUrl);
+}
+
 /** Sent as the bearer value when a local server wants one and the user stored none. LM Studio ignores it. */
 export const LOCAL_PROVIDER_PLACEHOLDER_KEY = 'lm-studio';
 

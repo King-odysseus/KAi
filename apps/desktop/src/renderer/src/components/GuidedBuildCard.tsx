@@ -228,12 +228,12 @@ export function GuidedBuildCard(props: GuidedBuildCardProps): ReactNode {
                   <ActionsMenu
                     ariaLabel="Choose which model builds this step"
                     items={withOptions.map((option) => ({ key: option.value, label: option.label, onSelect: () => onBuildWith(option.value) }))}
-                    trigger={({ onClick, expanded }) => <UiButton type="button" className="secondary-button" disabled={disabled || Boolean(step.needsApproval)} aria-haspopup="menu" aria-expanded={expanded} onClick={onClick} title="Build just this step with a different model. Your saved Builder does not change."><Cpu size={15} /> With…</UiButton>}
+                    trigger={({ onClick, expanded }) => <UiButton type="button" className="secondary-button" disabled={disabled || Boolean(step.needsApproval)} aria-haspopup="menu" aria-expanded={expanded} onClick={onClick} title="Build just this step with a different model, such as another one on your gateway. Your saved Builder does not change."><Cpu size={15} /> Another model…</UiButton>}
                   />
                 )}
               </div>
               <p className="m-0 mt-2 text-xs text-[var(--text-dim)]">
-                {builderIsLocal ? <>Builder: {builderLabel}. Runs on your own models, so the Coach's strong model is only used to plan and check.</> : <>Builder: {builderLabel}.</>}
+                <strong className="font-semibold text-[var(--text-muted)]">Do it for me</strong> uses your Builder: {builderLabel}{builderIsLocal ? ', which runs on your own models, so your subscription is only used to plan and check' : ''}. You set it in Plan and team. <strong className="font-semibold text-[var(--text-muted)]">Another model</strong> tries a different one for this step only and does not change your Builder.
               </p>
             </>
           )}

@@ -14,7 +14,7 @@ function memoryStorage(initial: Record<string, string> = {}) {
 const claude = { execution: 'cli' as const, agent: 'claude' as const, model: 'opus' };
 const qwen = { execution: 'api' as const, api: { provider: 'ollama' as const, model: 'qwen3-coder' } };
 const settings = (provider: string, saved: Record<string, string[]> = {}) => ({
-  directApi: { enabled: true, provider, model: 'gateway/coding', baseUrl: 'http://192.168.1.20:8080/v1', credentialId: 'provider.local' },
+  directApi: { enabled: true, provider, model: 'gateway/coding', baseUrl: provider === 'openai' ? 'https://api.openai.com/v1' : 'http://192.168.1.20:8080/v1', credentialId: 'provider.local' },
   savedLocalModels: saved,
 }) as never;
 

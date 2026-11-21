@@ -15,7 +15,7 @@ import {
   roleTargetKey,
   splitWorker,
   directProviderPreset,
-  isLocalProvider,
+  isOwnNetworkApi,
   type AgentId,
   type AgentRunRequest,
   type AgentRunResult,
@@ -58,7 +58,7 @@ export const LOCAL_BUILDER_ROUNDS = 30;
 
 /** A builder that runs on this machine or the home network: the one that needs small steps and a round budget. */
 export function isSmallBuilder(target: RoleTarget | null | undefined): boolean {
-  return target?.execution === 'api' && Boolean(target.api) && isLocalProvider(target.api!.provider);
+  return target?.execution === 'api' && Boolean(target.api) && isOwnNetworkApi(target.api!);
 }
 /**
  * How much of the project's diff goes into one review prompt. Every review is a turn in the conversation, and a diff of

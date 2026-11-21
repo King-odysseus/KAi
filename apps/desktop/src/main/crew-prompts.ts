@@ -1,5 +1,5 @@
 import { DEFAULT_AWAY_POLICY } from '@kai/contracts';
-import { isLocalProvider, type CrewAwayPolicy, type CrewConfig, type CrewDesign, type CrewRun, type CrewTask } from '@kai/contracts';
+import { isOwnNetworkApi, type CrewAwayPolicy, type CrewConfig, type CrewDesign, type CrewRun, type CrewTask } from '@kai/contracts';
 import { boardSummary, roleAccess } from './crew-engine';
 
 /**
@@ -50,7 +50,7 @@ function designReviewLines(run: CrewRun, task: CrewTask): string[] {
 export function planPrompt(goal: string, config: CrewConfig, conventions: string, existing: Pick<CrewRun, 'tasks'> & { followUp?: string | null }, design: CrewDesign | null = null): string {
   const done = existing.tasks.filter((task) => task.status === 'accepted' && !task.proposed).map((task) => task.title);
   const roles = config.roles.filter((role) => roleAccess(role) === 'edit' || role.kind === 'security' || role.kind === 'reviewer');
-  const localBuilders = roles.filter((role) => roleAccess(role) === 'edit' && role.execution === 'api' && role.api && isLocalProvider(role.api.provider));
+  const localBuilders = roles.filter((role) => roleAccess(role) === 'edit' && role.execution === 'api' && role.api && isOwnNetworkApi(role.api));
   return [
     'You are the Lead of a small crew that will build a project. Read the project, then split the goal into tasks.',
     'Do not change any files. Reply with one JSON object and nothing else.',

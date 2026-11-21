@@ -12,7 +12,9 @@ import { parseGuidedBuildObject, visibleGuidedBuildReply } from './guided-build-
 import { GuidedBuildCard } from './GuidedBuildCard';
 import { GuidedBuildTeamPanel } from './GuidedBuildTeamPanel';
 import { collectCheck, collectDiffs } from './guided-build-evidence';
-import { mergePlanProgress, withSettingsModel, guidedUsage, addIdeaPrompt, builderStepPrompt, builderStuckReason, coachPrompt, describeRole, diffText, evidenceText, gateReview, guidedTurnIndexes, learnPrompt, localBuilderStepPrompt, planFromBriefPrompt, planPrompt as buildPlanPrompt, readGuidedPlan, readGuidedReview, reviewPrompt, showCodePrompt, writeCodePrompt, type CheckEvidence, type GuidedRunOverride, type LearnAction } from './guided-build-engine';
+import { startingTargets } from '../model-team';
+import { useDirectApiModels } from '../use-direct-api-models';
+import { stepModelChoices, mergePlanProgress, withSettingsModel, guidedUsage, addIdeaPrompt, builderStepPrompt, builderStuckReason, coachPrompt, describeRole, diffText, evidenceText, gateReview, guidedTurnIndexes, learnPrompt, localBuilderStepPrompt, planFromBriefPrompt, planPrompt as buildPlanPrompt, readGuidedPlan, readGuidedReview, reviewPrompt, showCodePrompt, writeCodePrompt, type CheckEvidence, type GuidedRunOverride, type LearnAction } from './guided-build-engine';
 import { unwrap } from '../types';
 
 type BuildMode = 'coach' | 'plan' | 'review' | 'show-code' | 'write-code';
@@ -52,11 +54,14 @@ export function GuidedBuildLearnPanel(props: {
   const [reviewStart, setReviewStart] = useState<number | null>(null);
   const [composerSettingsOpen, setComposerSettingsOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
+  const liveGatewayModels = useDirectApiModels(modelSettings);
   /** The check KAI ran for the review in flight, so a failing run can overrule a "ready" from the Coach. */
   const checkRef = useRef<CheckEvidence | null>(null);
   const step = build.steps[build.currentStep];
   const coach = build.coachTarget ?? fallbackTarget;
-  const builder = build.builderTarget ?? fallbackTarget;
+  // The saved Builder, else the saved Model team's, else the person's own gateway or local model, else the agent in use.
+  const startingBuilder = modelSettings ? startingTargets(modelSettings).builder : null;
+  const builder = build.builderTarget ?? startingBuilder ?? fallbackTarget;
 
   useEffect(() => {
     if (guidedBuild) setBuild(guidedBuild);
@@ -229,6 +234,8 @@ export function GuidedBuildLearnPanel(props: {
   };
   const currentSpeaker = working === 'plan' || working === 'coach' || working === 'review' ? 'Coach' : working ? 'Builder' : '';
   const agentNames = Object.fromEntries(agentCapabilities.map((agent) => [agent.id, agent.displayName]));
+  // Every model one step could be built with, by name, for the With menu.
+  const stepChoices = modelSettings ? stepModelChoices({ settings: modelSettings, agents: agentCapabilities, liveModels: liveGatewayModels, coach, agentNames }) : [];
   const coachRole = describeRole(modelSettings ? withSettingsModel(coach, modelSettings) : coach, agentNames);
   const builderRole = describeRole(modelSettings ? withSettingsModel(builder, modelSettings) : builder, agentNames);
   const lastTurn = allTurns.at(-1);
@@ -257,8 +264,8 @@ export function GuidedBuildLearnPanel(props: {
         escalateLabel={builderRole.local && build.builderLock !== 'pinned' ? coachRole.label : null}
         onEscalate={() => { if (step) void run('write-code', builderStepPrompt(step), { target: coach, local: false }); }}
         handsOn={build.handsOn}
-        withOptions={targetOptions('implementer', { capabilities: agentCapabilities, credentialIds, current: [coach, builder] })}
-        onBuildWith={(value) => { const target = targetFromValue(value, null); if (target) buildStep(target, true); }}
+        withOptions={stepChoices.map(({ value, label }) => ({ value, label }))}
+        onBuildWith={(value) => { const choice = stepChoices.find((item) => item.value === value); if (choice) buildStep(choice.target, true); }}
         onChange={update}
         onOpenFile={onOpenFile}
         onGeneratePlan={generatePlan}

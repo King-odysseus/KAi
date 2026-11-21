@@ -156,3 +156,28 @@ describe('a question about a task that is already done', () => {
     expect(cleared.queuedAsks).toEqual([]);
   });
 });
+
+describe('a gateway on the home network is a local builder', () => {
+  const withGateway = (baseUrl: string) => {
+    const base = createDefaultCrewConfig('claude', 'codex');
+    return crewConfigSchema.parse({
+      ...base,
+      roles: base.roles.map((role) => (role.id === 'builder' ? { ...role, execution: 'api', api: { provider: 'openai-compatible', baseUrl, model: 'gateway/coding' } } : role)),
+    });
+  };
+
+  it('counts a gateway at a private address as local, so it gets small cards and the ladder', () => {
+    const config = withGateway('http://192.168.68.70:8000/v1');
+    const builder = config.roles.find((role) => role.id === 'builder')!;
+    expect(isLocalRole(builder)).toBe(true);
+    expect(shouldEscalate(config, builder, 3)).toBe(true);
+    expect(escalatedRole(config, builder)?.execution).toBe('cli');
+  });
+
+  it('does not count a gateway on the public internet as local', () => {
+    const config = withGateway('https://gateway.example.com/v1');
+    const builder = config.roles.find((role) => role.id === 'builder')!;
+    expect(isLocalRole(builder)).toBe(false);
+    expect(shouldEscalate(config, builder, 9)).toBe(false);
+  });
+});

@@ -15,7 +15,8 @@ import { GuidedBuildCard } from './GuidedBuildCard';
 import { GuidedBuildTeamPanel } from './GuidedBuildTeamPanel';
 import { collectCheck, collectDiffs } from './guided-build-evidence';
 import { startingTargets } from '../model-team';
-import { mergePlanProgress, withSettingsModel, guidedUsage, planFromBriefPrompt as guidedPlanFromBriefPrompt, LOCAL_BUILDER_ROUNDS, builderStuckReason as guidedStuckReason, localBuilderStepPrompt as guidedLocalBuilderPrompt, diffText as guidedDiffText, evidenceText as guidedEvidenceText, gateReview as guidedGateReview, type CheckEvidence as GuidedCheckEvidence, addIdeaPrompt as guidedAddIdeaPrompt, defaultLocalBuilder, describeRole, showCodePrompt as guidedShowCodePrompt, builderStepPrompt as guidedBuilderStepPrompt, coachPrompt as guidedCoachPrompt, isGuidedLabel, planPrompt as guidedPlanPrompt, readGuidedPlan, readGuidedReview, reviewPrompt as guidedReviewPrompt } from './guided-build-engine';
+import { useDirectApiModels } from '../use-direct-api-models';
+import { stepModelChoices, mergePlanProgress, withSettingsModel, guidedUsage, planFromBriefPrompt as guidedPlanFromBriefPrompt, LOCAL_BUILDER_ROUNDS, builderStuckReason as guidedStuckReason, localBuilderStepPrompt as guidedLocalBuilderPrompt, diffText as guidedDiffText, evidenceText as guidedEvidenceText, gateReview as guidedGateReview, type CheckEvidence as GuidedCheckEvidence, addIdeaPrompt as guidedAddIdeaPrompt, defaultLocalBuilder, describeRole, showCodePrompt as guidedShowCodePrompt, builderStepPrompt as guidedBuilderStepPrompt, coachPrompt as guidedCoachPrompt, isGuidedLabel, planPrompt as guidedPlanPrompt, readGuidedPlan, readGuidedReview, reviewPrompt as guidedReviewPrompt } from './guided-build-engine';
 import { Pill } from './Pill';
 import {
   Archive,
@@ -500,7 +501,9 @@ export function WorkspaceView({
   const coachSendOptions: WorkspaceSendOptions = coachTarget?.execution === 'api'
     ? { agent: selectedAgent, execution: 'api', apiConnection: { ...coachTarget.api!, ...(guidedBuild?.coachModel ? { model: guidedBuild.coachModel } : {}) } }
     : { agent: coachAgent, execution: 'cli', route: coachRoute, ...(coachTarget?.model || guidedBuild?.coachModel ? { model: coachTarget?.model ?? guidedBuild?.coachModel } : {}) };
-  const builderTarget = guidedBuild?.builderTarget;
+  // The saved Builder, else the saved Model team's, else the person's own gateway or local model. A plan made before any
+  // of that existed has no Builder chosen, and used to fall back on the agent in use with a model it cannot run.
+  const builderTarget = guidedBuild?.builderTarget ?? (guidedBuild?.enabled ? startingTargets(settings).builder ?? undefined : undefined);
   const builderAgent = builderTarget?.execution === 'cli' ? builderTarget.agent ?? selectedAgent : guidedBuild?.builderAgent ?? selectedAgent;
   const builderModel = builderTarget?.execution === 'cli' ? builderTarget.model ?? guidedBuild?.builderModel ?? selectedModel : builderTarget?.api?.model ?? guidedBuild?.builderModel ?? selectedModel;
   // Guided Build keeps the composer conversational with Coach. Builder runs only from the explicit
@@ -510,6 +513,15 @@ export function WorkspaceView({
   const guidedStep = guidedBuild?.steps[guidedBuild.currentStep];
   const guidedAgentNames = Object.fromEntries(agentCapabilities.map((agent) => [agent.id, agent.displayName]));
   const guidedCoachRole = describeRole(withSettingsModel(coachTarget ?? { execution: 'cli', agent: coachAgent, ...(guidedBuild?.coachModel ? { model: guidedBuild.coachModel } : {}) }, settings), guidedAgentNames);
+  // Every model one step could be built with, by name, for the With menu.
+  const liveGatewayModels = useDirectApiModels(settings);
+  const guidedStepChoices = stepModelChoices({
+    settings,
+    agents: agentCapabilities,
+    liveModels: liveGatewayModels,
+    coach: coachTarget ?? { execution: 'cli', agent: coachAgent, ...(guidedBuild?.coachModel ? { model: guidedBuild.coachModel } : {}) },
+    agentNames: guidedAgentNames,
+  });
   const guidedBuilderRole = describeRole(withSettingsModel(builderTarget ?? { execution: 'cli', agent: builderAgent, ...(builderModel ? { model: builderModel } : {}) }, settings), guidedAgentNames);
   /** The Builder's last reply, when it stopped and said it was stuck: the card then offers a way forward. */
   const guidedBuilderStuck = (() => {
@@ -613,6 +625,13 @@ export function WorkspaceView({
     if (activeConversation) onSend(prompt, options);
     else onCreateConversation(prompt, options);
   }
+  // A plan with no Builder saved is shown (and run) with the default one; this saves it so the pickers and every later run agree.
+  const savedBuilderFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeConversation || !guidedBuild?.enabled || guidedBuild.builderTarget || !builderTarget || savedBuilderFor.current === activeConversation.id) return;
+    savedBuilderFor.current = activeConversation.id;
+    setGuidedBuild({ ...guidedBuild, builderTarget });
+  });
   // In "Do it for me", the check runs by itself once the Builder finishes a step without asking for help. Once per reply.
   const autoCheckedTurn = useRef<string | null>(null);
   useEffect(() => {
@@ -2026,10 +2045,10 @@ export function WorkspaceView({
           onReview={startGuidedReview}
           onBuild={() => buildGuidedStepWith(builderTarget ?? { execution: 'cli', agent: builderAgent, ...(builderModel ? { model: builderModel } : {}) })}
           handsOn={guidedBuild.handsOn}
-          withOptions={targetOptions('implementer', { capabilities: agentCapabilities, credentialIds: architect.credentialIds, current: [coachTarget ?? null, builderTarget ?? null] })}
+          withOptions={guidedStepChoices.map(({ value, label }) => ({ value, label }))}
           onBuildWith={(value) => {
-            const target = targetFromValue(value, null);
-            if (target) buildGuidedStepWith(target, true);
+            const choice = guidedStepChoices.find((item) => item.value === value);
+            if (choice) buildGuidedStepWith(choice.target, true);
           }}
           onNext={() => {
             const nextIndex = Math.min(guidedBuild.currentStep + 1, Math.max(0, guidedBuild.steps.length - 1));
