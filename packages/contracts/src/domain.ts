@@ -396,6 +396,8 @@ export const appSettingsV1Schema = z
     savedLocalModels: z.record(z.string().min(1).max(40), z.array(z.string().min(1).max(300)).max(500)).default(() => Object.fromEntries(Object.entries(DEFAULT_SAVED_LOCAL_MODELS).map(([id, models]) => [id, [...models]]))),
     // The context window each local model reported, by model name, so a local model compacts at a share of what it can
     // actually hold rather than a flat size. Filled from the server's model list; empty until it says.
+    /** Optional per-model window that wins over what the server reports. */
+    modelContextOverride: z.record(z.string().min(1).max(300), z.number().int().positive().max(10_000_000)).default({}),
     localModelContext: z.record(z.string().min(1).max(300), z.number().int().positive().max(10_000_000)).default({}),
     directApi: directApiSettingsSchema,
     // Web search and URL fetching are separate from the model connection: any model can use an external source.

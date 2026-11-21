@@ -33,7 +33,7 @@ import type {
   PlaywrightViewportStatus,
   TeamPlanDraft,
 } from '@kai/contracts';
-import { compactThresholdFor, experienceProfile, CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, helperChoiceSchema, responseStyleSchema, effortFitsAgent, modelBelongsToOtherAgent, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily, architectSplitActive, type ThemeMode } from '@kai/contracts';
+import { compactThresholdFor, modelContextFor, experienceProfile, CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, helperChoiceSchema, responseStyleSchema, effortFitsAgent, modelBelongsToOtherAgent, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily, architectSplitActive, type ThemeMode } from '@kai/contracts';
 import { StatusBar } from './components/StatusBar';
 import { applyColorOverrides, loadColorOverrides } from './custom-colors';
 import { applyAppearance, clampScale, loadAppearance, saveAppearance, type Appearance } from './appearance';
@@ -1698,7 +1698,7 @@ export function App(): ReactNode {
     // A conversation that has grown long is summarised first, so every later request stays small. A failure here
     // never blocks the message: the run simply goes ahead with the full history.
     const runModel = options.model || directApiCapability?.model || '';
-    const compactAt = compactThresholdFor(bootstrap.settings.usageBudget, apiRun ? directApiCapability?.provider : null, bootstrap.settings.localModelContext?.[runModel]);
+    const compactAt = compactThresholdFor(bootstrap.settings.usageBudget, apiRun ? directApiCapability?.provider : null, modelContextFor(bootstrap.settings, runModel));
     if (compactAt > 0 && estimateConversationTokens(conversation) >= compactAt) {
       setAgentNotice('This conversation has grown long, so KAI is summarising the older turns first.');
       const compacted = await window.kaiDesktop.compactConversation(conversation.id).then(unwrap).catch(() => null);

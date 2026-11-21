@@ -281,13 +281,13 @@ export const DIRECT_PROVIDER_PRESETS: Readonly<Record<ProviderId, DirectProvider
   },
   'openai-compatible': {
     id: 'openai-compatible',
-    displayName: 'Custom OpenAI-compatible API',
+    displayName: 'Gateway',
     protocol: 'chat-completions',
     defaultBaseUrl: providerUrl('api.example.com/v1'),
     defaultModel: '',
     credentialId: 'provider.custom',
     supportsTools: true,
-    models: [],
+    models: ['gateway/auto', 'gateway/coding', 'gateway/research', 'gateway/general', 'gateway/vision'],
   },
 };
 

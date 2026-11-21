@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { compactThresholdFor, type ArchitectBrief } from '../packages/contracts/src';
+import { compactThresholdFor, modelContextFor, type ArchitectBrief } from '../packages/contracts/src';
 import { testGuardNote, weakenedTestFlags } from '../apps/desktop/src/main/test-guard';
 import { compactChatToolHistory, type ChatMessage } from '../apps/desktop/src/main/direct-provider-runtime';
 import { parseModelContexts } from '../apps/desktop/src/main/provider-models';
@@ -65,6 +65,12 @@ describe('a local model folds at a share of its own window', () => {
     ] })).toEqual({ 'lmstudio/glm-4.5-air': 65536, 'or/model': 200000, 'vllm/model': 32768 });
   });
 
+  it('ignores the momentary loaded size when the list comes from a gateway', () => {
+    const body = { data: [{ id: 'lmstudio/q', context_length: 262144, loaded_context_length: 8192 }, { id: 'gateway/coding' }] };
+    expect(parseModelContexts(body, false)).toEqual({ 'lmstudio/q': 262144 });
+    expect(parseModelContexts(body)).toEqual({ 'lmstudio/q': 8192 });
+  });
+
   it('uses half the window when it is known, the local size when not, and stays off when compaction is off', () => {
     const budget = { compactAtTokens: 24_000, compactAtTokensLocal: 20_000 };
     expect(compactThresholdFor(budget, 'lmstudio', 131_072)).toBe(65_536);
@@ -72,6 +78,16 @@ describe('a local model folds at a share of its own window', () => {
     expect(compactThresholdFor(budget, 'openai', 131_072)).toBe(24_000);
     expect(compactThresholdFor({ ...budget, compactAtTokens: 0 }, 'lmstudio', 131_072)).toBe(0);
     expect(compactThresholdFor(budget, 'lmstudio', 4_096)).toBe(4_000);
+  });
+
+  it('folds a gateway model by its own window, and lets a set override win over the reported one', () => {
+    const budget = { compactAtTokens: 50_000, compactAtTokensLocal: 50_000 };
+    const id = 'lmstudio/huihui-qwen3-coder-next-abliterated-mlx';
+    expect(compactThresholdFor(budget, 'openai-compatible', 131_072)).toBe(65_536);
+    expect(compactThresholdFor(budget, 'openai-compatible')).toBe(50_000);
+    expect(modelContextFor({ localModelContext: { [id]: 65_536 } }, id)).toBe(65_536);
+    expect(modelContextFor({ localModelContext: { [id]: 65_536 }, modelContextOverride: { [id]: 131_072 } }, id)).toBe(131_072);
+    expect(modelContextFor({}, id)).toBeUndefined();
   });
 });
 

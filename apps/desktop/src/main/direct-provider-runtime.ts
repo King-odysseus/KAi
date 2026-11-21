@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { trimAnthropicToolResults, trimChatToolResults, trimGeminiToolResults } from './context-trimming';
 import { withBrainTools, type BrainAccess } from './brain-tools';
 import { withHistoryTools, type HistoryAccess } from './history-tools';
-import { compactThresholdFor, directProviderPreset, helperLimitOf, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, openPlanReminder, pickLocalModel, planIsUnfinished, type ApiConnection, type ProviderId } from '@kai/contracts';
+import { compactThresholdFor, modelContextFor, directProviderPreset, helperLimitOf, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, openPlanReminder, pickLocalModel, planIsUnfinished, type ApiConnection, type ProviderId } from '@kai/contracts';
 import { localServerHint, resolveApiConnection } from './api-connection';
 import type {
   AppSettings,
@@ -86,7 +86,7 @@ const WRITING_HELPER_BRIEF = [
   'You are a helper agent started by another agent to do one part of a larger job, and you write code.',
   '- You work in your own copy of the project. Your changes are checked and merged back for you afterwards.',
   '- Edit only the files your task needs. Other helpers are working on other parts at the same time, so do not touch files that belong to someone else\'s part.',
-  '- You cannot run commands or ask questions. If something needs a command (installing a package, running the app), say so in your answer.',
+  '- You can run project commands in your own copy when the run gives you the `run_command` tool. Do not ask the person to run commands for you; report a blocker if the tool is unavailable or a command is refused.',
   '- Finish the task completely, then answer with a short summary: the files you created or changed, and anything the caller still has to do.',
 ].join('\n');
 
@@ -108,6 +108,8 @@ const SUBAGENT_WRITER_TOOLS: ReadonlySet<string> = new Set([
   'write_file',
   'move_file',
 ]);
+/** Full-access writing helpers run checks in their own copy; lower-access helpers keep commands behind parent review. */
+const SUBAGENT_FULL_WRITER_TOOLS: ReadonlySet<string> = new Set([...SUBAGENT_WRITER_TOOLS, 'run_command']);
 
 /** What the provider's prompt cache did for a run, for the usage line. Nothing when it served nothing from cache. */
 function cacheFields(provider: string, model: string, inputTokens: number | undefined, cachedInputTokens: number | undefined): { cachedInputTokens?: number; cacheSavedUsd?: number } {
@@ -956,7 +958,9 @@ export class DesktopDirectProviderRuntime {
     const nested = new DesktopDirectProviderRuntime(this.settings, this.credentials, this.externalTools, {
       ...this.options,
       allowSubagents: false,
-      allowedToolNames: write ? SUBAGENT_WRITER_TOOLS : SUBAGENT_READ_ONLY_TOOLS,
+      allowedToolNames: write
+        ? request.autonomy === 'full' ? SUBAGENT_FULL_WRITER_TOOLS : SUBAGENT_WRITER_TOOLS
+        : SUBAGENT_READ_ONLY_TOOLS,
     });
     // A helper reads and writes the same project memory its parent does.
     nested.setBrainAccess(this.brain);
@@ -966,7 +970,7 @@ export class DesktopDirectProviderRuntime {
       prompt: write ? `${WRITING_HELPER_BRIEF}\n\nYOUR TASK:\n${prompt}` : prompt,
       execution: 'api',
       route: request.route,
-      autonomy: write ? 'autoEdit' : 'plan',
+      autonomy: write ? request.autonomy === 'full' ? 'full' : 'autoEdit' : 'plan',
       ...(model ? { model } : {}),
     };
     const result = await nested.run(childRequest, projectRoot, undefined, undefined, undefined, contextText);
@@ -1550,7 +1554,7 @@ export class DesktopDirectProviderRuntime {
     // The size the person chose in Settings: a long run folds its older tool activity into a summary at this point,
     // so one run does not keep growing past it. Zero (or no setting) leaves the history alone.
     const loadedSettings = await this.settings.load().catch(() => undefined);
-    const compactAt = compactThresholdFor(loadedSettings?.usageBudget ?? { compactAtTokens: 0, compactAtTokensLocal: 0 }, capability.provider, loadedSettings?.localModelContext?.[capability.model]);
+    const compactAt = compactThresholdFor(loadedSettings?.usageBudget ?? { compactAtTokens: 0, compactAtTokensLocal: 0 }, capability.provider, modelContextFor(loadedSettings ?? {}, capability.model));
     let lastContextTokens = 0;
 
     try {
@@ -1578,6 +1582,9 @@ export class DesktopDirectProviderRuntime {
         let roundThinking = false;
         let truncated = false;
         let roundProviderError: string | undefined;
+        if (providerRound === 0 && isLocalProvider(capability.provider)) {
+          emit(lifecycleEvent(request, 'starting', `Waiting for the gateway to prepare model ${capability.model}. It will load the model when needed.`));
+        }
         const response = await this.requestChatCompletionsResponse(
           request,
           capability,
@@ -1869,7 +1876,7 @@ export class DesktopDirectProviderRuntime {
     // The size chosen for auto-compact (zero leaves the history alone), and where the part of this run that can be
     // folded into a summary begins.
     const loadedSettings = await this.settings.load().catch(() => undefined);
-    const compactAt = compactThresholdFor(loadedSettings?.usageBudget ?? { compactAtTokens: 0, compactAtTokensLocal: 0 }, capability.provider, loadedSettings?.localModelContext?.[capability.model]);
+    const compactAt = compactThresholdFor(loadedSettings?.usageBudget ?? { compactAtTokens: 0, compactAtTokensLocal: 0 }, capability.provider, modelContextFor(loadedSettings ?? {}, capability.model));
     let segmentStart = messages.length;
     let lastContextTokens = 0;
 

@@ -109,7 +109,7 @@ describe('LM Studio as a provider', () => {
     const catalog = await listProviderModels({ provider: 'lmstudio', baseUrl: 'http://127.0.0.1:9/v1', credentialId: 'provider.lmstudio' }, { get: async () => undefined }, 2_000);
 
     expect(catalog.source).toBe('preset');
-    expect(catalog.error).toMatch(/LM Studio \(local models\) is not reachable at http:\/\/127\.0\.0\.1:9\/v1\. Open it, start its local server/);
+    expect(catalog.error).toMatch(/LM Studio \(local models\) is not reachable at http:\/\/127\.0\.0\.1:9\/v1\. Start its server and make sure a model is installed/);
   });
 
   it('probes a server quickly, and reports a stopped one instead of hanging', async () => {

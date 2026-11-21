@@ -122,7 +122,7 @@ import type { ExecutionMode } from '@kai/contracts';
 import { BRAIN_TOOLS_GUIDANCE, type BrainAccess } from './brain-tools';
 import { windowedHistory } from './history-tools';
 import { brainMemoryReviewPrompt, type BrainMemoryReviewInput, type BrainMemoryReviewResult } from '@kai/contracts';
-import { compactThresholdFor, estimateConversationTokens, isLocalProvider } from '@kai/contracts';
+import { compactThresholdFor, modelContextFor, estimateConversationTokens, isLocalProvider } from '@kai/contracts';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
 import { gitCheckout, gitCloneTeamRepository, gitCommit, gitCreateBranch, gitCreatePullRequest, gitCreateRepository, gitBlameFile, gitChangedHunks, gitDiffAgainstHead, scanTodos, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitPullTeamBranch, gitStage, gitSync } from './git-tools';
@@ -488,7 +488,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   });
   handle(context, 'providers:list-models', async (request) => {
     const catalog = await listProviderModels(request, context.credentials);
-    if (!isLocalProvider(request.provider)) return catalog;
+    if (!isLocalProvider(request.provider) && request.provider !== 'openai-compatible') return catalog;
     const settings = await context.settings.load();
     const merged = mergeLocalModels(catalog, settings.savedLocalModels[request.provider] ?? []);
     if (catalog.source === 'live' && merged.remembered.length !== (settings.savedLocalModels[request.provider] ?? []).length) {
@@ -2012,7 +2012,7 @@ export async function runConversationAgent(
   // The connection this run actually uses: a role's own, or the one in Settings.
   const runProvider = request.execution === 'api' ? request.apiConnection?.provider ?? settings.directApi.provider : null;
   const runModel = request.apiConnection?.model || request.model || settings.directApi.model;
-  const compactAt = compactThresholdFor(settings.usageBudget, runProvider, settings.localModelContext[runModel]);
+  const compactAt = compactThresholdFor(settings.usageBudget, runProvider, modelContextFor(settings, runModel));
   const askedToCompact = compactBeforeNextRun.delete(conversation.id);
   // Said in the conversation when it happens: a fold nobody could see looked exactly like one that never ran.
   let compactionNotice: string | null = null;
@@ -2417,7 +2417,7 @@ ${BRAIN_TOOLS_GUIDANCE}`
   // A local model is slowed by every token it is sent, so it is given the recent turns that fit a budget and reads the
   // rest with read_history. The budget is a share of the size it compacts at, since that is what it can comfortably hold.
   const windowBudget = executionMode === 'api' && !request.splitRole && runProvider && isLocalProvider(runProvider)
-    ? Math.max(2_000, Math.floor(compactThresholdFor(settings.usageBudget, runProvider, settings.localModelContext[runModel]) * 0.4))
+    ? Math.max(2_000, Math.floor(compactThresholdFor(settings.usageBudget, runProvider, modelContextFor(settings, runModel)) * 0.4))
     : 0;
   const apiHistory = stepOnly
     ? [{ ...historyTurns[historyTurns.length - 1], text: effectivePrompt }]

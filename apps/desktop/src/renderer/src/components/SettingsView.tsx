@@ -224,9 +224,9 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
   };
   const directPreset = directProviderPreset(draft.directApi.provider);
   const learningPreset = directProviderPreset(draft.learningTutor.provider);
-  // Before a refresh, a local provider shows the models it has been seen with rather than the bundled guesses.
+  // Before a refresh, local providers and the custom gateway show their remembered model IDs.
   const modelsBeforeRefresh = (provider: AppSettings['directApi']['provider'], preset: readonly string[]): readonly string[] => {
-    const remembered = isLocalProvider(provider) ? draft.savedLocalModels[provider] : undefined;
+    const remembered = isLocalProvider(provider) || provider === 'openai-compatible' ? draft.savedLocalModels[provider] : undefined;
     return remembered && remembered.length > 0 ? remembered : preset;
   };
   const directModels = providerModels.direct?.provider === draft.directApi.provider
@@ -297,16 +297,20 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
     if (isLocalProvider(provider)) void refreshProviderModels(scope, { provider, baseUrl: preset.defaultBaseUrl, credentialId: preset.credentialId });
     setProviderModels((current) => ({ ...current, [scope]: null }));
     setModelFeedback((current) => ({ ...current, [scope]: null }));
-    setDraft((current) => ({
-      ...current,
-      [key]: {
-        ...current[key],
-        provider,
-        baseUrl: preset.defaultBaseUrl,
-        model: preset.defaultModel,
-        credentialId: preset.credentialId,
-      },
-    }));
+    setDraft((current) => {
+      // The gateway is one server for every feature: reuse the address and key already set up on the Direct API card.
+      const gateway = provider === 'openai-compatible' && current.directApi.provider === 'openai-compatible';
+      return {
+        ...current,
+        [key]: {
+          ...current[key],
+          provider,
+          baseUrl: gateway ? current.directApi.baseUrl : preset.defaultBaseUrl,
+          model: gateway && preset.models.includes('gateway/general') ? 'gateway/general' : preset.defaultModel,
+          credentialId: gateway ? current.directApi.credentialId : preset.credentialId,
+        },
+      };
+    });
   };
   const updateOverwatchProvider = (provider: AppSettings['cognitive1']['overwatch']['provider']): void => {
     const preset = overwatchProviderPreset(provider);

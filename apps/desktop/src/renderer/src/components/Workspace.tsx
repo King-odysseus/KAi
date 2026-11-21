@@ -110,7 +110,7 @@ import type {
   WorkbenchGoal,
   GuidedBuildStep,
 } from '@kai/contracts';
-import { compactThresholdFor, ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, HELPER_CHOICES, HELPER_CHOICE_DESCRIPTION, HELPER_CHOICE_LABEL, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, isLocalProvider, estimateConversationTokens, estimateResponseCostUsd, experienceProfile, MAX_SAVED_RECIPES, SAVED_RECIPE_INTENTS, architectSplitActive } from '@kai/contracts';
+import { compactThresholdFor, modelContextFor, ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, HELPER_CHOICES, HELPER_CHOICE_DESCRIPTION, HELPER_CHOICE_LABEL, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, isLocalProvider, estimateConversationTokens, estimateResponseCostUsd, experienceProfile, MAX_SAVED_RECIPES, SAVED_RECIPE_INTENTS, architectSplitActive } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
 import { HunkReview, canReviewHunks } from './HunkReview';
 import { ToolCallCard, toolCallStatus } from './ToolCallCard';
@@ -680,7 +680,10 @@ export function WorkspaceView({
   const attachmentOnlyPrompt = hasFileAttachment ? FILE_ONLY_PROMPT : IMAGE_ONLY_PROMPT;
   const canSendPrompt = Boolean(prompt.trim()) || hasAttachment;
   const estimateModel = selectedModel || directApiCapability?.model || '';
-  const localModels = useLocalModels(apiRun ? directApiCapability : null);
+  const rememberedModels = directApiCapability
+    ? settings.savedLocalModels[directApiCapability.provider] ?? EMPTY_PROVIDER_MODELS
+    : EMPTY_PROVIDER_MODELS;
+  const providerModels = useProviderModels(apiRun ? directApiCapability : null, rememberedModels);
   const promptContextCharacters = allContextChips.reduce((total, chip) => total + (
     chip.type === 'selection' || chip.type === 'terminal' ? chip.content?.length ?? 0
       : chip.type === 'gitDiff' ? chip.stat.length
@@ -1861,7 +1864,7 @@ export function WorkspaceView({
     }
   }
   // The size the person chose for compacting; with auto-compact off the old warning size still marks "getting long".
-  const compactLimit = compactThresholdFor(settings.usageBudget, apiRun ? directApiCapability?.provider : null, settings.localModelContext?.[selectedModel || directApiCapability?.model || '']) || COMPACTION_WARNING_TOKENS;
+  const compactLimit = compactThresholdFor(settings.usageBudget, apiRun ? directApiCapability?.provider : null, modelContextFor(settings, selectedModel || directApiCapability?.model || '')) || COMPACTION_WARNING_TOKENS;
   // What the model itself said its last request held, when this conversation has one: that counts the project
   // instructions and tool output the chat text does not, and it falls when older activity is folded into a summary.
   // A summary made after that report makes it stale, so the chat-text estimate takes over until the next request.
@@ -2635,7 +2638,7 @@ export function WorkspaceView({
                 />
               )}
               {activeRecipe && activeRecipe.id.startsWith('saved_') && <IconButton aria-label="Remove saved recipe" title="Remove this saved recipe" disabled={busy} onClick={() => void removeSavedRecipe(activeRecipe.id)} icon={<Trash2 size={14} />} />}
-              {!guidedBuild?.enabled && <OptionMenu ariaLabel="Model" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel, localModels)} title="Model for this conversation" value={selectedModel} />}
+              {!guidedBuild?.enabled && <OptionMenu ariaLabel="Model" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel, providerModels)} title="Model for this conversation" value={selectedModel} />}
               <IconButton data-tour="composer-advanced" aria-label="More run options" title="More run options" aria-expanded={advancedComposerOpen} active={advancedComposerOpen} disabled={busy} onClick={() => setAdvancedComposerOpen((open) => !open)} icon={<Settings2 size={14} />} />
             </>}
             actions={<>
@@ -3296,6 +3299,11 @@ const CUSTOM_MODEL = '__custom__';
 
 /** Plain names for models whose identifiers say little: the size of the model, which is what a person is choosing. */
 const MODEL_LABELS: Record<string, string> = {
+  'gateway/auto': 'Auto routing',
+  'gateway/coding': 'Coding',
+  'gateway/research': 'Research',
+  'gateway/general': 'General chat',
+  'gateway/vision': 'Vision',
   opus: 'Opus (strongest)',
   sonnet: 'Sonnet (balanced)',
   haiku: 'Haiku (fastest)',
@@ -3317,6 +3325,11 @@ const MODEL_DESCRIPTIONS: Record<string, string> = {
 
 /** The picker groups by who serves the model, so a list that mixes providers reads as a menu, not a jumble. */
 function modelGroup(name: string): string {
+  if (name.startsWith('gateway/')) return 'Gateway routes';
+  if (name.startsWith('lmstudio/')) return 'LM Studio';
+  if (name.startsWith('ollama/')) return 'Ollama';
+  if (name.startsWith('llamacpp/')) return 'llama.cpp';
+  if (name.startsWith('vllm/')) return 'vLLM';
   if (name.startsWith('claude')) return 'Anthropic';
   if (name.startsWith('gpt')) return 'OpenAI';
   if (name.startsWith('deepseek')) return 'DeepSeek';
@@ -3394,27 +3407,34 @@ function validateModelName(value: string): string | null {
 }
 
 /**
- * The models a local server (LM Studio, Ollama, ...) has loaded or this app has seen before. The shipped preset for
- * those providers is empty, so without this the composer's model menu offered only the default and "Other model...".
- * A failure leaves the list empty; the menu still works.
+ * Fetch live models for the selected Direct API provider, including custom OpenAI-compatible gateways. This keeps
+ * the composer's model menu in sync with the provider's /models response instead of showing only preset models.
  */
-function useLocalModels(capability: DirectApiCapability | null): readonly string[] {
+const EMPTY_PROVIDER_MODELS: readonly string[] = [];
+
+function useProviderModels(capability: DirectApiCapability | null, remembered: readonly string[] = EMPTY_PROVIDER_MODELS): readonly string[] {
   const [models, setModels] = useState<readonly string[]>([]);
   const provider = capability?.provider;
   const baseUrl = capability?.baseUrl;
   const credentialId = capability?.credentialId;
+  const credentialStored = capability?.credentialStored ?? false;
   useEffect(() => {
-    if (!provider || !baseUrl || !credentialId || !isLocalProvider(provider)) { setModels([]); return; }
+    if (!provider || !baseUrl || !credentialId || (!isLocalProvider(provider) && provider !== 'openai-compatible')) { setModels([]); return; }
     let alive = true;
+    const known = [...new Set([...directProviderPreset(provider).models, ...remembered])];
+    setModels(known);
+    // Gateway model refreshes use a saved credential. Until the person saves one, show cached IDs and routes without
+    // sending an unauthenticated request or making a stored credential appear to be an entry field.
+    if (provider === 'openai-compatible' && !credentialStored) return () => { alive = false; };
     const load = (): void => {
       void window.kaiDesktop.listProviderModels({ provider, baseUrl, credentialId }).then(unwrap)
-        .then((catalog) => { if (alive) setModels(catalog.models); })
+        .then((catalog) => { if (alive) setModels([...new Set([...known, ...catalog.models])]); })
         .catch(() => undefined);
     };
     load();
     window.addEventListener('focus', load);
     return () => { alive = false; window.removeEventListener('focus', load); };
-  }, [provider, baseUrl, credentialId]);
+  }, [provider, baseUrl, credentialId, credentialStored, remembered]);
   return models;
 }
 

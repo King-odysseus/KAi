@@ -46,7 +46,7 @@ export async function listProviderModels(
     const body = await response.json() as unknown;
     const models = parseModelIds(body);
     if (models.length === 0) return fallback('The provider returned an empty model list.');
-    const contextLengths = parseModelContexts(body);
+    const contextLengths = parseModelContexts(body, request.provider !== 'openai-compatible');
     return providerModelCatalogSchema.parse({
       provider: request.provider,
       models,
@@ -57,7 +57,7 @@ export async function listProviderModels(
     });
   } catch (error) {
     if (isLocalProvider(request.provider)) {
-      return fallback(`${preset.displayName} is not reachable at ${request.baseUrl}. Open it, start its local server and load a model, then refresh. (${messageOf(error)})`);
+      return fallback(`${preset.displayName} is not reachable at ${request.baseUrl}. Start its server and make sure a model is installed, then refresh. (${messageOf(error)})`);
     }
     return fallback(`The provider model list could not be refreshed: ${messageOf(error)}`);
   }
@@ -74,7 +74,8 @@ export function mergeLocalModels(
 ): { catalog: ProviderModelCatalog; remembered: string[] } {
   const union = (...lists: readonly (readonly string[])[]): string[] =>
     [...new Set(lists.flat())].sort((left, right) => left.localeCompare(right));
-  const seen = catalog.source === 'live' ? union(remembered, catalog.models) : union(remembered);
+  const fixed = catalog.provider === 'openai-compatible' ? directProviderPreset(catalog.provider).models : [];
+  const seen = catalog.source === 'live' ? union(remembered, catalog.models, fixed) : union(remembered, fixed);
   // An unreachable server answers with the bundled preset; keep it only as a fallback when nothing is remembered.
   const models = catalog.source === 'live' || seen.length === 0 ? union(seen, catalog.models) : seen;
   return { catalog: { ...catalog, models }, remembered: seen };
@@ -85,7 +86,7 @@ export function mergeLocalModels(
  * loaded_context_length and max_context_length, OpenRouter context_length, vLLM max_model_len. What a model is loaded
  * with wins over what it could hold, since a request beyond the loaded size fails.
  */
-export function parseModelContexts(value: unknown): Record<string, number> {
+export function parseModelContexts(value: unknown, preferLoaded = true): Record<string, number> {
   const records = Array.isArray(value)
     ? value
     : value && typeof value === 'object' && Array.isArray((value as Record<string, unknown>).data)
@@ -100,9 +101,11 @@ export function parseModelContexts(value: unknown): Record<string, number> {
     const id = typeof record.id === 'string' ? record.id : typeof record.name === 'string' ? record.name : typeof record.model === 'string' ? record.model : '';
     if (!id.trim()) continue;
     const top = record.top_provider && typeof record.top_provider === 'object' ? (record.top_provider as Record<string, unknown>).context_length : undefined;
-    const size = [record.loaded_context_length, record.context_length, record.max_context_length, record.context_window, record.max_model_len, top]
+    // A gateway loads models on demand, so what is loaded right now says nothing about what a request can use.
+    const first = preferLoaded ? [record.loaded_context_length, record.context_length] : [record.context_length];
+    const size = [...first, record.max_context_length, record.context_window, record.max_model_len, top]
       .find((candidate) => typeof candidate === 'number' && Number.isInteger(candidate) && candidate > 0) as number | undefined;
-    if (size) result[id.trim().replace(/^models\//, '')] = size;
+    if (size) result[id] = size;
   }
   return result;
 }
@@ -116,7 +119,7 @@ export function parseModelIds(value: unknown): string[] {
         ? (value as Record<string, unknown>).models as unknown[]
         : [];
   const models = records.flatMap((entry) => {
-    if (typeof entry === 'string') return [entry.trim()];
+    if (typeof entry === 'string') return [entry];
     if (!entry || typeof entry !== 'object') return [];
     const record = entry as Record<string, unknown>;
     const candidate = typeof record.id === 'string'
@@ -126,8 +129,8 @@ export function parseModelIds(value: unknown): string[] {
         : typeof record.model === 'string'
           ? record.model
           : '';
-    return [candidate.trim().replace(/^models\//, '')];
-  }).filter(Boolean);
+    return [candidate];
+  }).filter((model) => model.trim().length > 0);
   return [...new Set(models)].sort((left, right) => left.localeCompare(right)).slice(0, 2_000);
 }
 

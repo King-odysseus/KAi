@@ -34,6 +34,9 @@ export function deriveAgentActivity(
   if (running && paused) return { kind: 'paused', label: 'Paused', detail: 'The run is suspended and can continue from the same point.', lastAction: action, lastAt: last?.timestamp ?? null, learningNuggets };
   if (last?.type === 'error') return { kind: 'blocked', label: running ? 'Blocked' : 'Failed', detail: last.message, lastAction: action, lastAt: last.timestamp, learningNuggets };
   if (last?.type === 'permission.escalation') return { kind: 'waiting', label: 'Waiting for permission', detail: last.reason || last.permission, lastAction: action, lastAt: last.timestamp, learningNuggets };
+  if (running && last?.type === 'agent.lifecycle' && last.status === 'starting' && last.detail?.startsWith('Waiting for the gateway to prepare model ')) {
+    return { kind: 'waiting', label: 'Preparing model', detail: last.detail, lastAction: action, lastAt: last.timestamp, learningNuggets };
+  }
 
   const recentTool = meaningful.find((event): event is Extract<PersistedEvent, { type: 'tool.call' }> => event.type === 'tool.call');
   if (running && recentTool) {

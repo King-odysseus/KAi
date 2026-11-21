@@ -95,7 +95,9 @@ export function compactThresholdFor(
 ): number {
   if (budget.compactAtTokens <= 0) return 0;
   const local = Boolean(provider && isLocalProvider(provider as Parameters<typeof isLocalProvider>[0]));
-  if (local && contextWindow && contextWindow > 0) return Math.max(4_000, Math.floor(contextWindow * LOCAL_WINDOW_SHARE));
+  // A gateway fronts local models too, so it folds by its model's window rather than the hosted-model setting.
+  const windowAware = local || provider === 'openai-compatible';
+  if (windowAware && contextWindow && contextWindow > 0) return Math.max(4_000, Math.floor(contextWindow * LOCAL_WINDOW_SHARE));
   if (local && budget.compactAtTokensLocal > 0) return budget.compactAtTokensLocal;
   return budget.compactAtTokens;
 }
@@ -105,3 +107,15 @@ export function compactThresholdFor(
  * tool list and the reply, which go with every request.
  */
 export const LOCAL_WINDOW_SHARE = 0.5;
+
+/**
+ * The window to plan a run around: the person's own override for the model if they set one, otherwise what the server
+ * last reported for it in its model list.
+ */
+export function modelContextFor(
+  settings: { modelContextOverride?: Record<string, number>; localModelContext?: Record<string, number> },
+  model: string | null | undefined,
+): number | undefined {
+  if (!model) return undefined;
+  return settings.modelContextOverride?.[model] ?? settings.localModelContext?.[model];
+}
