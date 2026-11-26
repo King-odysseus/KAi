@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { z } from 'zod';
 import { conventionRuleSchema } from '@kai/contracts';
 import type { ConventionItem, ConventionsState } from '@kai/contracts';
@@ -18,7 +19,16 @@ const stateSchema = z
     // Keys the developer has already been shown, so a new one can be flagged.
     seen: z.array(z.string()).max(600),
     // What was filed in C1, by key, with a fingerprint of its text so a changed convention is filed again.
-    filed: z.record(z.string(), z.string()),
+    // Old installs hold only a fingerprint. New entries also keep C1's title/date so a correction can retire them.
+    filed: z.record(z.string(), z.union([
+      z.string(),
+      z.object({
+        fingerprint: z.string(),
+        title: z.string(),
+        date: z.string(),
+        supersedeOutcome: z.enum(['superseded', 'not-found', 'ambiguous', 'already-superseded']).optional(),
+      }).strict(),
+    ])),
   })
   .strict();
 type Saved = z.infer<typeof stateSchema>;
@@ -43,7 +53,7 @@ const HABIT_SHARE = 0.4;
 /** One line per convention an agent should follow, rules first, then style, then the stack. Pure, so it can be tested. */
 export function buildBriefing(items: readonly ConventionItem[]): string {
   const served = items.filter((item) => !item.muted);
-  const order: Record<ConventionItem['source'], number> = { rule: 0, style: 1, habit: 2 };
+  const order: Record<ConventionItem['source'], number> = { rule: 0, habit: 1, style: 2 };
   const lines = [...served]
     .sort((a, b) => order[a.source] - order[b.source])
     .map((item) => `- ${item.text}`)
@@ -54,6 +64,7 @@ export function buildBriefing(items: readonly ConventionItem[]): string {
 }
 
 const fingerprint = (text: string): string => createHash('sha1').update(text).digest('hex').slice(0, 12);
+const filedFingerprint = (value: string | { fingerprint: string }): string => typeof value === 'string' ? value : value.fingerprint;
 
 /**
  * Learns how the developer builds, keeps learning, and hands every agent run the short list. It reads project folders
@@ -72,6 +83,7 @@ export class ConventionService {
   private tail: Promise<void> = Promise.resolve();
   private cachedBriefing = '';
   private styleItems: ConventionItem[] = [];
+  private referenceStyles = new Map<string, ConventionItem[]>();
   private habitItems: ConventionItem[] = [];
   private firstTimer: NodeJS.Timeout | null = null;
 
@@ -154,12 +166,14 @@ export class ConventionService {
       }));
 
     const styles: ConventionItem[] = [];
+    const referenceStyles = new Map<string, ConventionItem[]>();
     for (const reference of saved.references) {
       const project = projects.find((candidate) => candidate.path === reference);
       if (!project) continue;
       const found = styleConventionsOf(await readStyleFacts(project.path).catch(() => null) ?? { buttons: { radius: {}, border: {}, shadow: {} }, cards: { radius: {}, border: {}, shadow: {} }, samples: { buttons: 0, cards: 0 } });
+      const projectStyles: ConventionItem[] = [];
       for (const item of found) {
-        styles.push({
+        const styleItem: ConventionItem = {
           key: `style:${project.name}:${item.key}`,
           source: 'style',
           text: `${item.text} (as in ${project.name})`,
@@ -167,9 +181,13 @@ export class ConventionService {
           projects: [project.name],
           muted: false,
           isNew: false,
-        });
+        };
+        styles.push(styleItem);
+        projectStyles.push(styleItem);
       }
+      this.referenceStyles.set(path.resolve(project.path), projectStyles);
     }
+    for (const known of [...this.referenceStyles.keys()]) if (!saved.references.some((reference) => path.resolve(reference) === known)) this.referenceStyles.delete(known);
     this.projects = projects.map((project) => ({ name: project.name, path: project.path }));
     this.total = snapshots.length;
     this.scannedAt = at;
@@ -226,23 +244,53 @@ export class ConventionService {
   /** Files each served convention into C1 once, and again whenever its wording changes. A failure is not fatal. */
   private async fileInC1(): Promise<void> {
     const saved = await this.load();
-    const pending = this.items.filter((item) => !item.muted && saved.filed[item.key] !== fingerprint(item.text));
+    const active = new Map(this.items.map((item) => [item.key, item]));
+    const pending: Array<{ key: string; item: ConventionItem | null; old: string | { fingerprint: string; title: string; date: string; supersedeOutcome?: string } }> = [];
+    for (const [key, old] of Object.entries(saved.filed)) {
+      const item = active.get(key);
+      const current = item && !item.muted ? fingerprint(item.text) : null;
+      if (current === null && typeof old !== 'string' && old.title.startsWith('Convention retired:')) continue;
+      if (current === null || filedFingerprint(old) !== current) pending.push({ key, item: item ?? null, old });
+    }
+    for (const item of this.items) {
+      const old = saved.filed[item.key];
+      if (item.muted || old !== undefined && filedFingerprint(old) === fingerprint(item.text)) continue;
+      if (!pending.some((entry) => entry.key === item.key)) pending.push({ key: item.key, item, old: old ?? '' });
+    }
     if (pending.length === 0) return;
-    const filed: Record<string, string> = {};
-    for (const item of pending) {
+    const filed: Record<string, string | { fingerprint: string; title: string; date: string; supersedeOutcome?: 'superseded' | 'not-found' | 'ambiguous' | 'already-superseded' }> = {};
+    for (const { key, item, old } of pending) {
       try {
-        const answer = (await this.ports.learn({
-          title: `Convention: ${item.text.slice(0, 80)}`,
+        const retiring = !item || item.muted;
+        const title = retiring
+          ? `Convention retired: ${typeof old === 'string' ? key : old.title.replace(/^Convention: /, '')}`.slice(0, 120)
+          : `Convention: ${item.text.slice(0, 80)}`;
+        const payload: Record<string, unknown> = {
+          title,
           type: 'patterns',
           agent: 'kai',
           project: 'global',
-          tags: ['convention', item.source, 'auto-detected'].join(','),
-          note: `${item.text}. ${item.evidence}.`,
-          why: 'It is how this developer already builds, so new work should match it.',
-          how: 'Follow it in any code you write unless the task says otherwise.',
-        })) as { ok?: boolean; rejected?: boolean } | null;
+          tags: ['convention', item?.source ?? (key.startsWith('rule:') ? 'rule' : key.startsWith('habit:') ? 'habit' : 'style'), 'auto-detected'].join(','),
+          note: retiring
+            ? `The project evidence no longer supports this automatically detected convention. Do not treat it as current.${item ? ` Previous evidence: ${item.evidence}.` : ''}`
+            : `${item.text}. ${item.evidence}.`,
+          why: retiring ? 'The earlier automatically detected note is no longer supported.' : 'It is how this developer already builds, so new work should match it.',
+          how: retiring ? 'Do not apply the retired convention.' : 'Follow it in any code you write unless the task says otherwise.',
+          ...(typeof old !== 'string' && old.title && old.date ? { supersede_date: old.date, supersede_title: old.title } : {}),
+        };
+        const answer = (await this.ports.learn(payload)) as { ok?: boolean; rejected?: boolean; supersedeOutcome?: 'superseded' | 'not-found' | 'ambiguous' | 'already-superseded'; entry?: { date?: string; title?: string } } | null;
         // A rejected note is not retried every scan; it is remembered as filed so C1's own judgement stands.
-        if (answer?.rejected || answer?.ok !== false) filed[item.key] = fingerprint(item.text);
+        if (answer?.rejected || answer?.ok !== false) {
+          const resultFingerprint = item && !item.muted ? fingerprint(item.text) : fingerprint(title);
+          const resultTitle = answer?.entry?.title ?? title;
+          const resultDate = answer?.entry?.date ?? new Date(this.now()).toISOString().slice(0, 10);
+          filed[key] = {
+            fingerprint: resultFingerprint,
+            title: resultTitle,
+            date: resultDate,
+            ...(answer?.supersedeOutcome ? { supersedeOutcome: answer.supersedeOutcome } : {}),
+          };
+        }
       } catch { /* C1 may be stopped; the note is tried again on the next scan */ }
     }
     if (Object.keys(filed).length === 0) return;
@@ -250,9 +298,16 @@ export class ConventionService {
   }
 
   /** What every agent run is told. Instant: it never waits for a scan, and asks for a fresh one when this is old. */
-  briefing(): string {
+  briefing(projectPath?: string): string {
     if (!this.scannedAt || this.now() - new Date(this.scannedAt).getTime() > STALE_MS) void this.refresh().catch(() => undefined);
-    return this.cachedBriefing;
+    if (!projectPath) return this.cachedBriefing;
+    const own = this.referenceStyles.get(path.resolve(projectPath));
+    if (own?.length) return buildBriefing([...this.items.filter((item) => item.source !== 'style'), ...own]);
+    const references = [...this.referenceStyles.values()];
+    if (references.length === 0) return buildBriefing(this.items.filter((item) => item.source !== 'style'));
+    const first = references[0] ?? [];
+    const agreed = first.filter((item) => references.every((items) => items.some((candidate) => candidate.key.split(':').at(-1) === item.key.split(':').at(-1) && candidate.text.replace(/ \(as in .*\)$/, '') === item.text.replace(/ \(as in .*\)$/, ''))));
+    return buildBriefing([...this.items.filter((item) => item.source !== 'style'), ...agreed.map((item) => ({ ...item, text: item.text.replace(/ \(as in .*\)$/, '') }))]);
   }
 
   async state(refresh = false): Promise<ConventionsState> {

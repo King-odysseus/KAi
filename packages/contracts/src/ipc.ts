@@ -378,7 +378,7 @@ import {
   type TerminalSession,
 } from './terminal';
 import { planSchema, type Plan } from './plan';
-import { conventionsGetInputSchema, conventionsMuteInputSchema, conventionsReferenceInputSchema, conventionsRuleAddInputSchema, conventionsRuleRemoveInputSchema, type ConventionsState } from './conventions';
+import { conventionsGetInputSchema, conventionsMuteInputSchema, conventionsReferenceInputSchema, conventionsRuleAddInputSchema, conventionsRuleRemoveInputSchema, designProfileApproveInputSchema, designProfilesGetInputSchema, type ConventionsState, type DesignProfileSummary } from './conventions';
 import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewFollowUpInputSchema, crewAcceptPhaseInputSchema, crewPauseAfterInputSchema, crewRevertInputSchema, type CrewRevertPreview, type CrewTaskDiff, crewDecideInputSchema, crewExplainSimplyInputSchema, crewInterviewInputSchema, type CrewInterview, crewKeepGoingInputSchema, crewAwayInputSchema, type CrewAwayPolicy, crewMessageInputSchema, crewStartInputSchema, crewUpdateConfigInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
 import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitBlameInputSchema, type GitBlameResult, type GitChangesResult, todoScanInputSchema, type TodoScanResult, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, gitTeamBranchInputSchema, gitTeamCloneInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
 import { importAddCardsInputSchema, importScanInputSchema, type ImportReport } from './import';
@@ -595,6 +595,8 @@ export const ipcChannels = [
   'conventions:rule-remove',
   'conventions:mute',
   'conventions:seen',
+  'design-profiles:get',
+  'design-profiles:approve',
   'crew:design',
   'team:plan',
   'team:plan-from-parts',
@@ -1038,6 +1040,8 @@ export const ipcInputSchemas = {
   'conventions:rule-remove': conventionsRuleRemoveInputSchema,
   'conventions:mute': conventionsMuteInputSchema,
   'conventions:seen': emptyInputSchema,
+  'design-profiles:get': designProfilesGetInputSchema,
+  'design-profiles:approve': designProfileApproveInputSchema,
   'crew:design': crewDesignInputSchema,
   'team:plan': teamPlanInputSchema,
   'team:plan-from-parts': teamPlanFromPartsInputSchema,
@@ -1897,6 +1901,8 @@ export interface KaiDesktopBridge {
   muteConvention(key: string, muted: boolean): Promise<IpcResponse<ConventionsState>>;
   markConventionsSeen(): Promise<IpcResponse<ConventionsState>>;
   onConventionsChanged(listener: (state: ConventionsState) => void): () => void;
+  designProfilesState(refresh?: boolean): Promise<IpcResponse<DesignProfileSummary[]>>;
+  approveDesignProfile(projectPath: string): Promise<IpcResponse<DesignProfileSummary>>;
   crewDesign(launch?: boolean): Promise<IpcResponse<CrewDesign>>;
   saveWorkflowTemplate(request: WorkflowTemplateSaveInput): Promise<IpcResponse<WorkflowTemplate>>;
   deleteWorkflowTemplate(id: string): Promise<IpcResponse<{ deleted: boolean }>>;

@@ -165,6 +165,7 @@ import type { DesktopCrewRunner } from './crew-runner';
 import type { DesktopCrewInterview } from './crew-interview';
 import type { CrewSupport } from './crew-support';
 import type { ConventionService } from './conventions-service';
+import type { DesignProfileService } from './design-profile';
 import type { DesktopTeamPlanner } from './team-planner';
 import type { DesktopAutopilot } from './autopilot';
 import type { DesktopAutoSession } from './auto-session';
@@ -282,6 +283,7 @@ export interface IpcContext {
   crewInterview: DesktopCrewInterview;
   crewSupport: CrewSupport;
   conventions: ConventionService;
+  designProfiles: DesignProfileService;
   teamPlanner: DesktopTeamPlanner;
   autopilot: DesktopAutopilot;
   auto: DesktopAutoSession;
@@ -705,6 +707,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'conventions:rule-remove', async ({ id }) => context.conventions.removeRule(id));
   handle(context, 'conventions:mute', async ({ key, muted }) => context.conventions.setMuted(key, muted));
   handle(context, 'conventions:seen', async () => context.conventions.markSeen());
+  handle(context, 'design-profiles:get', async ({ refresh }) => context.designProfiles.state(refresh));
+  handle(context, 'design-profiles:approve', async ({ projectPath }) => context.designProfiles.approve(projectPath));
   handle(context, 'crew:design', async ({ launch }) => context.crewSupport.design(launch));
   handle(context, 'team:plan', async (input, request) => context.teamPlanner.plan(input, request.ownerWindowId));
   handle(context, 'team:plan-from-parts', async (input) => context.teamPlanner.planFromParts(input));
@@ -3139,13 +3143,14 @@ async function buildConversationContext(
   const history = await context.runScores.list()
     .then((runs) => buildHistoryNote({ runs, files: filesInPlay, projectId, now: Date.now() }))
     .catch(() => null);
+  const designProfile = await context.designProfiles.briefing(projectPath, prompt, filesInPlay);
   const projectContext = await buildProjectContext(projectPath, {
     selectedPaths: filesInPlay.slice(-12),
     touchedPaths: filesInPlay,
     memories: recall.memories,
     memoryNote: recall.note,
     authoritativeRules,
-    conventions: context.conventions.briefing(),
+    conventions: [context.conventions.briefing(projectPath), designProfile].filter(Boolean).join('\n\n'),
     omitStatic,
     includeRepoMap,
     ...(repoMapMaxCharacters ? { repoMapMaxCharacters } : {}),

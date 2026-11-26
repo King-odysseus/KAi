@@ -80,6 +80,7 @@ import { DesktopCrewInterview } from './crew-interview';
 import { CrewRunStore } from './crew-store';
 import { CrewSupport } from './crew-support';
 import { ConventionService } from './conventions-service';
+import { DesignProfileService } from './design-profile';
 import { DesktopTeamPlanner } from './team-planner';
 import { DesktopAutopilot } from './autopilot';
 import { DesktopAutoSession } from './auto-session';
@@ -830,6 +831,7 @@ async function startApplication(): Promise<void> {
   let crewRunner!: DesktopCrewRunner;
   let crewSupport!: CrewSupport;
   let conventionService!: ConventionService;
+  let designProfileService!: DesignProfileService;
   let teamPlanner!: DesktopTeamPlanner;
   let autopilot!: DesktopAutopilot;
   let auto!: DesktopAutoSession;
@@ -916,6 +918,9 @@ async function startApplication(): Promise<void> {
       return project ? readFile(path.join(project.path, '.kai', 'spec', 'brief.md'), 'utf8').catch(() => null) : null;
     },
   });
+  designProfileService = new DesignProfileService(path.join(paths.root, 'design-profile-picks.json'), specStore, {
+    projects: async () => (await projects.list()).map((project) => ({ id: project.id, name: project.name, path: project.path })),
+  });
   ipcContext = {
     appName: 'KAI',
     version: app.getVersion(),
@@ -970,6 +975,7 @@ async function startApplication(): Promise<void> {
     crewInterview,
     crewSupport,
     conventions: conventionService,
+    designProfiles: designProfileService,
     teamPlanner,
     autopilot,
     auto,
@@ -1059,6 +1065,8 @@ async function startApplication(): Promise<void> {
   });
   ipcContext.conventions = conventionService;
   conventionService.start();
+  ipcContext.designProfiles = designProfileService;
+  void designProfileService.state(true).catch((error) => ipcContext?.logger.warn('internal', 'Could not build project design profiles', messageOf(error)));
   // Saved crew defaults, and a look at Open Pencil for the Design tab.
   crewSupport = new CrewSupport(path.join(paths.root, 'crew-defaults.json'), fileSystem, {
     designStatus: () => crewDesignStatus(),
@@ -1186,7 +1194,11 @@ async function startApplication(): Promise<void> {
       if (existing && !existing.origin) await conversations.save({ ...existing, origin });
     },
     blockers: { load: (projectId) => crewBlockers.load(projectId), save: (projectId, item) => crewBlockers.save(projectId, item) },
-    conventions: async () => conventionService.briefing(),
+    conventions: async (projectId, goal) => {
+      const project = (await projects.list()).find((candidate) => candidate.id === projectId);
+      const profile = project ? await designProfileService.briefing(project.path, goal) : '';
+      return [conventionService.briefing(project?.path), profile].filter(Boolean).join('\n\n');
+    },
   });
   ipcContext.crew = crewRunner;
   teamPlanner = new DesktopTeamPlanner({
@@ -1350,7 +1362,7 @@ async function startApplication(): Promise<void> {
     contextChips?: import('@kai/contracts').ContextChip[],
   ): Promise<{ status: 'completed' | 'failed'; output: string; error?: string; costUsd?: number }> => {
     // The design agent draws the way this developer wants things to look: their buttons, their cards, their rules.
-    const conventions = conventionService.briefing();
+    const conventions = [conventionService.briefing(projectRoot), await designProfileService.briefing(projectRoot, prompt)].filter(Boolean).join('\n\n');
     const request: AgentRunRequest = {
       conversationId,
       prompt: conventions ? `${conventions}\n\n---\n\n${prompt}` : prompt,

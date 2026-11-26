@@ -30,7 +30,7 @@ async function withService(run: (setup: Setup) => Promise<void>): Promise<void> 
     const projects: Array<{ id: string; name: string; path: string }> = [];
     const sent: Array<Record<string, unknown>> = [];
     const changes: ConventionsState[] = [];
-    let learn: (payload: Record<string, unknown>) => unknown = () => ({ ok: true });
+    let learn: (payload: Record<string, unknown>) => unknown = (payload) => ({ ok: true, entry: { title: payload.title, date: '2026-11-20' } });
     const service = new ConventionService(path.join(dir, 'conventions.json'), new NodeFileSystem(), {
       projects: async () => projects,
       learn: async (payload) => { sent.push(payload); return learn(payload); },
@@ -57,11 +57,11 @@ const REACT = JSON.stringify({ dependencies: { react: '1', tailwindcss: '1' } })
 const NICE_CARDS = Array.from({ length: 6 }, () => '<div className="card rounded-xl shadow-md p-4">x</div>').join('\n');
 
 describe('conventions briefing', () => {
-  it('lists your rules first, then style, then the stack, and leaves out anything muted', () => {
+  it('lists your rules first, then the stack, then style, and leaves out anything muted', () => {
     const text = buildBriefing([item('habit', 'React for the interface'), item('rule', 'Never use hairline borders'), item('style', 'Cards use no border'), item('habit', 'Muted one', true)]);
     const lines = text.split('\n');
     expect(lines[0]).toContain('Follow these');
-    expect(lines.slice(1)).toEqual(['- Never use hairline borders', '- Cards use no border', '- React for the interface']);
+    expect(lines.slice(1)).toEqual(['- Never use hairline borders', '- React for the interface', '- Cards use no border']);
   });
 
   it('is empty when there is nothing to say, and short when there is a lot', () => {
@@ -95,11 +95,28 @@ describe('convention service', () => {
       await service.setReference(lofts, true);
       await service.refresh();
       const briefing = service.briefing();
-      expect(briefing).toContain('Cards use rounded corners (xl), no border, a soft shadow (as in zurilofts)');
+      expect(briefing).toContain('Cards use rounded corners (xl), a soft shadow (as in zurilofts)');
       // Without a reference the same project proves nothing, because a habit needs more than one project.
       await service.setReference(lofts, false);
       await service.refresh();
       expect(service.briefing()).not.toContain('zurilofts');
+    });
+  });
+
+  it('keeps reference styles scoped to their project and serves only agreement elsewhere', async () => {
+    await withService(async ({ service, add }) => {
+      const pillRules = Array.from({ length: 3 }, (_, index) => `.btn-${index} { border-radius: 9999px; }`).join('\n');
+      const squareRules = Array.from({ length: 3 }, (_, index) => `.btn-${index} { border-radius: 4px; }`).join('\n');
+      const pillProject = await add('pill', { 'src/buttons.css': pillRules });
+      const squareProject = await add('square', { 'src/buttons.css': squareRules });
+      const unrelated = await add('unrelated', { 'package.json': '{}' });
+      await service.setReference(pillProject, true);
+      await service.setReference(squareProject, true);
+      await service.refresh();
+      expect(service.briefing(pillProject)).toContain('Buttons use fully rounded corners (as in pill)');
+      expect(service.briefing(pillProject)).not.toContain('square');
+      expect(service.briefing(squareProject)).toContain('Buttons use rounded corners (4px) (as in square)');
+      expect(service.briefing(unrelated)).not.toContain('Buttons use');
     });
   });
 
@@ -162,6 +179,40 @@ describe('convention service', () => {
       await service.addRule('Use Lucide icons, not emoji');
       expect(service.briefing()).toContain('Lucide');
       expect((await service.state()).filedInC1).toBeGreaterThan(0);
+    });
+  });
+
+  it('supersedes the prior C1 note when a detected convention changes, recording ambiguous outcomes', async () => {
+    await withService(async ({ service, add, sent, setLearn, dir }) => {
+      const root = await add('cards', { 'src/Cards.tsx': NICE_CARDS });
+      await service.setReference(root, true);
+      await service.refresh();
+      const prior = sent.find((payload) => String(payload.title).startsWith('Convention: Cards'))!;
+      await write(path.join(root, 'src/Cards.tsx'), Array.from({ length: 6 }, () => '<div className="card rounded-sm shadow-md p-4">x</div>').join('\n'));
+      setLearn(() => ({ ok: true, entry: { title: 'Convention: updated cards', date: '2026-11-26' }, supersedeOutcome: 'ambiguous' }));
+      await service.refresh();
+      const update = sent.find((payload) => payload.supersede_title !== undefined);
+      expect(update).toMatchObject({ supersede_date: '2026-11-20', supersede_title: prior?.title });
+      const state = JSON.parse(await fs.readFile(path.join(dir, 'conventions.json'), 'utf8')) as { filed: Record<string, { supersedeOutcome?: string }> };
+      expect(Object.values(state.filed).some((entry) => entry.supersedeOutcome === 'ambiguous')).toBe(true);
+      const sentAfterAmbiguity = sent.length;
+      await service.refresh();
+      expect(sent).toHaveLength(sentAfterAmbiguity);
+    });
+  });
+
+  it('files a retirement note when a convention disappears', async () => {
+    await withService(async ({ service, sent }) => {
+      const created = await service.addRule('Use stable semantic button names');
+      await service.refresh();
+      await service.idle();
+      const original = sent.find((payload) => payload.title === 'Convention: Use stable semantic button names')!;
+      await service.removeRule(created.rules[0]!.id);
+      await service.refresh();
+      await service.idle();
+      const retirement = sent.find((payload) => String(payload.title).startsWith('Convention retired:'));
+      expect(retirement).toMatchObject({ supersede_date: '2026-11-20', supersede_title: original?.title });
+      expect(retirement?.how).toBe('Do not apply the retired convention.');
     });
   });
 

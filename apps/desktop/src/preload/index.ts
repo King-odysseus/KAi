@@ -284,6 +284,8 @@ const bridge: KaiDesktopBridge = {
     ipcRenderer.on('conventions:changed', handler);
     return () => ipcRenderer.removeListener('conventions:changed', handler);
   },
+  designProfilesState: (refresh = false) => ipcRenderer.invoke('design-profiles:get', { refresh }),
+  approveDesignProfile: (projectPath) => ipcRenderer.invoke('design-profiles:approve', { projectPath }),
   crewDesign: (launch = false) => ipcRenderer.invoke('crew:design', { launch }),
   onCrewChanged: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, run: import('@kai/contracts').CrewRun): void => listener(run);

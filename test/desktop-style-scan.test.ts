@@ -32,7 +32,10 @@ describe('style scan: stylesheets', () => {
   it('knows a button from a card by name, and a word that only contains the letters from neither', () => {
     expect(thingFor('.btn-primary')).toBe('buttons');
     expect(thingFor('button.save')).toBe('buttons');
-    expect(thingFor('.card-body')).toBe('cards');
+    expect(thingFor('.card-body')).toBeNull();
+    expect(thingFor('.card-title')).toBeNull();
+    expect(thingFor('.btn-icon')).toBeNull();
+    expect(thingFor('.button-group')).toBeNull();
     expect(thingFor('.discard-pile')).toBeNull();
     expect(thingFor('.cardigan')).toBeNull();
   });
@@ -49,7 +52,7 @@ describe('style scan: markup', () => {
     `);
     expect(facts.samples).toEqual({ buttons: 1, cards: 2 });
     expect(facts.buttons.radius).toEqual({ lg: 1 });
-    expect(facts.cards.border).toEqual({ none: 1, hairline: 1 });
+    expect(facts.cards.border).toEqual({ hairline: 1 });
   });
 
   it('does not count a bare button twice when its class also names a button', () => {
@@ -58,10 +61,30 @@ describe('style scan: markup', () => {
     expect(facts.samples.buttons).toBe(1);
   });
 
-  it('treats a class list with no corner, border or shadow class as square, borderless and flat', () => {
+  it('does not infer any facets from a class list without shape utilities', () => {
     const facts = emptyFacts();
     readClassList(facts, 'cards', ['card', 'p-4']);
-    expect(facts.cards).toEqual({ radius: { square: 1 }, border: { none: 1 }, shadow: { none: 1 } });
+    expect(facts.cards).toEqual({ radius: {}, border: {}, shadow: {} });
+    expect(facts.samples.cards).toBe(0);
+  });
+
+  it('resolves stylesheet variables and skips values it cannot resolve', () => {
+    const facts = emptyFacts();
+    readCss(facts, ':root { --round: 9999px; --line: 1px solid #ddd; --unknown: var(--missing); } .btn { border-radius: var(--round); border: var(--line); box-shadow: var(--unknown); }');
+    expect(facts.buttons.radius).toEqual({ pill: 1 });
+    expect(facts.buttons.border).toEqual({ hairline: 1 });
+    expect(facts.buttons.shadow).toEqual({});
+  });
+
+  it('counts a stylesheet class once instead of counting its utility markup again', () => {
+    const facts = emptyFacts();
+    const styledClasses = new Set<string>();
+    readCss(facts, '.btn { border-radius: 12px; }', styledClasses);
+    readMarkup(facts, '<button className="btn rounded-lg border shadow-md">Save</button>', styledClasses);
+    expect(facts.samples.buttons).toBe(1);
+    expect(facts.buttons.radius).toEqual({ '12px': 1 });
+    expect(facts.buttons.border).toEqual({});
+    expect(facts.buttons.shadow).toEqual({});
   });
 });
 
@@ -71,7 +94,7 @@ describe('style conventions', () => {
     for (let index = 0; index < 5; index += 1) readClassList(facts, 'cards', ['card', 'rounded-xl', 'shadow-md']);
     readClassList(facts, 'cards', ['card', 'rounded-none', 'border']);
     const [cards] = styleConventionsOf(facts);
-    expect(cards?.text).toBe('Cards use rounded corners (xl), no border, a soft shadow');
+    expect(cards?.text).toBe('Cards use rounded corners (xl), a soft shadow');
     expect(cards?.evidence).toContain('6 read');
     expect(cards?.evidence).toContain('5 of 6');
   });
@@ -89,8 +112,8 @@ describe('style conventions', () => {
 
   it('names the dislike of hairlines only when the whole project avoids them, and never when it uses one', () => {
     const clean = emptyFacts();
-    for (let index = 0; index < 4; index += 1) readClassList(clean, 'cards', ['card', 'rounded-xl']);
-    for (let index = 0; index < 3; index += 1) readClassList(clean, 'buttons', ['btn', 'rounded-lg']);
+    for (let index = 0; index < 4; index += 1) readClassList(clean, 'cards', ['card', 'rounded-xl', 'border-none']);
+    for (let index = 0; index < 3; index += 1) readClassList(clean, 'buttons', ['btn', 'rounded-lg', 'border-none']);
     expect(styleConventionsOf(clean).some((item) => item.key === 'no-hairlines')).toBe(true);
 
     const mixed = emptyFacts();
@@ -110,8 +133,22 @@ describe('style scan: a folder', () => {
       await fs.writeFile(path.join(root, 'src', 'Page.tsx'), '<div className="card rounded-xl shadow-md">x</div>');
       await fs.writeFile(path.join(root, 'node_modules', 'lib', 'bad.css'), '.card { border: 1px solid red; }');
       const facts = await readStyleFacts(root);
-      expect(facts.samples.cards).toBe(2);
+      expect(facts.samples.cards).toBe(1);
       expect(facts.cards.border['hairline']).toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    }
+  });
+
+  it('reads more than the former 120-file cap and reports bounded scan metadata', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kai-style-many-'));
+    try {
+      for (let index = 0; index < 125; index += 1) {
+        await fs.writeFile(path.join(root, `part-${index}.css`), `.card-${index} { border-radius: 8px; }`);
+      }
+      const facts = await readStyleFacts(root);
+      expect(facts.samples.cards).toBe(125);
+      expect(facts.limits).toMatchObject({ filesRead: 125, fileLimited: false, byteLimited: 0 });
     } finally {
       await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }

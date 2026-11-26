@@ -1,8 +1,8 @@
 
-import { BookMarked, Palette, Plus, RefreshCw, Trash2, Wrench } from 'lucide-react';
+import { BookMarked, Check, FileCode2, Palette, Plus, RefreshCw, Trash2, Wrench } from 'lucide-react';
 import { Switch } from './ui/Switch';
 import { useEffect, useState, type ReactNode } from 'react';
-import type { ConventionItem, ConventionsState } from '@kai/contracts';
+import type { ConventionItem, ConventionsState, DesignProfileSummary } from '@kai/contracts';
 import { unwrap } from '../types';
 import { Pill } from './Pill';
 import { UiButton } from './UiButton';
@@ -25,11 +25,15 @@ function when(iso: string | null): string {
  */
 export function ConventionsPanel(): ReactNode {
   const [state, setState] = useState<ConventionsState | null>(null);
+  const [profiles, setProfiles] = useState<DesignProfileSummary[]>([]);
   const [rule, setRule] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void window.kaiDesktop.conventionsState(false).then(unwrap).then(setState).catch((caught) => setError(messageOf(caught)));
+    void Promise.all([
+      window.kaiDesktop.conventionsState(false).then(unwrap),
+      window.kaiDesktop.designProfilesState(true).then(unwrap),
+    ]).then(([conventions, designProfiles]) => { setState(conventions); setProfiles(designProfiles); }).catch((caught) => setError(messageOf(caught)));
     const stop = window.kaiDesktop.onConventionsChanged(setState);
     return () => {
       stop();
@@ -49,6 +53,14 @@ export function ConventionsPanel(): ReactNode {
     await act(async () => { const result = await window.kaiDesktop.addConventionRule(text); setState(unwrap(result)); setRule(''); return { ok: true }; });
   }
 
+  async function approveProfile(profile: DesignProfileSummary): Promise<void> {
+    await act(async () => {
+      const updated = unwrap(await window.kaiDesktop.approveDesignProfile(profile.projectPath));
+      setProfiles((current) => current.map((item) => item.projectPath === updated.projectPath ? updated : item));
+      return { ok: true };
+    });
+  }
+
   if (!state) return <div className="empty-list">{error ?? 'Reading your projects…'}</div>;
   const served = state.items.filter((item) => !item.muted).length;
   const rules = state.items.filter((item) => item.source === 'rule');
@@ -57,10 +69,26 @@ export function ConventionsPanel(): ReactNode {
     <section className="ops-panel conventions-panel">
       <div className="ops-actions">
         <Pill tone={state.scanning ? 'info' : 'success'}>{state.scanning ? 'Reading your projects…' : `Read ${state.total} projects · ${when(state.scannedAt)}`}</Pill>
-        <UiButton type="button" className="secondary-button" onClick={() => void act(async () => { setState(unwrap(await window.kaiDesktop.conventionsState(true))); return { ok: true }; })}><RefreshCw size={14} /><span>Read my projects again</span></UiButton>
+        <UiButton type="button" className="secondary-button" onClick={() => void act(async () => { const [conventions, designProfiles] = await Promise.all([window.kaiDesktop.conventionsState(true), window.kaiDesktop.designProfilesState(true)]); setState(unwrap(conventions)); setProfiles(unwrap(designProfiles)); return { ok: true }; })}><RefreshCw size={14} /><span>Read my projects again</span></UiButton>
         <small>{served} {served === 1 ? 'convention is' : 'conventions are'} given to every agent run · {state.filedInC1} filed in C1. KAI checks again every 20 minutes.</small>
       </div>
       {error && <div className="workbench-error" role="alert">{error}</div>}
+
+      <h3 className="crew-subheading"><FileCode2 size={13} /> Project design profiles</h3>
+      <small className="crew-empty">KAI reads real component code. A profile stays a draft until you approve it here. Only approved profiles guide UI work.</small>
+      {profiles.length === 0
+        ? <small className="crew-empty">No starting projects were found. Open zurilofts, TijhaWebsite or tijhabooks to create a draft.</small>
+        : <ul className="crew-spend">
+          {profiles.map((profile) => (
+            <li key={profile.projectPath}>
+              <span>
+                <strong>{profile.projectName}</strong> · {profile.status} · {profile.componentCount} components · score {profile.score}
+                {profile.agentsPasteLine && <small className="crew-empty">For repository agents, add this line to AGENTS.md: {profile.agentsPasteLine}</small>}
+              </span>
+              {profile.status === 'draft' && <UiButton type="button" className="secondary-button" onClick={() => void approveProfile(profile)}><Check size={14} /><span>Approve profile</span></UiButton>}
+            </li>
+          ))}
+        </ul>}
 
       <h3 className="crew-subheading">Your own rules</h3>
       <div className="conventions-add">
