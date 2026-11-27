@@ -1,4 +1,5 @@
 import React from 'react';
+import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { ConversationRecord } from '@kai/contracts';
@@ -23,6 +24,13 @@ function markup(overrides: { running?: boolean; error?: string | null; conversat
 }
 
 describe('shared Lead panel', () => {
+  it('keeps the composer fixed while only the transcript scrolls', () => {
+    const css = readFileSync(new URL('../apps/desktop/src/renderer/src/styles.css', import.meta.url), 'utf8');
+    expect(css).toMatch(/\.context-pane-body > \.lead-context-pane\s*\{[^}]*flex:\s*1 1 auto;[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/);
+    expect(css).toMatch(/\.lead-transcript\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/);
+    expect(css).toMatch(/\.lead-compose\s*\{[^}]*flex:\s*0 0 auto;/);
+  });
+
   it('always renders the API/CLI, provider/agent, and model selectors', () => {
     const html = markup();
     expect(html).toContain('Lead runs on');

@@ -115,7 +115,7 @@ export function RightPane(props: RightPaneProps): ReactNode {
             onBuildingChange={setBuilding}
           />
         </div>
-        <div className="context-pane" hidden={tab !== 'lead'}>
+        <div className="context-pane lead-context-pane" hidden={tab !== 'lead'}>
           <LeadConversationPanel
             projectName={props.activeProject?.name ?? 'No project'}
             projectId={props.activeProject?.id ?? null}

@@ -1718,6 +1718,7 @@ button:disabled {
 
 /* A hidden pane must not keep a flex display, or `hidden` would have nothing to do. */
 .context-pane-body > .context-pane[hidden] { display: none; }
+.context-pane-body > .lead-context-pane { flex: 1 1 auto; min-height: 0; overflow: hidden; }
 
 .lead-panel {
   display: flex;
