@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, Cloud, Cpu, History, LoaderCircle, Plus, SendHorizontal, ShieldCheck, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Cloud, Cpu, History, LoaderCircle, Plus, SendHorizontal, ShieldCheck, Sparkles, X } from 'lucide-react';
 import { Textarea } from 'flowbite-react';
 import { describeRole } from './guided-build-engine';
 import { promptDialog } from './AppDialog';
@@ -205,6 +205,9 @@ export function LeadConversationPanel({ projectName, projectId, conversation, co
   const [message, setMessage] = useState('');
   const [selection, setSelection] = useState<LeadSelection>({ execution: '', providerOrAgent: '', model: '', target: null });
   const [answerDrafts, setAnswerDrafts] = useState<Record<string, string>>({});
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  useEffect(() => { setHistoryOpen(false); }, [projectId]);
 
   useEffect(() => {
     setMessage('');
@@ -391,12 +394,26 @@ export function LeadConversationPanel({ projectName, projectId, conversation, co
   ];
   const modelTierLabel = selection.target && selection.model ? leadModelTier(selection.target) : null;
 
+  if (historyOpen) return <section className="lead-panel" aria-label="Lead chat history page">
+    <header className="lead-head lead-history-head">
+      <UiButton type="button" className="icon-button compact" aria-label="Back to Lead chat" onClick={() => setHistoryOpen(false)}><ArrowLeft size={15} /></UiButton>
+      <strong>Lead chat history</strong>
+      <UiButton type="button" className="icon-button compact" aria-label="New Lead chat" title="New Lead chat" disabled={!projectId} onClick={() => { setHistoryOpen(false); onNewConversation?.(); }}><Plus size={15} /></UiButton>
+    </header>
+    <div className="lead-history-list">
+      {conversations.length === 0 ? <p className="lead-empty">No saved Lead chats yet.</p> : conversations.map((item, index) => <UiButton key={item.id} type="button" className="lead-history-item" aria-current={item.id === conversation?.id ? 'true' : undefined} onClick={() => { onSelectConversation?.(item.id); setHistoryOpen(false); }}>
+        <strong>{item.title && item.title !== 'Lead' ? item.title : `Lead chat ${conversations.length - index}`}</strong>
+        <span>{new Date(item.updatedAt).toLocaleString()}{item.id === conversation?.id ? ' · Current' : ''}</span>
+      </UiButton>)}
+    </div>
+  </section>;
+
   return (
     <section className="lead-panel" aria-label="Lead chat">
       <header className="lead-head">
         <div className="lead-title-line"><strong>Lead · {projectName}</strong><span className="lead-readonly-label">Read-only</span>{modelTierLabel && <span className="lead-tier-label" title={selectedLabel}>{modelTierLabel}{savedCoachChoice ? ' · Coach' : ''}</span>}
           <div className="lead-chat-actions">
-            {conversations.length > 0 && <OptionMenu ariaLabel="Lead chat history" icon={<History size={13} />} labelPrefix="History" value={conversation?.id ?? ''} title="Open a saved Lead chat" onChange={(id) => onSelectConversation?.(id)} options={conversations.map((item, index) => ({ value: item.id, label: item.title && item.title !== 'Lead' ? item.title : `Lead chat ${conversations.length - index}`, description: new Date(item.updatedAt).toLocaleString() }))} />}
+            <UiButton type="button" className="icon-button compact" aria-label="Lead chat history" title="Open Lead chat history" disabled={!projectId} onClick={() => setHistoryOpen(true)}><History size={15} /></UiButton>
             <UiButton type="button" className="icon-button compact" aria-label="New Lead chat" title="New Lead chat" disabled={!projectId} onClick={onNewConversation}><Plus size={15} /></UiButton>
           </div>
         </div>

@@ -61,7 +61,7 @@ describe('shared Lead panel', () => {
     const html = markup({ conversation: newer, conversations: [newer, older] });
     expect(html).toContain('Lead chat history');
     expect(html).toContain('New Lead chat');
-    expect(html).toContain('History: Lead chat 2');
+    expect(html).toContain('Open Lead chat history');
   });
 
   it('keeps Builder task handoff disabled while Lead & Builder is off', () => {

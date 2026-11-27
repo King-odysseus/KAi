@@ -109,10 +109,14 @@ describe('rendered Lead model selector', () => {
     const input = page.getByRole('textbox', { name: 'Ask the Lead' });
     await input.fill('Draft for chat two');
     await page.getByRole('button', { name: 'Lead chat history' }).click();
-    await page.getByRole('option', { name: /Lead chat 1/ }).click();
+    expect(await page.getByRole('region', { name: 'Lead chat history page' }).count()).toBe(1);
+    await page.getByRole('button', { name: /Lead chat 1/ }).click();
     await input.fill('Draft for chat one');
     await page.getByRole('button', { name: 'Lead chat history' }).click();
-    await page.getByRole('option', { name: /Lead chat 2/ }).click();
+    await page.getByRole('button', { name: 'Back to Lead chat' }).click();
+    expect(await input.inputValue()).toBe('Draft for chat one');
+    await page.getByRole('button', { name: 'Lead chat history' }).click();
+    await page.getByRole('button', { name: /Lead chat 2/ }).click();
     await page.waitForFunction(() => (document.querySelector('textarea[aria-label="Ask the Lead"]') as HTMLTextAreaElement | null)?.value === 'Draft for chat two');
     expect(await input.inputValue()).toBe('Draft for chat two');
     await page.getByRole('button', { name: 'New Lead chat' }).click();
