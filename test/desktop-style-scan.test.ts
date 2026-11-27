@@ -153,4 +153,18 @@ describe('style scan: a folder', () => {
       await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
   });
+
+  it('reads stylesheet declarations beyond 120 KB and up to the raised 300 KB cap', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kai-style-large-'));
+    try {
+      const filler = `/* ${'x'.repeat(220_000)} */\n`;
+      await fs.writeFile(path.join(root, 'styles.css'), `${filler}.btn { border-radius: 9999px; }`);
+      const facts = await readStyleFacts(root);
+      expect(facts.samples.buttons).toBe(1);
+      expect(facts.buttons.radius).toEqual({ pill: 1 });
+      expect(facts.limits?.byteLimited).toBe(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    }
+  });
 });

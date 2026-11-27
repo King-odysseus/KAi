@@ -1,5 +1,6 @@
 import { Check, ChevronDown } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { UiButton } from '../UiButton';
 
 export interface OptionMenuOption<T extends string> {
@@ -35,29 +36,60 @@ export function OptionMenu<T extends string>({ ariaLabel, className = '', disabl
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [menuPosition, setMenuPosition] = useState<{ left: number; top: number; maxHeight: number; maxWidth: number } | null>(null);
   const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
+  const firstEnabledIndex = options.findIndex((option) => !option.disabled);
   const selectedOption = options[selectedIndex];
 
   useEffect(() => {
     if (!open) return;
     const closeOnOutsidePointer = (event: PointerEvent): void => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return;
       setOpen(false);
       triggerRef.current?.focus();
     };
-    const focusTimer = window.setTimeout(() => optionRefs.current[selectedIndex]?.focus(), 0);
+    const positionMenu = (): void => {
+      const trigger = triggerRef.current?.getBoundingClientRect();
+      const menu = menuRef.current;
+      if (!trigger || !menu) return;
+      const margin = 8;
+      const maxWidth = Math.max(0, window.innerWidth - margin * 2);
+      const width = Math.min(Math.max(menu.scrollWidth, trigger.width), maxWidth);
+      const left = Math.min(Math.max(margin, trigger.right - width), window.innerWidth - width - margin);
+      const height = Math.min(menu.scrollHeight, window.innerHeight - margin * 2);
+      const roomAbove = trigger.top - margin - 6;
+      const roomBelow = window.innerHeight - trigger.bottom - margin - 6;
+      const openAbove = roomAbove >= Math.min(height, 180) || roomAbove >= roomBelow;
+      const room = Math.max(96, openAbove ? roomAbove : roomBelow);
+      const maxHeight = Math.min(height, room);
+      const top = openAbove ? Math.max(margin, trigger.top - 6 - maxHeight) : Math.min(window.innerHeight - maxHeight - margin, trigger.bottom + 6);
+      setMenuPosition({ left, top, maxHeight, maxWidth });
+    };
+    let focusFrame = 0;
+    const focusTimer = window.setTimeout(() => {
+      positionMenu();
+      const selected = options[selectedIndex]?.disabled ? -1 : selectedIndex;
+      focusFrame = window.requestAnimationFrame(() => optionRefs.current[selected >= 0 ? selected : firstEnabledIndex]?.focus());
+    }, 0);
+    window.addEventListener('resize', positionMenu);
+    window.addEventListener('scroll', positionMenu, true);
     document.addEventListener('pointerdown', closeOnOutsidePointer);
     document.addEventListener('keydown', closeOnEscape);
     return () => {
       window.clearTimeout(focusTimer);
+      if (focusFrame) window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener('resize', positionMenu);
+      window.removeEventListener('scroll', positionMenu, true);
       document.removeEventListener('pointerdown', closeOnOutsidePointer);
       document.removeEventListener('keydown', closeOnEscape);
     };
-  }, [open, selectedIndex]);
+  }, [open, selectedIndex, firstEnabledIndex]);
 
   const choose = (option: OptionMenuOption<T>): void => {
     if (option.disabled) return;
@@ -111,11 +143,13 @@ export function OptionMenu<T extends string>({ ariaLabel, className = '', disabl
         <span className="max-w-[9rem] truncate">{labelPrefix ? `${labelPrefix}: ` : ''}{selectedOption?.label ?? value}</span>
         <ChevronDown size={11} className={`shrink-0 transition-transform ${open ? 'rotate-180 text-[var(--accent)]' : ''}`} aria-hidden="true" />
       </UiButton>
-      {open && (
+      {open && createPortal((
         <div
+          ref={menuRef}
           role="listbox"
           aria-label={ariaLabel}
-          className="absolute bottom-[calc(100%+6px)] left-0 z-[60] flex max-h-72 min-w-[11.5rem] max-w-[22rem] flex-col gap-px overflow-y-auto rounded-xl border border-[color:var(--border)] bg-[var(--bg-raised)] p-1 shadow-[0_14px_34px_rgba(0,0,0,0.4)]"
+          className="kai-option-menu-popup fixed z-[10000] flex min-w-[11.5rem] max-w-[22rem] flex-col gap-px overflow-y-auto rounded-xl border border-[color:var(--border)] bg-[var(--bg-raised)] p-1 shadow-[0_14px_34px_rgba(0,0,0,0.4)]"
+          style={{ left: menuPosition?.left ?? 8, top: menuPosition?.top ?? 8, maxHeight: menuPosition?.maxHeight ?? 'min(18rem, calc(100vh - 16px))', maxWidth: menuPosition?.maxWidth ?? 'calc(100vw - 16px)', visibility: menuPosition ? 'visible' : 'hidden' }}
         >
           {options.map((option, index) => {
             const selected = option.value === value;
@@ -144,7 +178,7 @@ export function OptionMenu<T extends string>({ ariaLabel, className = '', disabl
             );
           })}
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 }

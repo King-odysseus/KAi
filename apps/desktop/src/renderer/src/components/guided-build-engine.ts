@@ -350,6 +350,11 @@ export function coachPrompt(message: string, style: Style, detail: Detail, quest
   return `You are the Coach in Guided Build. Answer the user's message conversationally, in a few short paragraphs at most, and keep it on the project and the current step${step ? ` ("${step.title}")` : ''}. ${questionRule(questions)} Coach style: ${style}; detail: ${detail}. Do not run Builder or edit files unless the user explicitly presses the Builder action. User message: ${message}`;
 }
 
+/** Reuses the Guided Build Coach's voice for the read-only Lead chat; it does not create or maintain a second plan. */
+export function leadCoachPrompt(message: string, style: Style, detail: Detail, questions: Questions): string {
+  return `${coachPrompt(message, style, detail, questions)}\n\nLead is always read-only: inspect and explain project code, but never create, edit, delete or run a command that changes files. Use beginner-friendly words. Explain why and how; include risks and one simpler option. Do not make a multi-step implementation plan. If the user asks for work the Builder should do, end your response with exactly this marked section and one complete, concise task:\nBUILDER TASK:\n<one task the Builder can do>\nIf no Builder work is needed, end with:\nBUILDER TASK:\nNone`;
+}
+
 export function builderStepPrompt(step: GuidedBuildStep): string {
   return `Implement only this Guided Build step.\n\nStep: ${step.title}\nWhy it matters: ${step.why}\nFile: ${step.where}\nInstructions: ${step.instructions}${step.code ? `\nSuggested code: ${step.code}` : ''}\nAcceptance checks:\n${step.acceptanceCriteria.map((item) => `- ${item}`).join('\n')}\n\nOpen the changed file(s) in the editor when finished. Do not start later steps.`;
 }

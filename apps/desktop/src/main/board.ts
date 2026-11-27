@@ -334,8 +334,11 @@ export class StudioBoardStore {
    * Adds cards without touching the ones already there: a card whose id is on the board is left alone, so adding the
    * same import twice changes nothing. Returns the board and the ids that were actually added.
    */
-  async append(projectId: string, cards: readonly BoardCard[]): Promise<{ board: StudioBoard; added: string[] }> {
+  async append(projectId: string, cards: readonly BoardCard[], expectedRevision?: number): Promise<{ board: StudioBoard; added: string[] }> {
     const current = await this.read(projectId);
+    if (expectedRevision !== undefined && current.revision !== expectedRevision) {
+      throw new Error(`The Studio board changed after this proposal (expected revision ${expectedRevision}, found ${current.revision}). Review the updated board before approving again.`);
+    }
     const have = new Set(current.cards.map((card) => card.id));
     const fresh = cards.filter((card) => !have.has(card.id));
     if (fresh.length === 0) return { board: current, added: [] };

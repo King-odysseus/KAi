@@ -582,6 +582,8 @@ export const conversationOriginSchema = z.discriminatedUnion('kind', [
   // A Crew's work log: the Lead's and the builders' conversations, and the one a question to the Lead runs in. They
   // belong to the Crew screen, so the Workspace keeps them out of its tabs and history and opens one only read-only.
   z.object({ kind: z.literal('crew'), runId: z.string().min(1) }).strict(),
+  // The Workspace Lead's independent chat, one saved thread for each project.
+  z.object({ kind: z.literal('lead'), projectId: z.string().min(1) }).strict(),
 ]);
 
 export const conversationRecordV1Schema = z

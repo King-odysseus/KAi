@@ -23,6 +23,7 @@ interface Props {
   projectId: string | null;
   modelSettings?: Pick<import('@kai/contracts').AppSettings, 'directApi' | 'savedLocalModels'>;
   onOpenFile: (path: string, line?: number) => void;
+  onLeadMessage?: (message: string) => void;
 }
 
 export function CodeGuidePanel(props: Props): ReactNode {

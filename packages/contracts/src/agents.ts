@@ -132,7 +132,7 @@ export const agentRunRequestSchema = z
     taskText: z.string().trim().min(1).max(20_000).optional(),
     // A short line shown as this run's message in the conversation, when the prompt is a long brief KAI wrote (a crew's
     // task or question to the Lead). The run still receives the full prompt; only what the log shows is shortened.
-    displayText: z.string().trim().min(1).max(500).optional(),
+    displayText: z.string().min(1).max(20_000).optional(),
     // Which side of the split this run is. The Architect only plans and reviews, changes nothing, and files no lesson.
     splitRole: z.enum(['architect', 'implementer']).optional(),
     /**

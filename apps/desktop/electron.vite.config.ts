@@ -46,6 +46,14 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
+    // Give the renderer a clean optimized-dependency cache after Vite/Electron upgrades; stale `.vite` metadata
+    // previously left the dev window blank with 504s. This cache lives under node_modules and is recreated safely.
+    cacheDir: resolve(__dirname, 'node_modules/.vite-renderer'),
+    optimizeDeps: {
+      noDiscovery: true,
+      include: ['react', 'react-dom', 'react-dom/client', 'zustand/traditional', 'zustand', 'use-sync-external-store/shim/with-selector.js'],
+      force: true,
+    },
     // The phone's static shell — manifest, icons, service worker — lives here and nowhere else, because
     // Vite copies `public/` to the bundle root verbatim. Importing them instead would give them hashed
     // URLs, and both are fetched by a fixed path; the gateway publishes `/mobile/` and `/assets/` only,

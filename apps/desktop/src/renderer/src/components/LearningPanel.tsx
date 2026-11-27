@@ -28,7 +28,7 @@ import {
   Target,
   WandSparkles,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Switch } from './ui/Switch';
 import { MAX_SAVED_LESSONS } from '@kai/contracts';
 import type {
@@ -131,6 +131,8 @@ interface LearningPanelProps {
   onMarkSecurityFindingFixed: (findingId: string) => void;
   onOpenSettings: () => void;
   onClose: () => void;
+  /** Learn & Code keeps its historic tutor turns readable, while new teaching runs through the shared Lead. */
+  recordOnly?: boolean;
 }
 
 export interface LearningSelectionPreview {
@@ -237,6 +239,7 @@ export function LearningPanel({
   onMarkSecurityFindingFixed,
   onOpenSettings,
   onClose,
+  recordOnly = false,
 }: LearningPanelProps): ReactNode {
   const [focus, setFocus] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -258,7 +261,7 @@ export function LearningPanel({
     catch (error) { setCheckOutput(error instanceof Error ? error.message : 'Check failed.'); }
     finally { setChecking(false); }
   };
-  const [tab, setTab] = usePersistentChoice<'tutor' | 'history' | 'progress' | 'teaching' | 'security' | 'git'>('kai.tab.learning', 'tutor', ['tutor', 'history', 'progress', 'teaching', 'security', 'git']);
+  const [tab, setTab] = usePersistentChoice<'tutor' | 'history' | 'progress' | 'teaching' | 'security' | 'git'>('kai.tab.learning', recordOnly ? 'history' : 'tutor', ['tutor', 'history', 'progress', 'teaching', 'security', 'git']);
   const [historyQuery, setHistoryQuery] = useState('');
   function focusExplainBack(): void {
     const box = document.querySelector<HTMLElement>('.learning-explain-back');
@@ -290,8 +293,12 @@ export function LearningPanel({
     : '';
 
   useEffect(() => {
-    if (selectionKey) setTab('tutor');
+    if (selectionKey && !recordOnly) setTab('tutor');
   }, [selectionKey]);
+
+  useEffect(() => {
+    if (recordOnly && tab === 'tutor') setTab('history');
+  }, [recordOnly, tab, setTab]);
 
   useEffect(() => {
     if (result && readiness?.ready) setControlsOpen(false);
@@ -398,7 +405,7 @@ export function LearningPanel({
       )}
 
       <div className="learning-tabs" role="tablist" aria-label="Learning panel views">
-        <UiButton type="button" className={tab === 'tutor' ? 'active' : ''} role="tab" aria-selected={tab === 'tutor'} onClick={() => setTab('tutor')}><BookOpen size={13} />Tutor</UiButton>
+        {!recordOnly && <UiButton type="button" className={tab === 'tutor' ? 'active' : ''} role="tab" aria-selected={tab === 'tutor'} onClick={() => setTab('tutor')}><BookOpen size={13} />Tutor</UiButton>}
         <UiButton type="button" role="tab" aria-selected={tab === 'history'} className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>History</UiButton>
         <UiButton type="button" className={tab === 'progress' ? 'active' : ''} role="tab" aria-selected={tab === 'progress'} onClick={() => setTab('progress')}><GraduationCap size={13} />Progress</UiButton>
         <UiButton type="button" className={tab === 'teaching' ? 'active' : ''} role="tab" aria-selected={tab === 'teaching'} onClick={() => setTab('teaching')}><LibraryBig size={13} />Teaching</UiButton>
@@ -519,6 +526,7 @@ export function LearningPanel({
         )}
         {tab === 'history' && <section className="learning-history">
           <strong>Lesson history</strong><p>The last {MAX_SAVED_LESSONS} lessons for this project, newest first.</p>
+          {conversation.length > 0 && <details className="learning-legacy-chat"><summary>Earlier Learn &amp; Code tutor conversation ({conversation.length} saved replies)</summary>{conversation.map((turn) => <article className="learning-conversation-turn" key={turn.id}><TutorQuestion question={turn.question} source={turn.source} /><TutorContent onReference={onReference} response={turn.response} selection={null} busy={false} onAction={onAction} onInsertSuggestion={onInsertSuggestion} canInsertSuggestion={false} /></article>)}</details>}
           {!(progress?.lessons?.length) && <p>Your lessons will appear here after a tutor response.</p>}
           {(progress?.lessons?.length ?? 0) > 5 && (
             <label className="input-with-icon learning-history-search">
@@ -527,7 +535,7 @@ export function LearningPanel({
             </label>
           )}
           {historyQuery.trim() && historyLessons.length === 0 && <p>No lesson matches “{historyQuery.trim()}”.</p>}
-          {historyLessons.map((lesson) => <UiButton key={lesson.id} type="button" disabled={Boolean(busy)} onClick={() => { onLessonSelect(lesson); setTab('tutor'); }}>
+        {historyLessons.map((lesson) => <UiButton key={lesson.id} type="button" disabled={Boolean(busy)} onClick={() => { onLessonSelect(lesson); setTab(recordOnly ? 'history' : 'tutor'); }}>
             <strong>{lesson.response.title}</strong>
             <small>{new Date(lesson.createdAt).toLocaleString()} - {lesson.filePath ?? 'Whole project'}</small>
             <span>{lesson.explainBack?.verdict === 'solid'
@@ -538,6 +546,9 @@ export function LearningPanel({
                   ? 'Explain it back again'
                   : 'Review lesson'}</span>
           </UiButton>)}
+          {recordOnly && result && <section className="learning-legacy-lesson"><TutorContent onReference={onReference} response={result.response} selection={null} busy={Boolean(busy)} onAction={onAction} onInsertSuggestion={onInsertSuggestion} canInsertSuggestion={false} />
+            {responseLessonId && <ExplainBack key={responseLessonId} lessonId={responseLessonId} question={explainBackQuestion(result.response)} previous={progress?.lessons?.find((lesson) => lesson.id === responseLessonId)?.explainBack ?? null} understood={responseUnderstood} disabled={Boolean(busy)} onExplainBack={onExplainBack} onContinue={onContinueLesson} nextLesson={lessons[0] ?? null} onExplainBackHelp={onExplainBackHelp} onSkip={() => onUnderstood(responseLessonId)} />}
+          </section>}
         </section>}
         {tab === 'progress' && <ProgressContent progress={progress} />}
         {tab === 'teaching' && (

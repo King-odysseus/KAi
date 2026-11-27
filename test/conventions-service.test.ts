@@ -64,8 +64,8 @@ describe('extension convention service', () => {
   it('serves nothing before a scan, then the habits found across your projects', async () => {
     await withService(async ({ service, add }) => {
       expect(service.briefing()).toBe('');
-      await add('alpha', { 'package.json': REACT });
-      await add('beta', { 'package.json': REACT });
+      await add('project-a', { 'package.json': REACT });
+      await add('project-b', { 'package.json': REACT });
       await service.refresh();
       expect(service.briefing()).toContain('React');
       expect(service.briefing()).toContain('2 of 2 of your projects');
@@ -74,21 +74,21 @@ describe('extension convention service', () => {
 
   it('serves the look of a reference project even though only one project shows it', async () => {
     await withService(async ({ service, add }) => {
-      const lofts = await add('zurilofts', { 'src/Home.tsx': NICE_CARDS });
+      const styledProject = await add('styled-project', { 'src/Home.tsx': NICE_CARDS });
       await add('other', { 'package.json': '{}' });
-      await service.setReference(lofts, true);
+      await service.setReference(styledProject, true);
       await service.refresh();
-      expect(service.briefing()).toContain('Cards use rounded corners (xl), no border, a soft shadow (as in zurilofts)');
-      await service.setReference(lofts, false);
+      expect(service.briefing()).toContain('Cards use rounded corners (xl), a soft shadow (as in styled-project)');
+      await service.setReference(styledProject, false);
       await service.refresh();
-      expect(service.briefing()).not.toContain('zurilofts');
+      expect(service.briefing()).not.toContain('styled-project');
     });
   });
 
   it('serves a rule at once, stops when it is removed, and honours a mute', async () => {
     await withService(async ({ service, add }) => {
-      await add('alpha', { 'package.json': REACT });
-      await add('beta', { 'package.json': REACT });
+      await add('project-a', { 'package.json': REACT });
+      await add('project-b', { 'package.json': REACT });
       await service.refresh();
       const withRule = await service.addRule('Use Lucide icons, not emoji');
       expect(service.briefing()).toContain('- Use Lucide icons, not emoji');
@@ -103,12 +103,12 @@ describe('extension convention service', () => {
 
   it('flags a habit that turns up on a later scan as new, but not the first list', async () => {
     await withService(async ({ service, add }) => {
-      await add('alpha', { 'package.json': REACT });
-      await add('beta', { 'package.json': REACT });
+      await add('project-a', { 'package.json': REACT });
+      await add('project-b', { 'package.json': REACT });
       await service.refresh();
       expect((await service.state()).items.some((entry) => entry.isNew)).toBe(false);
-      await add('gamma', { 'package.json': JSON.stringify({ dependencies: { vue: '1' } }) });
-      await add('delta', { 'package.json': JSON.stringify({ dependencies: { vue: '1' } }) });
+      await add('project-c', { 'package.json': JSON.stringify({ dependencies: { vue: '1' } }) });
+      await add('project-d', { 'package.json': JSON.stringify({ dependencies: { vue: '1' } }) });
       await service.refresh();
       expect((await service.state()).items.find((entry) => entry.key === 'habit:vue')?.isNew).toBe(true);
       await service.markSeen();
@@ -118,15 +118,15 @@ describe('extension convention service', () => {
 
   it('files what it serves into C1 once, files it again when the wording changes, and keeps going if C1 is down', async () => {
     await withService(async ({ service, add, notes, failLearning }) => {
-      await add('alpha', { 'package.json': REACT });
-      await add('beta', { 'package.json': REACT });
+      await add('project-a', { 'package.json': REACT });
+      await add('project-b', { 'package.json': REACT });
       await service.refresh();
       const first = notes.length;
       expect(first).toBeGreaterThanOrEqual(2);
       expect(notes[0]?.tags).toContain('convention');
       await service.refresh();
       expect(notes.length).toBe(first);
-      await add('gamma', { 'package.json': REACT });
+      await add('project-c', { 'package.json': REACT });
       await service.refresh();
       expect(notes.length).toBeGreaterThan(first);
       failLearning();
@@ -138,8 +138,8 @@ describe('extension convention service', () => {
   it('picks up a project added while a scan is already running', async () => {
     await withService(async ({ service, add }) => {
       void service.briefing();
-      await add('alpha', { 'package.json': REACT });
-      await add('beta', { 'package.json': REACT });
+      await add('project-a', { 'package.json': REACT });
+      await add('project-b', { 'package.json': REACT });
       await service.refresh();
       expect(service.briefing()).toContain('React');
     });

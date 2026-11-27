@@ -158,6 +158,7 @@ const bridge: KaiDesktopBridge = {
   generateStudioArtifactsSelected: (input) => ipcRenderer.invoke('studio:artifacts-generate-selected', input),
   markStudioArtifactEdited: (input) => ipcRenderer.invoke('studio:artifacts-mark-edited', input),
   studioBoard: (projectId) => ipcRenderer.invoke('studio:board-read', { projectId }),
+  appendStudioBoardCards: (input) => ipcRenderer.invoke('studio:board-append', input),
   planStudioBoard: (projectId) => ipcRenderer.invoke('studio:board-plan', { projectId }),
   arrangeStudioBoard: (projectId) => ipcRenderer.invoke('studio:board-arrange', { projectId }),
   nextStudioCard: (projectId) => ipcRenderer.invoke('studio:board-next', { projectId }),
@@ -286,6 +287,7 @@ const bridge: KaiDesktopBridge = {
   },
   designProfilesState: (refresh = false) => ipcRenderer.invoke('design-profiles:get', { refresh }),
   approveDesignProfile: (projectPath) => ipcRenderer.invoke('design-profiles:approve', { projectPath }),
+  generateDesignProfile: (projectPath) => ipcRenderer.invoke('design-profiles:generate', { projectPath }),
   crewDesign: (launch = false) => ipcRenderer.invoke('crew:design', { launch }),
   onCrewChanged: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, run: import('@kai/contracts').CrewRun): void => listener(run);

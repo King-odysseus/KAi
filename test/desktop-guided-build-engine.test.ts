@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   defaultLocalBuilder,
+  leadCoachPrompt,
   briefFromLaunchPrompt,
   builderStuckReason,
   planFromBriefPrompt,
@@ -44,6 +45,17 @@ describe('planLocation', () => {
 
   it('leaves text with no file in it alone', () => {
     expect(planLocation('the settings screen')).toEqual({ where: 'the settings screen', related: [] });
+  });
+});
+
+describe('leadCoachPrompt', () => {
+  it('uses the Coach voice with hard read-only guidance and beginner explanations', () => {
+    const prompt = leadCoachPrompt('Why is the card blank?', 'tutor', 'step-by-step', 'blocked');
+    expect(prompt).toContain('You are the Coach in Guided Build');
+    expect(prompt).toContain('always read-only');
+    expect(prompt).toContain('never create, edit, delete or run a command that changes files');
+    expect(prompt).toContain('risks and one simpler option');
+    expect(prompt).toContain('Do not make a multi-step implementation plan');
   });
 });
 

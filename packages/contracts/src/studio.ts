@@ -310,6 +310,13 @@ export const boardCardSchema = z
   .transform((card) => ({ ...card, acceptanceCriteria: deriveAcceptanceCriteria(card.acceptance) }));
 export type BoardCard = z.infer<typeof boardCardSchema>;
 
+export const studioBoardAppendInputSchema = z.object({
+  projectId: z.string().min(1),
+  expectedRevision: z.number().int().nonnegative(),
+  cards: z.array(boardCardSchema).min(1).max(50),
+}).strict();
+export type StudioBoardAppendInput = z.infer<typeof studioBoardAppendInputSchema>;
+
 export const studioBoardSchema = z
   .object({
     schemaVersion: z.literal(1),

@@ -893,6 +893,11 @@ export class DesktopLearningTutor {
 
 export function parseLearningTutorContent(content: string): LearningTutorResponse {
   const parsed = parseJsonResponse(content, 'tutor');
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const allowed = new Set(['title', 'recap', 'purpose', 'analogy', 'steps', 'concepts', 'codePreview', 'lineByLine', 'checks', 'sourceNotes', 'followUpQuestion', 'suggestion']);
+    const unknown = Object.keys(parsed as Record<string, unknown>).filter((key) => !allowed.has(key));
+    if (unknown.length) throw new Error(`The provider tutor JSON used unsupported top-level key(s): ${unknown.slice(0, 5).join(', ')}.`);
+  }
   const repaired = lenient(learningTutorResponseSchema).safeParse(normaliseTutorResponse(parsed));
   if (repaired.success) return repaired.data;
   const issues = repaired.error.issues.slice(0, 8)

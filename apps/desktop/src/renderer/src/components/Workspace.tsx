@@ -193,6 +193,8 @@ export interface WorkspaceCommandRequest {
 
 interface WorkspaceViewProps {
   activeProject: ProjectRecord | null;
+  leadBuilderEnabled: boolean;
+  onLeadBuilderEnabledChange: (enabled: boolean) => void;
   activeConversation: ConversationRecord | null;
   settings: AppSettings;
   projectPreferences: ProjectPreferences | null;
@@ -390,6 +392,8 @@ const PERMISSIONS: ReadonlyArray<{ key: PermissionKey; label: string; descriptio
 
 export function WorkspaceView({
   activeProject,
+  leadBuilderEnabled,
+  onLeadBuilderEnabledChange,
   activeConversation,
   settings,
   projectPreferences,
@@ -1120,6 +1124,10 @@ export function WorkspaceView({
 
   const send = (): void => {
     const typedText = prompt.trim();
+    if (!leadBuilderEnabled) {
+      setWorkbenchNotice('Builder is off. Turn on Lead & Builder in More run options to send a build task.');
+      return;
+    }
     if ((!typedText && !hasAttachment) || !activeProject || busy || refiningPrompt || !ready) return;
     let text = typedText || attachmentOnlyPrompt;
     // An audit starter ends in "Attack " / "Audit " / "Profile " and waits for a target. Sent as-is it should
@@ -2761,7 +2769,7 @@ export function WorkspaceView({
                 <ComposerSend
                   label={isAutoLikeIntent(taskIntent) ? 'Start Auto on this task' : activeConversation ? 'Send message' : 'Start conversation'}
                   title={isAutoLikeIntent(taskIntent) ? 'Send and Auto works it until it is done' : activeConversation ? 'Send message' : 'Start conversation'}
-                  disabled={!activeProject || !canSendPrompt || busy || startingAuto || refiningPrompt || previewAttachmentSaving || !ready}
+                  disabled={!activeProject || !leadBuilderEnabled || !canSendPrompt || busy || startingAuto || refiningPrompt || previewAttachmentSaving || !ready}
                   sending={startingAuto}
                   onClick={send}
                 />
@@ -2782,6 +2790,9 @@ export function WorkspaceView({
               <OptionMenu ariaLabel="Reply style" disabled={busy} icon={<Lightbulb size={14} />} onChange={(value) => onSelectStyle(value as ResponseStyle)} options={RESPONSE_STYLES.map((style) => ({ value: style, label: RESPONSE_STYLE_LABEL[style], description: RESPONSE_STYLE_DESCRIPTION[style] }))} title="How the agent words what it tells you" value={selectedStyle} />
               <OptionMenu ariaLabel="Agents" disabled={busy} icon={<Users size={14} />} onChange={(value) => onSelectHelpers(value as HelperChoice)} options={HELPER_CHOICES.map((choice) => ({ value: choice, label: HELPER_CHOICE_LABEL[choice], description: HELPER_CHOICE_DESCRIPTION[choice] }))} title="How many helper agents may work on a job at once" value={selectedHelpers} />
               {helperAgentCount > 0 && <Pill tone="info" title={`${helperAgentCount} helper agents in this conversation`}><Search size={12} />{helperAgentCount}</Pill>}
+            </OptionSection>
+            <OptionSection title="Lead & Builder" className="!items-start !gap-3">
+              <LeadBuilderToggle enabled={leadBuilderEnabled} disabled={busy || running} onChange={onLeadBuilderEnabledChange} />
             </OptionSection>
             <OptionSection title="Architect and Implementer" className="!items-start !gap-3">
               <ArchitectToggle state={architect} disabled={busy || running || Boolean(guidedBuild?.enabled)} />
@@ -3698,6 +3709,13 @@ function GuidedBuildToggle({ enabled, disabled, onChange }: { enabled: boolean; 
   return <label className="flex w-full cursor-pointer items-center gap-2.5 text-xs text-[var(--text)]" title="Let a Coach plan and review while your chosen Builder implements each step">
     <Switch checked={enabled} disabled={disabled} aria-label="Enable Guided Build Coach and Builder" onChange={(event) => onChange(event.target.checked)} />
     <span className="flex min-w-0 flex-col"><span>Use Guided Build Coach and Builder</span><small className="text-[11px] leading-snug text-[var(--text-dim)]">Choose each agent and model here. Guided Build applies only to this conversation.</small></span>
+  </label>;
+}
+
+function LeadBuilderToggle({ enabled, disabled, onChange }: { enabled: boolean; disabled: boolean; onChange: (enabled: boolean) => void }): ReactNode {
+  return <label className="flex w-full cursor-pointer items-center gap-2.5 text-xs text-[var(--text)]" title="Allow the Builder to run tasks from the main composer and receive tasks from the Lead">
+    <Switch checked={enabled} disabled={disabled} aria-label="Enable Lead and Builder" onChange={(event) => onChange(event.target.checked)} />
+    <span className="flex min-w-0 flex-col"><span>Enable Lead & Builder</span><small className="text-[11px] leading-snug text-[var(--text-dim)]">When off, the Lead can still give guidance, and Builder runs are disabled.</small></span>
   </label>;
 }
 

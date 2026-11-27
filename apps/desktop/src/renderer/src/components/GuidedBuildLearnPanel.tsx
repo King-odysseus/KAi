@@ -39,10 +39,12 @@ export function GuidedBuildLearnPanel(props: {
   projectId: string | null;
   /** The saved model choices; a target picked without a model is shown (and sent) with the one saved here. */
   modelSettings?: Pick<import('@kai/contracts').AppSettings, 'directApi' | 'savedLocalModels'>;
+  /** Sends teaching questions to the shared per-project Lead instead of opening a second Coach chat. */
+  onLeadMessage?: (message: string) => void;
 }): ReactNode {
   const {
     view, explaining, busy, error, onExplain, stripHidden, onToggleStrip, guidedBuild, conversation,
-    agentCapabilities, selectedAgent, onUpdateGuidedBuild, onRunGuidedBuild, onOpenFile, projectId, modelSettings,
+    agentCapabilities, selectedAgent, onUpdateGuidedBuild, onRunGuidedBuild, onOpenFile, projectId, modelSettings, onLeadMessage,
   } = props;
   const fallbackTarget = useMemo<RoleTarget>(() => ({ execution: 'cli', agent: selectedAgent }), [selectedAgent]);
   const [build, setBuild] = useState<GuidedBuild>(() => guidedBuild ?? emptyBuild(selectedAgent));
@@ -174,6 +176,7 @@ export function GuidedBuildLearnPanel(props: {
     if (!question) return;
     if (!build.steps.length) void run('plan', planPrompt(question, false));
     else {
+      if (onLeadMessage) { onLeadMessage(question); setMessage(''); return; }
       void run('coach', coachPrompt(question, build.style, build.detail, build.questions, step));
     }
   };
@@ -212,6 +215,7 @@ export function GuidedBuildLearnPanel(props: {
     void run('write-code', role.local ? localBuilderStepPrompt(step) : builderStepPrompt(step), justThisStep ? { target, local: role.local } : undefined);
   };
   const learn = (kind: LearnAction): void => {
+    if (onLeadMessage) { onLeadMessage(learnPrompt(kind, step, build.style, build.detail)); return; }
     void run('coach', learnPrompt(kind, step, build.style, build.detail));
   };
   const generatePlan = (): void => {
@@ -290,8 +294,8 @@ export function GuidedBuildLearnPanel(props: {
           onChange={update}
           onClose={() => setTeamOpen(false)}
           rolePickers={<div className="flex flex-wrap items-center gap-2">
-            <OptionMenu ariaLabel="Coach agent" icon={<Sparkles size={12} />} onChange={(value) => chooseTarget('coach', value)} options={options('coach', coach)} title="Choose the Coach that makes plans and answers your questions" value={targetValue(coach)} />
-            <OptionMenu ariaLabel="Coach model" onChange={(value) => chooseModel('coach', coach, value)} options={modelOptions('coach', coach)} title="Choose Coach model" value={coach.execution === 'api' ? coach.api?.model ?? '' : coach.model ?? ''} />
+            {!onLeadMessage && <OptionMenu ariaLabel="Coach agent" icon={<Sparkles size={12} />} onChange={(value) => chooseTarget('coach', value)} options={options('coach', coach)} title="Choose the Coach that makes plans and answers your questions" value={targetValue(coach)} />}
+            {!onLeadMessage && <OptionMenu ariaLabel="Coach model" onChange={(value) => chooseModel('coach', coach, value)} options={modelOptions('coach', coach)} title="Choose Coach model" value={coach.execution === 'api' ? coach.api?.model ?? '' : coach.model ?? ''} />}
             <OptionMenu ariaLabel="Builder agent" icon={<Cpu size={12} />} onChange={(value) => chooseTarget('builder', value)} options={options('builder', builder)} title="Choose the Builder that provides code or edits files" value={targetValue(builder)} />
             <OptionMenu ariaLabel="Builder model" onChange={(value) => chooseModel('builder', builder, value)} options={modelOptions('builder', builder)} title="Choose Builder model" value={builder.execution === 'api' ? builder.api?.model ?? '' : builder.model ?? ''} />
           </div>}
@@ -306,20 +310,23 @@ export function GuidedBuildLearnPanel(props: {
         </div>
       )}
 
-      {chatTurns.length > 0 && <div className="guided-build-chat" aria-label="Guided Build conversation">{chatTurns.map(({ turn }, index) => {
-        const visibleText = turn.role === 'assistant' ? visibleGuidedBuildReply(turn.text) : turn.text;
-        return visibleText ? <article className={`guided-build-chat-turn ${turn.role}`} key={turn.id}><strong>{turn.role === 'user' ? 'You' : roleLabelFor(index)}</strong><Markdown text={visibleText} /></article> : null;
-      })}</div>}
+      {chatTurns.length > 0 && <>
+        {chatTurns.map(({ turn }, index) => roleLabelFor(index) === 'Builder' && turn.role === 'assistant' ? <article className="guided-build-chat-turn assistant" aria-label="Builder result" key={turn.id}><strong>Builder result</strong><Markdown text={visibleGuidedBuildReply(turn.text)} /></article> : null)}
+        <details className="guided-build-chat-archive"><summary>Earlier Guided Build conversation</summary><div className="guided-build-chat" aria-label="Saved Guided Build conversation">{chatTurns.map(({ turn }, index) => {
+          const visibleText = turn.role === 'assistant' ? visibleGuidedBuildReply(turn.text) : turn.text;
+          return visibleText ? <article className={`guided-build-chat-turn ${turn.role}`} key={turn.id}><strong>{turn.role === 'user' ? 'You' : roleLabelFor(index)}</strong><Markdown text={visibleText} /></article> : null;
+        })}</div></details>
+      </>}
       {working && <div className="guided-build-working" role="status"><Loader2 size={14} className="spin" /> {currentSpeaker} is {working === 'plan' ? 'planning your steps' : working === 'review' ? 'checking your edit' : working === 'show-code' ? 'preparing code for you to type' : working === 'write-code' ? 'editing the file' : 'answering you'}.</div>}
 
       <Composer className="guided-build-mini-composer">
-        <ComposerInput aria-label="Message the Coach or Builder" placeholder={step ? 'Ask Coach a question or tell Builder what to change…' : 'Describe your idea for Coach…'} value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); askCoach(); } }} />
+        <ComposerInput aria-label={onLeadMessage ? 'Message the Lead or Builder' : 'Message the Coach or Builder'} placeholder={step ? `Ask ${onLeadMessage ? 'Lead' : 'Coach'} a question or tell Builder what to change…` : 'Describe your idea for Coach…'} value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); askCoach(); } }} />
         <ComposerToolbar
           leading={<>
             <UiButton type="button" className="link-button" aria-expanded={composerSettingsOpen} onClick={() => setComposerSettingsOpen((open) => !open)}>Composer settings</UiButton>
             {composerSettingsOpen && <>
-              <OptionMenu ariaLabel="Coach agent" icon={<Sparkles size={12} />} onChange={(value) => chooseTarget('coach', value)} options={options('coach', coach)} title="Choose the Coach that makes plans and answers your questions" value={targetValue(coach)} />
-              <OptionMenu ariaLabel="Coach model" onChange={(value) => chooseModel('coach', coach, value)} options={modelOptions('coach', coach)} title="Choose Coach model" value={coach.execution === 'api' ? coach.api?.model ?? '' : coach.model ?? ''} />
+              {!onLeadMessage && <OptionMenu ariaLabel="Coach agent" icon={<Sparkles size={12} />} onChange={(value) => chooseTarget('coach', value)} options={options('coach', coach)} title="Choose the Coach that makes plans and answers your questions" value={targetValue(coach)} />}
+              {!onLeadMessage && <OptionMenu ariaLabel="Coach model" onChange={(value) => chooseModel('coach', coach, value)} options={modelOptions('coach', coach)} title="Choose Coach model" value={coach.execution === 'api' ? coach.api?.model ?? '' : coach.model ?? ''} />}
               <OptionMenu ariaLabel="Builder agent" icon={<Cpu size={12} />} onChange={(value) => chooseTarget('builder', value)} options={options('builder', builder)} title="Choose the Builder that provides code or edits files" value={targetValue(builder)} />
               <OptionMenu ariaLabel="Builder model" onChange={(value) => chooseModel('builder', builder, value)} options={modelOptions('builder', builder)} title="Choose Builder model" value={builder.execution === 'api' ? builder.api?.model ?? '' : builder.model ?? ''} />
               <OptionMenu ariaLabel="Coach style" onChange={(value) => update({ ...build, style: value as GuidedBuild['style'] })} options={settingsOptions} title="Choose how Coach explains the steps" value={build.style} />
@@ -333,7 +340,7 @@ export function GuidedBuildLearnPanel(props: {
             {build.steps.length > 0 && <UiButton type="button" className="secondary-button" disabled={!message.trim() || Boolean(working)} onClick={() => addIdea()}>Add idea to plan</UiButton>}
             {build.steps.length > 0 && <UiButton type="button" className="secondary-button" disabled={(!message.trim() && !step) || Boolean(working)} onClick={() => sendToBuilder('show-code')}>Show me code</UiButton>}
             {build.steps.length > 0 && <UiButton type="button" className="primary-button" disabled={(!message.trim() && !step) || Boolean(working)} onClick={() => sendToBuilder('write-code')}>Builder, edit the file</UiButton>}
-            <ComposerSend label={build.steps.length ? 'Ask Coach' : 'Create plan with Coach'} title={build.steps.length ? 'Ask Coach a question' : 'Turn your idea into a step-by-step plan'} disabled={!message.trim() || Boolean(working)} onClick={askCoach} />
+            <ComposerSend label={build.steps.length ? (onLeadMessage ? 'Ask Lead' : 'Ask Coach') : 'Create plan with Coach'} title={build.steps.length ? `Ask ${onLeadMessage ? 'Lead' : 'Coach'} a question` : 'Turn your idea into a step-by-step plan'} disabled={!message.trim() || Boolean(working)} onClick={askCoach} />
           </>}
         />
       </Composer>

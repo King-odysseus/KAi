@@ -107,6 +107,7 @@ import {
   studioProjectInputSchema,
   studioArtifactsSchema,
   studioBoardSchema,
+  studioBoardAppendInputSchema,
   boardCardSchema,
   studioUiCheckResultSchema,
   type StudioArtifactInput,
@@ -126,6 +127,7 @@ import {
   type StudioStyleReferences,
   type StudioArtifacts,
   type StudioBoard,
+  type StudioBoardAppendInput,
   type StudioBoardCardInput,
   type StudioBoardClaimInput,
   type StudioBoardMoveInput,
@@ -378,7 +380,7 @@ import {
   type TerminalSession,
 } from './terminal';
 import { planSchema, type Plan } from './plan';
-import { conventionsGetInputSchema, conventionsMuteInputSchema, conventionsReferenceInputSchema, conventionsRuleAddInputSchema, conventionsRuleRemoveInputSchema, designProfileApproveInputSchema, designProfilesGetInputSchema, type ConventionsState, type DesignProfileSummary } from './conventions';
+import { conventionsGetInputSchema, conventionsMuteInputSchema, conventionsReferenceInputSchema, conventionsRuleAddInputSchema, conventionsRuleRemoveInputSchema, designProfileApproveInputSchema, designProfileGenerateInputSchema, designProfilesGetInputSchema, type ConventionsState, type DesignProfileSummary } from './conventions';
 import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewFollowUpInputSchema, crewAcceptPhaseInputSchema, crewPauseAfterInputSchema, crewRevertInputSchema, type CrewRevertPreview, type CrewTaskDiff, crewDecideInputSchema, crewExplainSimplyInputSchema, crewInterviewInputSchema, type CrewInterview, crewKeepGoingInputSchema, crewAwayInputSchema, type CrewAwayPolicy, crewMessageInputSchema, crewStartInputSchema, crewUpdateConfigInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
 import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitBlameInputSchema, type GitBlameResult, type GitChangesResult, todoScanInputSchema, type TodoScanResult, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, gitTeamBranchInputSchema, gitTeamCloneInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
 import { importAddCardsInputSchema, importScanInputSchema, type ImportReport } from './import';
@@ -597,6 +599,7 @@ export const ipcChannels = [
   'conventions:seen',
   'design-profiles:get',
   'design-profiles:approve',
+  'design-profiles:generate',
   'crew:design',
   'team:plan',
   'team:plan-from-parts',
@@ -645,6 +648,7 @@ export const ipcChannels = [
   'studio:artifacts-generate-selected',
   'studio:artifacts-mark-edited',
   'studio:board-read',
+  'studio:board-append',
   'import:scan',
   'import:add-cards',
   'studio:board-plan',
@@ -1042,6 +1046,7 @@ export const ipcInputSchemas = {
   'conventions:seen': emptyInputSchema,
   'design-profiles:get': designProfilesGetInputSchema,
   'design-profiles:approve': designProfileApproveInputSchema,
+  'design-profiles:generate': designProfileGenerateInputSchema,
   'crew:design': crewDesignInputSchema,
   'team:plan': teamPlanInputSchema,
   'team:plan-from-parts': teamPlanFromPartsInputSchema,
@@ -1090,6 +1095,7 @@ export const ipcInputSchemas = {
   'studio:artifacts-generate-selected': studioArtifactsGenerateSelectedInputSchema,
   'studio:artifacts-mark-edited': studioArtifactInputSchema,
   'studio:board-read': studioProjectInputSchema,
+  'studio:board-append': studioBoardAppendInputSchema,
   'import:scan': importScanInputSchema,
   'import:add-cards': importAddCardsInputSchema,
   'studio:board-plan': studioProjectInputSchema,
@@ -1423,6 +1429,7 @@ export const studioProjectSummariesResponseSchema = z.array(studioProjectSummary
 export const studioProjectFolderResponseSchema = studioProjectFolderResultSchema;
 export const studioProjectLaunchResponseSchema = studioProjectLaunchResultSchema;
 export const studioBoardResponseSchema = studioBoardSchema;
+export const studioBoardAppendResponseSchema = z.object({ board: studioBoardSchema, added: z.array(z.string()) }).strict();
 /** A project's task plan, or null when it has none. */
 export const planResponseSchema = planSchema.nullable();
 export const studioBoardCardResponseSchema = boardCardSchema.nullable();
@@ -1716,6 +1723,7 @@ export interface KaiDesktopBridge {
   markStudioArtifactEdited(input: StudioArtifactInput): Promise<IpcResponse<StudioArtifacts>>;
   /** The board of cards built from the stories. */
   studioBoard(projectId: string): Promise<IpcResponse<StudioBoard>>;
+  appendStudioBoardCards(input: StudioBoardAppendInput): Promise<IpcResponse<{ board: StudioBoard; added: string[] }>>;
   /** Rebuilds the board from the artifacts and the design, keeping the work already done. Runs one model call. */
   planStudioBoard(projectId: string): Promise<IpcResponse<StudioBoard>>;
   /**
@@ -1903,6 +1911,7 @@ export interface KaiDesktopBridge {
   onConventionsChanged(listener: (state: ConventionsState) => void): () => void;
   designProfilesState(refresh?: boolean): Promise<IpcResponse<DesignProfileSummary[]>>;
   approveDesignProfile(projectPath: string): Promise<IpcResponse<DesignProfileSummary>>;
+  generateDesignProfile(projectPath: string): Promise<IpcResponse<DesignProfileSummary>>;
   crewDesign(launch?: boolean): Promise<IpcResponse<CrewDesign>>;
   saveWorkflowTemplate(request: WorkflowTemplateSaveInput): Promise<IpcResponse<WorkflowTemplate>>;
   deleteWorkflowTemplate(id: string): Promise<IpcResponse<{ deleted: boolean }>>;

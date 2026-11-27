@@ -61,6 +61,14 @@ export function ConventionsPanel(): ReactNode {
     });
   }
 
+  async function createProfileDraft(profile: DesignProfileSummary): Promise<void> {
+    await act(async () => {
+      const updated = unwrap(await window.kaiDesktop.generateDesignProfile(profile.projectPath));
+      setProfiles((current) => current.map((item) => item.projectPath === updated.projectPath ? updated : item));
+      return { ok: true };
+    });
+  }
+
   if (!state) return <div className="empty-list">{error ?? 'Reading your projects…'}</div>;
   const served = state.items.filter((item) => !item.muted).length;
   const rules = state.items.filter((item) => item.source === 'rule');
@@ -77,15 +85,17 @@ export function ConventionsPanel(): ReactNode {
       <h3 className="crew-subheading"><FileCode2 size={13} /> Project design profiles</h3>
       <small className="crew-empty">KAI reads real component code. A profile stays a draft until you approve it here. Only approved profiles guide UI work.</small>
       {profiles.length === 0
-        ? <small className="crew-empty">No starting projects were found. Open zurilofts, TijhaWebsite or tijhabooks to create a draft.</small>
+        ? <small className="crew-empty">No projects were found yet. Read your projects to see which have reusable UI components.</small>
         : <ul className="crew-spend">
           {profiles.map((profile) => (
             <li key={profile.projectPath}>
               <span>
                 <strong>{profile.projectName}</strong> · {profile.status} · {profile.componentCount} components · score {profile.score}
+                <small className="crew-empty">{profile.components.length ? profile.components.map((component) => `${component.label}: ${component.source} (${component.uses} uses across ${component.projects} projects)`).join(' · ') : 'No reusable components found; KAI will say “none found”.'}</small>
                 {profile.agentsPasteLine && <small className="crew-empty">For repository agents, add this line to AGENTS.md: {profile.agentsPasteLine}</small>}
               </span>
               {profile.status === 'draft' && <UiButton type="button" className="secondary-button" onClick={() => void approveProfile(profile)}><Check size={14} /><span>Approve profile</span></UiButton>}
+              {profile.status === 'missing' && <UiButton type="button" className="secondary-button" onClick={() => void createProfileDraft(profile)}><Plus size={14} /><span>Create draft</span></UiButton>}
             </li>
           ))}
         </ul>}

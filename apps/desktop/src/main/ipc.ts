@@ -121,6 +121,7 @@ import { boardCardSchema, type ImportReport } from '@kai/contracts';
 import type { ExecutionMode } from '@kai/contracts';
 import { BRAIN_TOOLS_GUIDANCE, type BrainAccess } from './brain-tools';
 import { windowedHistory } from './history-tools';
+import { renderConversationHandoff } from './conversation-handoff';
 import { brainMemoryReviewPrompt, type BrainMemoryReviewInput, type BrainMemoryReviewResult } from '@kai/contracts';
 import { compactThresholdFor, modelContextFor, estimateConversationTokens, isLocalProvider } from '@kai/contracts';
 import type { UpdateController } from './updater';
@@ -709,6 +710,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'conventions:seen', async () => context.conventions.markSeen());
   handle(context, 'design-profiles:get', async ({ refresh }) => context.designProfiles.state(refresh));
   handle(context, 'design-profiles:approve', async ({ projectPath }) => context.designProfiles.approve(projectPath));
+  handle(context, 'design-profiles:generate', async ({ projectPath }) => context.designProfiles.generateDraft(projectPath));
   handle(context, 'crew:design', async ({ launch }) => context.crewSupport.design(launch));
   handle(context, 'team:plan', async (input, request) => context.teamPlanner.plan(input, request.ownerWindowId));
   handle(context, 'team:plan-from-parts', async (input) => context.teamPlanner.planFromParts(input));
@@ -788,6 +790,11 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'studio:artifacts-generate-selected', async ({ projectId, kinds }) => context.studio.generateSelected(projectId, kinds));
   handle(context, 'studio:artifacts-mark-edited', async ({ projectId, kind }) => context.studio.markEdited(projectId, kind));
   handle(context, 'studio:board-read', async ({ projectId }) => context.studio.board(projectId));
+  handle(context, 'studio:board-append', async (input) => {
+    const result = await context.studio.addCards(input.projectId, input.cards, input.expectedRevision);
+    announceBoard(context, input.projectId, result.board);
+    return result;
+  });
   handle(context, 'import:scan', async ({ projectId }) => scanProjectForImport(context, projectId));
   handle(context, 'import:add-cards', async ({ projectId, findingIds }) => {
     const report = await scanProjectForImport(context, projectId);
@@ -2018,9 +2025,10 @@ export async function runConversationAgent(
   const runModel = request.apiConnection?.model || request.model || settings.directApi.model;
   const compactAt = compactThresholdFor(settings.usageBudget, runProvider, modelContextFor(settings, runModel));
   const askedToCompact = compactBeforeNextRun.delete(conversation.id);
+  const leadConversationRun = conversation.origin?.kind === 'lead';
   // Said in the conversation when it happens: a fold nobody could see looked exactly like one that never ran.
   let compactionNotice: string | null = null;
-  if (conversation.turns.length > 0 && (askedToCompact || (compactAt > 0 && estimateConversationTokens(conversation) >= compactAt))) {
+  if (!leadConversationRun && conversation.turns.length > 0 && (askedToCompact || (compactAt > 0 && estimateConversationTokens(conversation) >= compactAt))) {
     try {
       const before = estimateConversationTokens(conversation);
       Object.assign(conversation, await compactConversation(context, conversation.id));
@@ -2361,7 +2369,7 @@ ${BRAIN_TOOLS_GUIDANCE}`
   // A route/agent switch starts a fresh CLI session. Carry enough transcript
   // forward that the new provider treats this as a continuation, not a new task.
   if (executionMode === 'cli' && !canResume) {
-    const handoff = renderConversationHandoff(conversation.turns.slice(0, -1));
+    const handoff = renderConversationHandoff(conversation.turns.slice(0, -1), leadConversationRun);
     if (handoff) effectivePrompt = `${handoff}\n\n${effectivePrompt}`;
   }
   if (executionMode === 'cli' && contextText) {
@@ -2421,7 +2429,7 @@ ${BRAIN_TOOLS_GUIDANCE}`
   const stepOnly = executionMode === 'api' && Boolean(request.splitRole) && historyTurns.length > 0;
   // A local model is slowed by every token it is sent, so it is given the recent turns that fit a budget and reads the
   // rest with read_history. The budget is a share of the size it compacts at, since that is what it can comfortably hold.
-  const windowBudget = executionMode === 'api' && !request.splitRole && runProvider && isLocalProvider(runProvider)
+  const windowBudget = !leadConversationRun && executionMode === 'api' && !request.splitRole && runProvider && isLocalProvider(runProvider)
     ? Math.max(2_000, Math.floor(compactThresholdFor(settings.usageBudget, runProvider, modelContextFor(settings, runModel)) * 0.4))
     : 0;
   const apiHistory = stepOnly
@@ -2516,7 +2524,7 @@ ${BRAIN_TOOLS_GUIDANCE}`
         undefined,
         coachRepoMapMaxCharacters,
       );
-      const handoff = renderConversationHandoff(conversation.turns.slice(0, -1));
+      const handoff = renderConversationHandoff(conversation.turns.slice(0, -1), leadConversationRun);
       const promptBody = planNote ? `${planNote}\n\n${promptWithoutProjectContext}` : promptWithoutProjectContext;
       const freshPrompt = `${handoff ? `${handoff}\n\n` : ''}${freshContext.text}\n\n[USER REQUEST]\n${promptBody}`;
       const freshRequest = { ...executionRequest, prompt: freshPrompt };
@@ -3166,12 +3174,6 @@ async function buildConversationContext(
     ...withKnowledge,
     text: `${withKnowledge.text}\n\n${renderCompactionContext(compaction)}`,
   };
-}
-
-function renderConversationHandoff(turns: readonly ConversationRecord['turns'][number][]): string {
-  const lines = turns.slice(-12).map((turn) => `${turn.role === 'user' ? 'User' : 'KAi'}: ${turn.text}`).join('\n\n');
-  if (!lines) return '';
-  return `# Conversation handoff\nYou are continuing an existing conversation after the user changed agent, route, or provider. Preserve the prior intent, decisions, and context; do not ask them to repeat it.\n\n${lines.slice(-60_000)}`;
 }
 
 function fullAccessExecutionBriefing(executionMode: ExecutionMode, terminalTools = false): string {

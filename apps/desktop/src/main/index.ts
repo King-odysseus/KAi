@@ -1066,7 +1066,6 @@ async function startApplication(): Promise<void> {
   ipcContext.conventions = conventionService;
   conventionService.start();
   ipcContext.designProfiles = designProfileService;
-  void designProfileService.state(true).catch((error) => ipcContext?.logger.warn('internal', 'Could not build project design profiles', messageOf(error)));
   // Saved crew defaults, and a look at Open Pencil for the Design tab.
   crewSupport = new CrewSupport(path.join(paths.root, 'crew-defaults.json'), fileSystem, {
     designStatus: () => crewDesignStatus(),
@@ -1101,6 +1100,7 @@ async function startApplication(): Promise<void> {
       await recordVerification(ipcContext!.verification, project.id, project.path, check).catch(() => undefined);
       return { passed: check.exitCode === 0, output: check.output };
     },
+    suggestCheck: async (projectId) => suggestTestCommand(await projectRootFor(projectId)),
     save: (run) => crewStore.save(run),
     load: (id) => crewStore.get(id),
     list: (projectId) => crewStore.list(projectId),

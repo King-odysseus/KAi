@@ -3,7 +3,12 @@ import { Dialog } from './components/ui/Dialog';
 import { isCrewConversation } from './crew-conversation';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction } from 'react';
 import { startingTargets } from './model-team';
-import { LOCAL_BUILDER_ROUNDS, briefFromLaunchPrompt, describeRole, type GuidedRunOverride } from './components/guided-build-engine';
+import { LOCAL_BUILDER_ROUNDS, briefFromLaunchPrompt, describeRole, leadCoachPrompt, mergePlanProgress, stepModelChoices, type GuidedRunOverride } from './components/guided-build-engine';
+import { buildLeadModelInventory, hasLocalBuilderRun, shouldConfirmLeadDraftReplacement, stableLeadTargetIdentity, targetFromLeadStorage } from './components/lead-model-selection';
+import { buildLeadRequestText, isLeadUiRequest, LEAD_DESIGN_FILES, LEAD_SPEC_FILES } from './components/lead-project-context';
+import { isLeadIdeaRequest, leadIdeaCoachPrompt, type LeadIdeaProposal } from './components/lead-idea-proposal';
+import { appendMarkdownEntry, leadIdeaFileChanges, leadProposalGuidedSteps, lineContentDiff } from './components/lead-idea-files';
+import { LEAD_IDEA_CODE_SCAN_MAX_BYTES, leadIdeaScanCandidates, rankRelevantLeadIdeaCode } from './components/lead-idea-code-search';
 import type {
   AgentCapability,
   AgentTeam,
@@ -35,7 +40,7 @@ import type {
   PlaywrightViewportStatus,
   TeamPlanDraft,
 } from '@kai/contracts';
-import { compactThresholdFor, modelContextFor, experienceProfile, CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, helperChoiceSchema, responseStyleSchema, effortFitsAgent, modelBelongsToOtherAgent, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily, architectSplitActive, type ThemeMode } from '@kai/contracts';
+import { compactThresholdFor, modelContextFor, experienceProfile, CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, helperChoiceSchema, responseStyleSchema, effortFitsAgent, modelBelongsToOtherAgent, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily, architectSplitActive, boardCardSchema, type ThemeMode } from '@kai/contracts';
 import { StatusBar } from './components/StatusBar';
 import { applyColorOverrides, loadColorOverrides } from './custom-colors';
 import { applyAppearance, clampScale, loadAppearance, saveAppearance, type Appearance } from './appearance';
@@ -260,6 +265,8 @@ function loadComposerSelections(windowId?: number): Record<string, ComposerSelec
 export function App(): ReactNode {
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
+  const [selectedLeadChats, setSelectedLeadChats] = useState<Record<string, string>>({});
+  const [leadBuilderModes, setLeadBuilderModes] = useState<Record<string, boolean>>({});
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   // The tabs that were open when KAI was last closed come back with it, not only the one that was active.
   const [openConversationIds, setOpenConversationIds] = useState<string[]>([]);
@@ -287,6 +294,8 @@ export function App(): ReactNode {
   const [selectedAutonomy, setSelectedAutonomy] = useState<AutonomyMode>('ask');
   // KAI opens on the screen it was closed on.
   const [view, setView] = usePersistentChoice<ViewId>('kai.view', 'workspace', navigation.map((item) => item.id));
+  const [selectLeadNonce, setSelectLeadNonce] = useState(0);
+  const [leadStudioHandoffProjectId, setLeadStudioHandoffProjectId] = useState<string | null>(null);
   // The Studio stays mounted once it has been opened, hidden rather than torn down when another screen is shown. A
   // design build runs inside it, and leaving it used to cancel the build: a trip to the composer, or anywhere else,
   // ended a run that was drawing, and coming back found it idle. The Code view is kept the same way.
@@ -362,7 +371,7 @@ export function App(): ReactNode {
   });
   const [contextWidth, setContextWidth] = useState(() => {
     try {
-      return clamp(Number(window.localStorage.getItem('kai.contextWidth')) || 286, 230, 560);
+      return clamp(Number(window.localStorage.getItem('kai.contextWidth')) || 286, 300, 760);
     } catch {
       return 286;
     }
@@ -415,6 +424,8 @@ export function App(): ReactNode {
   const [agentNotice, setAgentNotice] = useState<string | null>(null);
   const [proxyContinuationAgent, setProxyContinuationAgent] = useState<AgentId | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [leadErrors, setLeadErrors] = useState<Record<string, string>>({});
+  const leadIdeaSnapshots = useRef(new Map<string, Record<string, { hash: string; content: string; eol: 'lf' | 'crlf'; bom: boolean } | null>>());
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutSheetOpen, setShortcutSheetOpen] = useState(false);
   const [workspaceCommand, setWorkspaceCommand] = useState<WorkspaceCommandRequest | null>(null);
@@ -425,10 +436,11 @@ export function App(): ReactNode {
   const runningConversationIdsRef = useRef<string[]>([]);
   const shortcutsRef = useRef(bootstrap?.settings.shortcuts ?? {});
   const shortcutSheetOpenRef = useRef(false);
-  const pendingApproval = pendingApprovals.find((approval) => approval.conversationId === activeConversationId && !approval.options)
-    ?? pendingApprovals.find((approval) => !approval.options)
+  const globalPendingApprovals = pendingApprovals.filter((approval) => !conversations.some((conversation) => conversation.id === approval.conversationId && conversation.origin?.kind === 'lead'));
+  const pendingApproval = globalPendingApprovals.find((approval) => approval.conversationId === activeConversationId && !approval.options)
+    ?? globalPendingApprovals.find((approval) => !approval.options)
     ?? null;
-  const activeQuestion = pendingApprovals.find((approval) => approval.conversationId === activeConversationId && approval.options !== undefined);
+  const activeQuestion = globalPendingApprovals.find((approval) => approval.conversationId === activeConversationId && approval.options !== undefined);
   runningConversationIdsRef.current = runningConversationIds;
   shortcutsRef.current = bootstrap?.settings.shortcuts ?? {};
   shortcutSheetOpenRef.current = shortcutSheetOpen;
@@ -459,10 +471,21 @@ export function App(): ReactNode {
     setWorkspaceFilePath(null);
   }
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
+  const leadConversations = activeProject ? conversations
+    .filter((conversation) => conversation.origin?.kind === 'lead' && conversation.origin.projectId === activeProject.id)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) : [];
+  const leadConversation = activeProject
+    ? leadConversations.find((conversation) => conversation.id === (selectedLeadChats[activeProject.id] ?? (() => {
+      try { return window.localStorage.getItem(`kai.lead.chat.${activeProject.id}`); } catch { return null; }
+    })())) ?? leadConversations[0] ?? null
+    : null;
+  const leadBuilderEnabled = activeProject ? leadBuilderModes[activeProject.id] ?? (() => {
+    try { return window.localStorage.getItem(`kai.lead-builder.${activeProject.id}`) !== 'false'; } catch { return true; }
+  })() : true;
   // A side conversation is reached only from the side-question panel on the conversation it was asked from, never
   // from the ordinary thread list or history — it would otherwise read as a second, unexplained conversation.
   // A crew's work log belongs to the Crew screen, so it is left out of the thread list and history as well as the tabs.
-  const visibleConversations = conversations.filter((conversation) => !conversation.sideOf && !isCrewConversation(conversation));
+  const visibleConversations = conversations.filter((conversation) => !conversation.sideOf && conversation.origin?.kind !== 'lead' && !isCrewConversation(conversation));
   const activeRunning = Boolean(activeConversationId && runningConversationIds.includes(activeConversationId));
   useEffect(() => {
     const build = activeConversation?.guidedBuild;
@@ -488,7 +511,7 @@ export function App(): ReactNode {
   const openConversations = openConversationIds
     .map((id) => conversations.find((conversation) => conversation.id === id))
     // A crew's log shows as a tab only while it is the one being read; it never sits in the bar once left.
-    .filter((conversation): conversation is ConversationRecord => conversation !== undefined && conversation.projectId === activeProject?.id && (!isCrewConversation(conversation) || conversation.id === activeConversationId));
+    .filter((conversation): conversation is ConversationRecord => conversation !== undefined && conversation.projectId === activeProject?.id && conversation.origin?.kind !== 'lead' && (!isCrewConversation(conversation) || conversation.id === activeConversationId));
   // BrowserWindows share localStorage, so both saved values and new-chat keys are window scoped.
   const windowId = bootstrap?.windowId;
   const activeDraftKey = activeConversationId ?? `__new__:${windowId ?? 'boot'}:${activeProject?.id ?? 'none'}`;
@@ -502,12 +525,62 @@ export function App(): ReactNode {
   // agent's leftover and the model remembered for this agent is shown instead.
   const selectionFits = activeComposerSelection?.agent === selectedAgent && activeComposerSelection?.execution === executionMode;
   const selectedWorkspaceModel = modelFor(selectedAgent, executionMode, selectionFits ? activeComposerSelection?.model : modelChoices[`${executionMode}:${selectedAgent}`]);
+  const leadSavedCoach = bootstrap
+    ? (activeConversation?.projectId === activeProject?.id ? activeConversation?.guidedBuild?.coachTarget : null)
+      ?? startingTargets(bootstrap.settings).coach
+    : null;
+  const leadModelInventory = bootstrap ? buildLeadModelInventory({
+    settings: bootstrap.settings,
+    credentialIds: credentials.ids,
+    agents: agentCapabilities,
+    directApiStatus: directApiCapability ? { provider: directApiCapability.provider, available: directApiCapability.available, reason: directApiCapability.unavailableReason } : null,
+    savedCoach: leadSavedCoach,
+  }) : { apiProviders: [], cliAgents: [] };
+  const leadComposerTarget: RoleTarget | null = bootstrap
+    ? executionMode === 'api'
+      ? { execution: 'api', api: {
+        provider: bootstrap.settings.directApi.provider,
+        credentialId: bootstrap.settings.directApi.credentialId,
+        baseUrl: bootstrap.settings.directApi.baseUrl,
+        ...(selectedWorkspaceModel ? { model: selectedWorkspaceModel } : {}),
+      } }
+      : { execution: 'cli', agent: selectedAgent, ...(selectedWorkspaceModel ? { model: selectedWorkspaceModel } : {}) }
+    : null;
   const selectedWorkspaceStyle: ResponseStyle = activeComposerSelection?.style ?? loadDefaultResponseStyle();
   const selectedWorkspaceHelpers: HelperChoice = activeComposerSelection?.helpers ?? loadDefaultHelperChoice();
   const selectedWorkspaceReasoning = reasoningFor(selectedAgent, executionMode, selectionFits ? activeComposerSelection?.reasoning : '');
   const updateComposerDraft = useCallback((value: string) => {
     setComposerDrafts((current) => current[activeDraftKey] === value ? current : { ...current, [activeDraftKey]: value });
   }, [activeDraftKey]);
+  async function sendLeadTaskToBuilder(task: string): Promise<void> {
+    if (!activeProject || !leadBuilderEnabled) return;
+    if (shouldConfirmLeadDraftReplacement(composerDrafts[activeDraftKey] ?? '', task) && !(await confirmDialog({
+      title: 'Replace the Builder draft?', detail: 'The composer already has a draft. Replace it with this task from the Lead?', confirmLabel: 'Replace draft',
+    }))) return;
+    updateComposerDraft(task);
+    setView('workspace');
+    window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Task prompt"]')?.focus(), 0);
+  }
+  async function createLeadChat(): Promise<void> {
+    if (!activeProject) return;
+    const fresh = await perform(() => window.kaiDesktop.createConversation(activeProject.id, '').then(unwrap), 'Opening a new Lead chat');
+    if (!fresh) return;
+    const saved = await perform(() => window.kaiDesktop.saveConversation({ ...fresh, title: 'Lead', origin: { kind: 'lead', projectId: activeProject.id } }).then(unwrap));
+    if (!saved) return;
+    setConversations((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+    setSelectedLeadChats((current) => ({ ...current, [activeProject.id]: saved.id }));
+    try { window.localStorage.setItem(`kai.lead.chat.${activeProject.id}`, saved.id); } catch { /* The current selection remains in memory. */ }
+  }
+  function selectLeadChat(id: string): void {
+    if (!activeProject) return;
+    setSelectedLeadChats((current) => ({ ...current, [activeProject.id]: id }));
+    try { window.localStorage.setItem(`kai.lead.chat.${activeProject.id}`, id); } catch { /* The current selection remains in memory. */ }
+  }
+  function setLeadBuilderEnabled(enabled: boolean): void {
+    if (!activeProject) return;
+    setLeadBuilderModes((current) => ({ ...current, [activeProject.id]: enabled }));
+    try { window.localStorage.setItem(`kai.lead-builder.${activeProject.id}`, String(enabled)); } catch { /* The current window still remembers the choice. */ }
+  }
   const setComposerContextField = <K extends keyof ComposerContextDraft>(key: K, update: SetStateAction<ComposerContextDraft[K]>): void => {
     setComposerContexts((current) => {
       const draft = current[activeContextKey] ?? emptyComposerContext;
@@ -594,7 +667,7 @@ export function App(): ReactNode {
   // would look like a deleted one and be forgotten.
   useEffect(() => {
     if (!bootstrap || conversations.length === 0) return;
-    const projectConversations = conversations.filter((conversation) => conversation.projectId === bootstrap.activeProjectId);
+    const projectConversations = conversations.filter((conversation) => conversation.projectId === bootstrap.activeProjectId && conversation.origin?.kind !== 'lead');
     writeOpenTabs(window.localStorage, liveOpenTabs(openConversationIds, projectConversations, activeConversationId), bootstrap.activeProjectId, bootstrap.windowId);
   }, [openConversationIds, conversations, activeConversationId, bootstrap?.activeProjectId]);
 
@@ -1240,7 +1313,7 @@ export function App(): ReactNode {
   }
 
   function restoreProjectTabs(projectId: string | null, activeId: string | null): void {
-    const projectConversations = conversations.filter((conversation) => conversation.projectId === projectId);
+    const projectConversations = conversations.filter((conversation) => conversation.projectId === projectId && conversation.origin?.kind !== 'lead');
     setOpenConversationIds(liveOpenTabs(
       readOpenTabs(window.localStorage, projectId, bootstrap?.windowId),
       projectConversations,
@@ -1339,10 +1412,11 @@ export function App(): ReactNode {
     const coachSide = mode === 'coach' || mode === 'plan' || mode === 'review';
     const team = bootstrap ? startingTargets(bootstrap.settings) : { coach: null, builder: null };
     const savedBuilder = build.builderTarget ?? team.builder ?? fallback;
-    const saved = coachSide ? build.coachTarget ?? team.coach ?? fallback : savedBuilder;
+    const sharedLeadTarget = coachSide ? storedLeadTarget(activeProject.id) : null;
+    const saved = coachSide ? sharedLeadTarget ?? build.coachTarget ?? team.coach ?? fallback : savedBuilder;
     // A one-run choice (the "With..." menu, or a retry on the stronger model) is used for this run and never saved.
     const target = override?.target ?? saved;
-    const state = { ...build, enabled: true, builderTarget: savedBuilder, coachTarget: build.coachTarget ?? team.coach ?? fallback };
+    const state = { ...build, enabled: true, builderTarget: savedBuilder, coachTarget: sharedLeadTarget ?? build.coachTarget ?? team.coach ?? fallback };
     const prepared = { ...conversation, guidedBuild: state, updatedAt: new Date().toISOString() };
     await saveConversationRecord(prepared);
     const displayText = (mode === 'review' ? 'Coach: check my edit' : mode === 'show-code' ? `Builder: show code${userMessage ? ` for ${userMessage}` : ''}` : mode === 'write-code' ? `Builder: implement ${userMessage || 'this step'}` : `Coach: ${userMessage || (mode === 'plan' ? 'make my coding plan' : 'answer my question')}`).slice(0, 500);
@@ -1375,6 +1449,7 @@ export function App(): ReactNode {
     if (!launch) return false;
     const next = await openProject(launch.projectId, 'stay');
     if (!next) return false;
+    if (destination === 'composer') setLeadStudioHandoffProjectId(launch.projectId);
     if (destination === 'editor') {
       setView('code');
       return true;
@@ -1461,6 +1536,13 @@ export function App(): ReactNode {
     }
     setWorkspaceCommand({ kind: 'prompt', nonce: Date.now(), prompt: launch.prompt });
     setView('workspace');
+    return true;
+  }
+
+  async function startStudioInWorkspace(studioProjectId: string, title: string): Promise<boolean> {
+    if (!(await openStudioProject(studioProjectId, 'composer', title))) return false;
+    setView('workspace');
+    setSelectLeadNonce((value) => value + 1);
     return true;
   }
 
@@ -1673,6 +1755,10 @@ export function App(): ReactNode {
     options: WorkspaceSendOptions & { agent?: AgentId; execution?: ExecutionMode; route?: RouteMode; autonomy?: AutonomyMode; model?: string; clientMessageId?: string } = {},
   ): Promise<void> {
     if (!bootstrap) return;
+    const reportRunError = (message: string): void => {
+      if (conversation.origin?.kind === 'lead') setLeadErrors((current) => ({ ...current, [conversation.id]: message }));
+      else setError(message);
+    };
     const runAgentId = options.agent ?? selectedAgent;
     const runExecution = options.execution ?? executionMode;
     const runAutonomy = options.autonomy ?? selectedAutonomy;
@@ -1683,15 +1769,15 @@ export function App(): ReactNode {
     // The proxy supplies its own key, so a signed-out CLI can still run through it.
     const proxyWithoutAccount = runRoute === 'proxy' && capability?.state === 'signed_out';
     if (!apiRun && !capability?.available && !proxyWithoutAccount) {
-      setError(capability?.unavailableReason ?? `${runAgentId} CLI is not available.`);
+      reportRunError(capability?.unavailableReason ?? `${runAgentId} CLI is not available.`);
       return;
     }
     if (runRoute === 'proxy' && serviceFor(bootstrap, 'universalProxy').status !== 'ready') {
-      setError('Start Universal Proxy before running an agent through its proxy route.');
+      reportRunError('Start Universal Proxy before running an agent through its proxy route.');
       return;
     }
     if (apiRun && !options.apiConnection && !directApiCapability?.available) {
-      setError(directApiCapability?.unavailableReason ?? 'Direct API mode is not available.');
+      reportRunError(directApiCapability?.unavailableReason ?? 'Direct API mode is not available.');
       return;
     }
 
@@ -1717,7 +1803,7 @@ export function App(): ReactNode {
     // never blocks the message: the run simply goes ahead with the full history.
     const runModel = options.model || directApiCapability?.model || '';
     const compactAt = compactThresholdFor(bootstrap.settings.usageBudget, apiRun ? directApiCapability?.provider : null, modelContextFor(bootstrap.settings, runModel));
-    if (compactAt > 0 && estimateConversationTokens(conversation) >= compactAt) {
+    if (conversation.origin?.kind !== 'lead' && compactAt > 0 && estimateConversationTokens(conversation) >= compactAt) {
       setAgentNotice('This conversation has grown long, so KAI is summarising the older turns first.');
       const compacted = await window.kaiDesktop.compactConversation(conversation.id).then(unwrap).catch(() => null);
       if (compacted) {
@@ -1789,12 +1875,14 @@ export function App(): ReactNode {
           setAgentNotice(`${capability.displayName}'s usage limit on your subscription was reached. Continue this run through your paid Universal Proxy route instead?`);
         } else {
           setFailedConversationIds((current) => current.includes(conversation.id) ? current : [...current, conversation.id]);
-          if (conversation.id === activeConversationIdRef.current) setError(result.error);
+          if (conversation.origin?.kind === 'lead') reportRunError(result.error);
+          else if (conversation.id === activeConversationIdRef.current) setError(result.error);
         }
       }
     } catch (caught) {
       setFailedConversationIds((current) => current.includes(conversation.id) ? current : [...current, conversation.id]);
-      if (conversation.id === activeConversationIdRef.current) setError(messageOf(caught));
+      if (conversation.origin?.kind === 'lead') reportRunError(messageOf(caught));
+      else if (conversation.id === activeConversationIdRef.current) setError(messageOf(caught));
     } finally {
       // Only if this run still owns the conversation. A run stopped from outside may return long after the one
       // that replaced it has started, and clearing here would take down state that is no longer this run's.
@@ -1878,8 +1966,7 @@ export function App(): ReactNode {
     };
   }
 
-  async function cancelConversation(): Promise<void> {
-    const conversationId = activeConversationId;
+  async function cancelConversation(conversationId: string | null = activeConversationId): Promise<void> {
     // Not "is a turn running": Stop is also drawn for a run that is paused, waiting on a question, or parked by Auto
     // for the person, and in those states there is no turn in flight. Asking for one made Stop do nothing exactly
     // when the person most needed it.
@@ -1890,10 +1977,12 @@ export function App(): ReactNode {
     // whole loop has unwound, and a Stop that waits on that never ends the run when the loop is waiting itself.
     // A conversation with no Auto session simply has nothing to stop, so a refusal here is not worth reporting.
     const stoppingAuto = window.kaiDesktop.stopAuto({ conversationId }).catch(() => undefined);
-    const cancelled = await perform(
-      () => window.kaiDesktop.cancelAgent(conversationId).then(unwrap),
-      'Stopping agent',
-    );
+    const isLead = conversations.some((conversation) => conversation.id === conversationId && conversation.origin?.kind === 'lead');
+    let cancelled: boolean | null;
+    if (isLead) {
+      try { cancelled = await window.kaiDesktop.cancelAgent(conversationId).then(unwrap); }
+      catch (caught) { setLeadErrors((current) => ({ ...current, [conversationId]: messageOf(caught) })); return; }
+    } else cancelled = await perform(() => window.kaiDesktop.cancelAgent(conversationId).then(unwrap), 'Stopping agent');
     // Auto is given a moment to finish unwinding, then left to finish on its own.
     await Promise.race([stoppingAuto, new Promise<void>((resolve) => { window.setTimeout(resolve, AUTO_STOP_WAIT_MS); })]);
     // A failed call already reported itself; the run may still be alive, so nothing is cleared.
@@ -2049,22 +2138,23 @@ export function App(): ReactNode {
       updateComposerSelection({ autonomy: 'full' });
       setAgentNotice('Full access is selected for this conversation’s next run.');
     }
-    setPendingApprovals((current) => current.filter((item) => item.requestId !== approval.requestId));
-    await perform(
-      () => window.kaiDesktop.respondToApproval({
+    const response = () => window.kaiDesktop.respondToApproval({
         conversationId: approval.conversationId,
         requestId: approval.requestId,
         approved,
         ...(answer ? { answer } : {}),
-      }).then(unwrap),
-      // Answering a question about the run is not approving a change to the project, and saying so would name the
-      // wrong thing in the one place the person looks to check what their click did.
-      approval.options
+      }).then(unwrap);
+    if (conversations.some((conversation) => conversation.id === approval.conversationId && conversation.origin?.kind === 'lead')) {
+      try { await response(); }
+      catch (caught) { setLeadErrors((current) => ({ ...current, [approval.conversationId]: messageOf(caught) })); return; }
+    } else {
+      await perform(response, approval.options
         ? (answer ? `Answered: ${answer}` : 'Declined to answer')
         : approval.runQuestion
           ? (approved ? 'Continuing the run' : 'Finishing the run')
-          : (approved ? 'Approving project change' : 'Denying project change'),
-    );
+          : (approved ? 'Approving project change' : 'Denying project change'));
+    }
+    setPendingApprovals((current) => current.filter((item) => item.requestId !== approval.requestId));
   }
 
   async function refreshAgentCapabilities(): Promise<void> {
@@ -2409,6 +2499,230 @@ export function App(): ReactNode {
     });
   }
 
+  async function askLead(question: string, target: RoleTarget, openFileContext?: { path: string; content: string }): Promise<void> {
+    if (!bootstrap || !activeProject || !question.trim()) return;
+    const builderRunActive = hasLocalBuilderRun({
+      conversations,
+      runningConversationIds,
+      targetForConversation: (id) => {
+        const conversation = conversations.find((item) => item.id === id);
+        if (conversation?.guidedBuild?.builderTarget) return conversation.guidedBuild.builderTarget;
+        const selected = composerSelections[id];
+        if (selected) return selected.execution === 'api'
+          ? { execution: 'api', api: { provider: bootstrap.settings.directApi.provider, credentialId: bootstrap.settings.directApi.credentialId, baseUrl: bootstrap.settings.directApi.baseUrl, model: selected.model } }
+          : { execution: 'cli', agent: selected.agent, model: selected.model };
+        return conversation?.execution === 'api'
+          ? { execution: 'api', api: { provider: bootstrap.settings.directApi.provider, credentialId: bootstrap.settings.directApi.credentialId, baseUrl: bootstrap.settings.directApi.baseUrl, model: bootstrap.settings.directApi.model } }
+          : conversation?.activeAgent ? { execution: 'cli', agent: conversation.activeAgent } : null;
+      },
+    });
+    if (builderRunActive && !(await confirmDialog({
+      title: 'The Builder is still running',
+      detail: 'A local Builder is still running in a conversation. Asking another local model may slow it down. Send the message anyway?',
+      confirmLabel: 'Ask the Lead',
+    }))) return;
+
+    let lead = leadConversation?.projectId === activeProject.id ? leadConversation : null;
+    if (!lead) {
+      const fresh = await perform(() => window.kaiDesktop.createConversation(activeProject.id, '').then(unwrap), 'Opening the Lead chat');
+      if (!fresh) return;
+      const saved = await perform(() => window.kaiDesktop.saveConversation({ ...fresh, title: 'Lead', origin: { kind: 'lead', projectId: activeProject.id } }).then(unwrap));
+      if (!saved) return;
+      lead = saved;
+      setConversations((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      selectLeadChat(saved.id);
+    }
+    const guided = activeConversation?.guidedBuild;
+    const isStudioHandoff = leadStudioHandoffProjectId === activeProject.id;
+    const includeProjectOrientation = isStudioHandoff || !lead.turns.length;
+    const ideaFlow = isLeadIdeaRequest(question);
+    const pathsToRead = isLeadUiRequest(question) ? [...LEAD_SPEC_FILES, ...LEAD_DESIGN_FILES] : [...LEAD_SPEC_FILES];
+    const handoffReads = await Promise.allSettled(pathsToRead.map((path) => window.kaiDesktop.readProjectFile(activeProject.id, path).then(unwrap)));
+    const readFiles = [...new Map(handoffReads.flatMap((result) => result.status === 'fulfilled' ? [[result.value.path.toLowerCase(), result.value] as const] : [])).values()];
+    const hasStudioBoard = readFiles.some((file) => file.path === '.kai/spec/board.json');
+    const specFiles = readFiles
+      .filter((file) => hasStudioBoard || file.path !== '.kai/spec/plan.md')
+      .map(({ path, content }) => ({ path, content }));
+    const codeFiles: Array<{ path: string; content: string }> = [];
+    const codeSearchNotes: string[] = [];
+    if (openFileContext && !ideaFlow) codeFiles.push({ path: openFileContext.path, content: openFileContext.content });
+    if (ideaFlow) {
+      const tree = await window.kaiDesktop.projectFileTree(activeProject.id).then(unwrap).catch(() => null);
+      const scanned: Array<{ path: string; size: number; content: string }> = openFileContext
+        ? [{ path: openFileContext.path, size: new TextEncoder().encode(openFileContext.content).length, content: openFileContext.content }]
+        : [];
+      if (tree) {
+        const candidates = tree.files
+          .filter(({ path }) => /\.(?:ts|tsx|js|jsx|py|go|rs|cs|java|rb|php|vue|svelte)$/i.test(path)
+            && !/(?:node_modules|vendor|dist|build|\.git|\.next)\//i.test(path)
+            && !/(?:^|\/)(?:\.env|.*secret.*|.*credential.*|package-lock|pnpm-lock|yarn\.lock)/i.test(path))
+          .filter((file) => !openFileContext || file.path.toLowerCase() !== openFileContext.path.toLowerCase());
+        const scanCandidates = leadIdeaScanCandidates(question, candidates);
+        let remainingBytes = LEAD_IDEA_CODE_SCAN_MAX_BYTES;
+        for (const file of scanCandidates) {
+          if (file.size > remainingBytes) continue;
+          remainingBytes -= file.size;
+          const result = await window.kaiDesktop.readProjectFile(activeProject.id, file.path).then(unwrap).catch(() => null);
+          if (result && new TextEncoder().encode(result.content).length <= file.size + 1024) scanned.push({ path: file.path, size: file.size, content: result.content });
+        }
+      }
+      const relevant = rankRelevantLeadIdeaCode(question, scanned);
+      relevant.forEach(({ path, content }) => codeFiles.push({ path, content }));
+      if (!relevant.length) codeSearchNotes.push('No relevant code files were found for this idea after a bounded search of project file contents.');
+    }
+    if (ideaFlow) {
+      const protectedPaths = ['.kai/spec/ideas.md', '.kai/spec/decisions.md', '.kai/spec/brief.md', hasStudioBoard ? '.kai/spec/board.json' : '.kai/spec/plan.md'];
+      const snapshot: Record<string, { hash: string; content: string; eol: 'lf' | 'crlf'; bom: boolean } | null> = {};
+      for (const path of protectedPaths) {
+        const file = readFiles.find((item) => item.path === path);
+        snapshot[path] = file ? { hash: file.hash, content: file.content, eol: file.eol, bom: file.bom } : null;
+      }
+      leadIdeaSnapshots.current.set(activeProject.id, snapshot);
+      try { window.localStorage.setItem(`kai.lead.idea-snapshot.${activeProject.id}`, JSON.stringify(snapshot)); } catch { /* In-memory safety snapshot remains available for this session. */ }
+    }
+    const requestText = buildLeadRequestText({
+      question,
+      specFiles,
+      openFiles: codeFiles,
+      contextNotes: codeSearchNotes,
+      includeProjectOrientation,
+      style: guided?.style ?? 'tutor',
+      detail: guided?.detail ?? 'step-by-step',
+      questions: guided?.questions ?? 'blocked',
+      leadCoachPrompt: ideaFlow
+        ? (message, style, detail, questions) => leadIdeaCoachPrompt({
+          idea: message,
+          planTitle: guided?.planTitle || (hasStudioBoard ? 'Studio board plan' : 'Project plan'),
+          steps: guided?.steps ?? [],
+          style,
+          detail,
+          questions,
+        })
+        : leadCoachPrompt,
+    });
+    if (isStudioHandoff) setLeadStudioHandoffProjectId(null);
+    await runConversation(lead, requestText.prompt, {
+      agent: target.execution === 'cli' ? target.agent ?? selectedAgent : selectedAgent,
+      execution: target.execution,
+      route: 'direct',
+      autonomy: 'plan',
+      ...(target.execution === 'api' && target.api ? { apiConnection: target.api } : {}),
+      ...(target.execution === 'api' ? target.api?.model ? { model: target.api.model } : {} : target.model ? { model: target.model } : {}),
+      displayText: requestText.displayText,
+    });
+  }
+
+  async function reviewLeadIdea(proposal: LeadIdeaProposal, choice: 'approve' | 'park'): Promise<void> {
+    if (!activeProject) return;
+    const projectId = activeProject.id;
+    let snapshot = leadIdeaSnapshots.current.get(projectId);
+    if (!snapshot) {
+      try {
+        const raw = window.localStorage.getItem(`kai.lead.idea-snapshot.${projectId}`);
+        if (raw) snapshot = JSON.parse(raw) as typeof snapshot;
+      } catch { /* The proposal cannot be safely written without its baseline. */ }
+    }
+    if (!snapshot) {
+      setError('This proposal has no saved file snapshot. Ask the Lead to prepare it again before approving.');
+      return;
+    }
+    const planSource = snapshot['.kai/spec/board.json'] ? 'studio-board' : 'plan-file';
+    const changes = leadIdeaFileChanges(proposal, choice, planSource);
+    const paths = [...new Set([...changes.map((change) => change.path), ...(planSource === 'studio-board' ? ['.kai/spec/board.json'] : [])])];
+    const reads = await Promise.allSettled(paths.map((path) => window.kaiDesktop.readProjectFile(projectId, path).then(unwrap)));
+    const current: Record<string, { hash: string; content: string; eol: 'lf' | 'crlf'; bom: boolean } | null> = {};
+    paths.forEach((path, index) => {
+      const result = reads[index];
+      current[path] = result?.status === 'fulfilled'
+        ? { hash: result.value.hash, content: result.value.content, eol: result.value.eol, bom: result.value.bom }
+        : null;
+    });
+    const changed = paths.filter((path) => (snapshot![path]?.hash ?? null) !== (current[path]?.hash ?? null));
+    if (changed.length) {
+      const diff = changed.map((path) => `File: ${path}\n${lineContentDiff(snapshot![path]?.content ?? '', current[path]?.content ?? '')}`).join('\n\n');
+      const confirmed = await confirmDialog({
+        title: 'Project files changed since this proposal',
+        detail: `Review these edits before continuing. KAI will append the proposal to the current files and will not replace their contents.\n\n${diff}\n\nContinue with the proposal against these updated files?`,
+        confirmLabel: 'Review changes and continue',
+      });
+      if (!confirmed) return;
+      snapshot = { ...snapshot, ...Object.fromEntries(changed.map((path) => [path, current[path]])) };
+      leadIdeaSnapshots.current.set(projectId, snapshot);
+      try { window.localStorage.setItem(`kai.lead.idea-snapshot.${projectId}`, JSON.stringify(snapshot)); } catch { /* Keep the refreshed baseline for this session. */ }
+    }
+
+    try {
+      if (planSource === 'studio-board' && choice === 'approve') {
+        const boardFile = current['.kai/spec/board.json'];
+        if (!boardFile) throw new Error('The Studio board is no longer available. Reload it and review the proposal again.');
+        const board = JSON.parse(boardFile.content) as { revision?: unknown };
+        if (typeof board.revision !== 'number' || !Number.isInteger(board.revision)) throw new Error('The Studio board revision is invalid. No files were changed.');
+        const timestamp = new Date().toISOString();
+        const ids = proposal.steps.map(() => `lead_idea_${crypto.randomUUID()}`);
+        const cards = proposal.steps.map((step, index) => boardCardSchema.parse({
+          id: ids[index],
+          title: step.title,
+          kind: step.filesToEdit.some((path) => /\.(?:tsx|jsx|vue|svelte|css|scss)$/i.test(path)) ? 'component' : 'chore',
+          story: step.instructions,
+          acceptance: [...step.doneChecks, `Check command passes: ${step.checkCommand}`],
+          prompt: `${step.instructions}\nFiles to edit: ${step.filesToEdit.join(', ')}${step.filesToRead.length ? `\nFiles to read: ${step.filesToRead.join(', ')}` : ''}\nCheck command: ${step.checkCommand}`,
+          dependsOn: index > 0 ? [ids[index - 1]] : [],
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }));
+        await window.kaiDesktop.appendStudioBoardCards({ projectId, expectedRevision: board.revision, cards }).then(unwrap);
+      }
+      for (const change of changes) {
+        if (change.path === '.kai/spec/board.json') continue;
+        const file = current[change.path];
+        const content = appendMarkdownEntry(file?.content ?? '', change.addition);
+        await window.kaiDesktop.writeProjectFile({
+          projectId,
+          path: change.path,
+          content,
+          expectedHash: file?.hash ?? null,
+          eol: file?.eol ?? 'lf',
+          bom: file?.bom ?? false,
+        }).then(unwrap);
+      }
+      if (choice === 'approve' && activeConversation?.projectId === projectId && activeConversation.guidedBuild) {
+        const previous = activeConversation.guidedBuild;
+        const merged = mergePlanProgress(leadProposalGuidedSteps(proposal), previous.steps);
+        await saveConversationRecord({ ...activeConversation, guidedBuild: { ...previous, planTitle: proposal.planTitle, steps: merged.steps, currentStep: merged.currentStep } });
+      }
+      leadIdeaSnapshots.current.delete(projectId);
+      try { window.localStorage.removeItem(`kai.lead.idea-snapshot.${projectId}`); } catch { /* Session memory already cleared. */ }
+      setAgentNotice(choice === 'park' ? 'Idea saved to .kai/spec/ideas.md.' : 'Approved idea saved; the plan is updated.');
+    } catch (caught) {
+      const leadId = conversations.find((item) => item.origin?.kind === 'lead' && item.origin.projectId === projectId)?.id;
+      const message = messageOf(caught);
+      if (leadId) setLeadErrors((existing) => ({ ...existing, [leadId]: message }));
+      else setError(message);
+    }
+  }
+
+  function storedLeadTarget(projectId: string): RoleTarget | null {
+    let target: RoleTarget | null = null;
+    try {
+      const raw = window.localStorage.getItem(`kai.lead.selection.${projectId}`);
+      const saved = raw ? JSON.parse(raw) as { identity?: unknown; target?: unknown } : null;
+      const storedTarget = saved?.target ? targetFromLeadStorage(JSON.stringify(saved.target)) : null;
+      if (storedTarget && saved?.identity === stableLeadTargetIdentity(storedTarget)) target = storedTarget;
+    } catch { /* A damaged saved choice falls back to the saved Coach. */ }
+    return target;
+  }
+
+  function askLeadWithSavedChoice(question: string, openFileContext?: { path: string; content: string }): void {
+    if (!activeProject) return;
+    const target = storedLeadTarget(activeProject.id) ?? leadSavedCoach;
+    if (!target) {
+      setError('Choose a Lead model in the Lead panel before asking a teaching question.');
+      setView('code');
+      return;
+    }
+    void askLead(question, target, openFileContext);
+  }
+
   async function importBrain(): Promise<void> {
     const result = await perform(
       () => window.kaiDesktop.importBrain().then(unwrap),
@@ -2545,7 +2859,7 @@ export function App(): ReactNode {
     if (!origin) return;
     const delta = event.clientX - origin.x;
     if (origin.kind === 'sidebar') setSidebarWidth(clamp(origin.width + delta, 190, 480));
-    else if (origin.kind === 'context') setContextWidth(clamp(origin.width - delta, 230, 560));
+    else if (origin.kind === 'context') setContextWidth(clamp(origin.width - delta, 300, 760));
     else setPreviewWidth(clamp(origin.width - delta, 340, 760));
   }
 
@@ -2562,8 +2876,8 @@ export function App(): ReactNode {
     event.preventDefault();
     const step = event.shiftKey ? 32 : 12;
     const current = kind === 'sidebar' ? sidebarWidth : kind === 'context' ? contextWidth : previewWidth;
-    const minimum = kind === 'sidebar' ? 190 : kind === 'context' ? 230 : 340;
-    const maximum = kind === 'sidebar' ? 480 : kind === 'context' ? 560 : 760;
+    const minimum = kind === 'sidebar' ? 190 : kind === 'context' ? 300 : 340;
+    const maximum = kind === 'sidebar' ? 480 : kind === 'context' ? 760 : 760;
     let next = current;
     if (event.key === 'Home') next = minimum;
     else if (event.key === 'End') next = maximum;
@@ -2718,6 +3032,8 @@ export function App(): ReactNode {
           <MarkdownProjectContext.Provider value={markdownProject}>
             <WorkspaceView
               activeProject={activeProject}
+              leadBuilderEnabled={leadBuilderEnabled}
+              onLeadBuilderEnabledChange={setLeadBuilderEnabled}
               activeConversation={activeConversation}
               settings={bootstrap.settings}
               projectPreferences={projectPreferences}
@@ -3046,7 +3362,7 @@ export function App(): ReactNode {
                   windowId={windowId}
                   onOpenSettings={() => setView('settings')}
                   onLaunchProject={openStudioProject}
-                  onStartGuidedBuild={(studioProjectId, title) => openStudioProject(studioProjectId, 'composer', title)}
+                  onStartGuidedBuild={startStudioInWorkspace}
                   onPlanForTeam={(plan) => { setIncomingTeamPlan(plan); setView('workflows'); }}
                   onOpenConversation={(conversationId) => void openLinkedRunConversation(conversationId)}
                   onLearnCard={async (card, studioProjectId) => {
@@ -3069,10 +3385,32 @@ export function App(): ReactNode {
                 editorView={bootstrap.settings.editor}
                 onOpenSettings={() => setView('settings')}
                 onCreateReviewFollowup={(prompt) => { updateComposerDraft(prompt); setView('workspace'); }}
+                onLeadMessage={(question, fileContext) => askLeadWithSavedChoice(question, fileContext)}
                 learnRequest={codeLearnRequest}
                 openRequest={codeOpenRequest}
                 guidedBuild={activeConversation?.guidedBuild ?? null}
                 conversation={activeConversation?.projectId === activeProject?.id ? activeConversation : null}
+                leadPanelProps={{
+                  projectId: activeProject?.id ?? null,
+                  conversation: leadConversation,
+                  conversations: leadConversations,
+                  builderEnabled: leadBuilderEnabled,
+                  onSelectConversation: selectLeadChat,
+                  onNewConversation: () => { void createLeadChat(); },
+                  streamingText: leadConversation ? streamingTextByConversation[leadConversation.id] ?? '' : '',
+                  running: Boolean(leadConversation && runningConversationIds.includes(leadConversation.id)),
+                  error: leadConversation ? leadErrors[leadConversation.id] ?? null : null,
+                  approvals: pendingApprovals.filter((item) => item.conversationId === leadConversation?.id),
+                  inventory: leadModelInventory,
+                  savedCoach: leadSavedCoach,
+                  composerTarget: leadComposerTarget,
+                  onAsk: (question, target, fileContext) => { void askLead(question, target, fileContext); },
+                  onStop: () => { if (leadConversation) void cancelConversation(leadConversation.id); },
+                  onClearError: () => { if (leadConversation) setLeadErrors((current) => { const next = { ...current }; delete next[leadConversation.id]; return next; }); },
+                  onRespondApproval: (requestId, approved, answer) => { void respondToApproval(approved, false, answer, requestId); },
+                  onSendToBuilder: (task) => { void sendLeadTaskToBuilder(task); },
+                  onReviewIdea: (proposal, choice) => { void reviewLeadIdea(proposal, choice); },
+                }}
                 agentCapabilities={agentCapabilities}
                 selectedAgent={selectedAgent}
                 onUpdateGuidedBuild={(build) => { void updateGuidedBuildFromCode(build); }}
@@ -3117,8 +3455,8 @@ export function App(): ReactNode {
               role="separator"
               aria-label="Resize context panel"
               aria-orientation="vertical"
-              aria-valuemin={230}
-              aria-valuemax={560}
+              aria-valuemin={300}
+              aria-valuemax={760}
               aria-valuenow={Math.round(contextWidth)}
               tabIndex={0}
               onPointerDown={(event) => beginResize('context', event)}
@@ -3135,6 +3473,25 @@ export function App(): ReactNode {
                 services={bootstrap.services}
                 contextPreview={contextPreview}
                 contextPreviewLoading={contextPreviewLoading}
+                selectLeadNonce={selectLeadNonce}
+                leadConversation={leadConversation}
+                leadConversations={leadConversations}
+                leadBuilderEnabled={leadBuilderEnabled}
+                onSelectLeadChat={selectLeadChat}
+                onNewLeadChat={() => { void createLeadChat(); }}
+                leadStreamingText={leadConversation ? streamingTextByConversation[leadConversation.id] ?? '' : ''}
+                leadRunning={Boolean(leadConversation && runningConversationIds.includes(leadConversation.id))}
+                leadError={leadConversation ? leadErrors[leadConversation.id] ?? null : null}
+                leadApprovals={pendingApprovals.filter((item) => item.conversationId === leadConversation?.id)}
+                leadModelInventory={leadModelInventory}
+                leadSavedCoach={leadSavedCoach}
+                leadComposerTarget={leadComposerTarget}
+                onAskLead={(question, target, fileContext) => { void askLead(question, target, fileContext); }}
+                onStopLead={() => { if (leadConversation) void cancelConversation(leadConversation.id); }}
+                onClearLeadError={() => { if (leadConversation) setLeadErrors((current) => { const next = { ...current }; delete next[leadConversation.id]; return next; }); }}
+                onRespondLeadApproval={(requestId, approved, answer) => { void respondToApproval(approved, false, answer, requestId); }}
+                onSendToBuilder={(task) => { void sendLeadTaskToBuilder(task); }}
+                onReviewLeadIdea={(proposal, choice) => { void reviewLeadIdea(proposal, choice); }}
               />
             </div>
           </>

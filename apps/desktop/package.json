@@ -1,8 +1,9 @@
 {
   "name": "@kai/desktop",
-  "version": "1.2.42",
+  "version": "1.2.43",
   "private": true,
   "type": "module",
+  "author": "King-odysseus",
   "description": "KAI standalone desktop workbench",
   "main": "out/main/index.cjs",
   "scripts": {
@@ -18,7 +19,7 @@
     "stage:engines": "node scripts/stage-engines.mjs",
     "package": "npm run stage:engines && npm run build && electron-builder --win --dir",
     "install:local": "node scripts/install-local.mjs",
-    "dist": "npm run stage:engines && npm run build && electron-builder --win nsis"
+    "dist": "npm run stage:engines && npm run build && electron-builder --win"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.1.1",
@@ -108,7 +109,8 @@
     "win": {
       "artifactName": "${productName}-Setup-${version}.${ext}",
       "target": [
-        "nsis"
+        "nsis",
+        "msi"
       ],
       "icon": "build/icon.ico",
       "signAndEditExecutable": true

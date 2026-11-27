@@ -218,7 +218,8 @@ const STYLE_EXT = new Set(['.css', '.scss', '.sass', '.less']);
 const MARKUP_EXT = new Set(['.tsx', '.jsx', '.vue', '.svelte', '.html', '.astro']);
 const SKIP = new Set(['node_modules', '.git', 'dist', 'out', 'build', '.next', '.venv', 'venv', '__pycache__', 'vendor', 'release', 'coverage', '.tmp', 'themes.generated.css']);
 const MAX_FILES = 1_500;
-const MAX_BYTES = 120_000;
+// Large project stylesheets can exceed the former cap; leave room to read them in full.
+const MAX_BYTES = 300_000;
 const MAX_DEPTH = 6;
 
 /** Reads a project folder's stylesheets and markup into facts. Never writes, and never reads past a size limit. */

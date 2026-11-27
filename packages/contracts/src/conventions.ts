@@ -40,6 +40,14 @@ export const designProfileSummarySchema = z.object({
   projectPath: z.string().min(1).max(1_000),
   status: z.enum(['missing', 'draft', 'approved', 'user-owned']),
   componentCount: z.number().int().min(0).max(4),
+  components: z.array(z.object({
+    key: z.enum(['button', 'card', 'field', 'page-header']),
+    label: z.string().min(1).max(80),
+    source: z.string().min(1).max(1_000),
+    uses: z.number().int().min(0),
+    projects: z.number().int().min(0),
+    score: z.number().min(0),
+  }).strict()).max(4).default([]),
   score: z.number().min(0),
   updatedAt: timestampSchema.nullable(),
   agentsPasteLine: z.string().max(300).nullable(),
@@ -48,6 +56,7 @@ export type DesignProfileSummary = z.infer<typeof designProfileSummarySchema>;
 
 export const designProfilesGetInputSchema = z.object({ refresh: z.boolean().optional().default(false) }).strict();
 export const designProfileApproveInputSchema = z.object({ projectPath: z.string().min(1).max(1_000) }).strict();
+export const designProfileGenerateInputSchema = z.object({ projectPath: z.string().min(1).max(1_000) }).strict();
 
 export const conventionsStateSchema = z
   .object({
