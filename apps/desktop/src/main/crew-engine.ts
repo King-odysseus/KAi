@@ -834,6 +834,7 @@ export function taskBrief(run: CrewRun, taskId: string, conventions = ''): strin
     boardSummary(run),
     '',
     writes ? 'You may change files. Keep the change to this task, run the relevant checks, and report the files you changed.' : 'Do not change any files. Report what you found.',
+    ...(writes ? ['', 'Builder checklist for this task:', '- Check ownership and authorization before changing or exposing data.', '- Check input size limits before reading or parsing user-controlled input.', '- Keep secrets and personal data out of logs and reports.', '- After any wait, recheck that this task and project session are still active.', '- Add or update tests for every new behavior.', '- For every acceptance criterion, report the concrete file, command, or observed result that proves it. If you cannot verify one, say so clearly.', ...(run.config.checkCommand ? [`- Run the project check command: ${run.config.checkCommand}`] : ['- No project check command is available; report the work as unverified.'])] : []),
     'For anything that shows on screen, check it yourself in the running app with the browser tools (the playwright tools) rather than asking the person to look.',
     ...(writes && !run.config.commitWork ? ['Do not run git commit or git push, and do not stage files. Leave your changes uncommitted: the person reviews them and commits when the phase is done.'] : []),
   ].join('\n');

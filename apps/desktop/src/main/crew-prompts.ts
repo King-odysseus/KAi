@@ -69,6 +69,7 @@ export function planPrompt(goal: string, config: CrewConfig, conventions: string
     '- Small enough for one agent to finish in one sitting. Prefer 5 to 14 tasks.',
     ...(localBuilders.length ? ['- For tasks assigned to a local builder, keep each card to one concrete code change, one or two files, and 1 to 3 acceptance checks. Split bigger work into dependency-ordered cards; Crew checks and reviews each card before accepting it.'] : []),
     '- Each task has 1 to 5 acceptance criteria that can be checked by reading the code or running a command.',
+    '- Every build task names the exact files it will change in its description. Split a task that needs more than 3 files or more than one independent behavior into small dependency-ordered tasks.',
     '- Never write a criterion only the person can meet (their approval, their sign-off, "every change is one they approved"). The crew cannot satisfy it, so the task would stop and wait. Put what needs their yes under "approvals" instead, and write the criterion as something the crew can check.',
     '- "dependsOn" lists task ids that must be accepted first. Use it only where order truly matters.',
     '- Give code tasks to a role that writes code. Never give a task to a read-only role.',
@@ -76,7 +77,7 @@ export function planPrompt(goal: string, config: CrewConfig, conventions: string
     '- If the plan or the project rules say something needs the person\'s approval before it is built (a new package or dependency, a paid service, deleting data), do NOT assume they approved it. List it under "approvals" with a plain one-line explanation of what it is and why it is wanted, written for someone who is not very technical. Leave "approvals" empty when nothing needs approval.',
     '',
     'Reply shape:',
-    '{"tasks":[{"id":"short-kebab-id","title":"...","role":"builder","description":"...","acceptance":["..."],"dependsOn":[],"designRef":null,"phase":null}],"approvals":[{"what":"zod","why":"A small library that checks the messages inside the app are well-formed."}]}',
+    '{"tasks":[{"id":"short-kebab-id","title":"...","role":"builder","description":"Change only: src/file.ts; ...","acceptance":["..."],"dependsOn":[],"designRef":null,"phase":null}],"approvals":[{"what":"zod","why":"A small library that checks the messages inside the app are well-formed."}]}',
   ].join('\n');
 }
 

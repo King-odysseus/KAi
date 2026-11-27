@@ -51,6 +51,7 @@ function fixture(script: Script = {}, patch: Partial<CrewConfig> = {}) {
         ({ conversation: {} as never, status, output, ...(error ? { error } : {}), costUsd: cost });
       if (request.prompt.includes('You are the Lead of a small crew')) return reply(pick(script.plan, plans++, PLAN));
       if (request.prompt.includes('You are the security reviewer')) return reply(pick(script.security, securities++, '{"verdict":"accept"}'));
+      if (request.prompt.includes('You are the reviewer.')) return reply('{"verdict":"accept"}');
       if (request.prompt.includes('You are the tester.')) return reply('{"verdict":"accept"}');
       if (request.prompt.includes('You are the auditor.')) return reply('{"verdict":"accept"}');
       if (request.prompt.includes('You are the Lead. Check this finished task')) return reply(pick(script.lead, leads++, '{"verdict":"accept"}'));
@@ -93,7 +94,7 @@ describe('crew runner', () => {
     const prompt = planPrompt('Build a booking flow', localConfig, '', { tasks: [] });
     expect(prompt).toContain('small local model; assign only focused microtasks');
     expect(prompt).toContain('dependency-ordered cards');
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: localConfig }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: localConfig }, 1);
     const run = await runToIdle(f.runner, started.id);
     const builder = f.requests.find((request) => request.displayText === 'Build: Log schema');
     expect(builder?.toolRoundLimit).toBe(30);
@@ -109,7 +110,7 @@ describe('crew runner', () => {
         ? { ...role, execution: 'api', api: { provider: 'ollama', model: 'qwen3-coder' } }
         : role),
     });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: localConfig }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: localConfig }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(f.requests.some((request) => request.prompt.includes('A task has failed or been sent back too many times'))).toBe(true);
     // The local builder gets two attempts per card; the third goes to the stronger model, which finishes it.
@@ -129,7 +130,7 @@ describe('crew runner', () => {
         ? { ...role, execution: 'api', api: { provider: 'ollama', model: 'qwen3-coder' } }
         : role),
     });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: localConfig }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: localConfig }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(f.requests.some((request) => request.prompt.includes('A task has failed or been sent back too many times'))).toBe(true);
     expect(run.status).toBe('needsYou');
@@ -147,7 +148,7 @@ describe('crew runner', () => {
 
     it('keeps a card local for its first attempts, then lets the stronger model take that card only', async () => {
       const f = fixture({ lead: sendBacks, plan: [JSON.stringify({ tasks: [{ id: 'schema', title: 'Log schema', role: 'builder', description: 'Tables', acceptance: ['Migrations run'], dependsOn: [] }, { id: 'ingest', title: 'Ingestion endpoint', role: 'builder', description: 'POST /logs', acceptance: ['Rate limit 100/min'], dependsOn: ['schema'] }] })] });
-      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: localBuilder(f.config) }, 1);
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: localBuilder(f.config) }, 1);
       const run = await runToIdle(f.runner, started.id);
       const schemaBuilds = f.requests.filter((request) => request.displayText === 'Build: Log schema');
       expect(schemaBuilds).toHaveLength(3);
@@ -164,7 +165,7 @@ describe('crew runner', () => {
 
     it('stays on the local model when local first is turned off', async () => {
       const f = fixture({ lead: sendBacks });
-      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: localBuilder(f.config, { localFirst: false }) }, 1);
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: localBuilder(f.config, { localFirst: false }) }, 1);
       const run = await runToIdle(f.runner, started.id);
       const builds = f.requests.filter((request) => request.displayText === 'Build: Log schema');
       expect(builds).toHaveLength(3);
@@ -174,7 +175,7 @@ describe('crew runner', () => {
 
     it('waits one more attempt when the crew is set to allow three on the local model', async () => {
       const f = fixture({ lead: [...sendBacks.slice(0, 2), '{"verdict":"sendBack","feedback":"The seed data is missing."}', '{"verdict":"accept"}'] }, { limits: { ...createDefaultCrewConfig('claude', 'codex').limits, maxSendBacks: 5 } });
-      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: localBuilder(f.config, { escalateAfter: 3 }) }, 1);
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: localBuilder(f.config, { escalateAfter: 3 }) }, 1);
       await runToIdle(f.runner, started.id);
       const builds = f.requests.filter((request) => request.displayText === 'Build: Log schema');
       expect(builds.map((request) => request.execution)).toEqual(['api', 'api', 'api', 'cli']);
@@ -192,7 +193,7 @@ describe('crew runner', () => {
       const f = fixture({ plan: [cardPlan] });
       const asked: string[][] = [];
       f.ports.excerpts = async (_project, paths) => { asked.push([...paths]); return paths.map((path) => ({ path, text: `// contents of ${path}`, cut: false })); };
-      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: withLocalBuilder(f.config) }, 1);
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: withLocalBuilder(f.config) }, 1);
       await runToIdle(f.runner, started.id);
       expect(asked[0]).toEqual(['src/db/schema.ts', 'package.json']);
       const build = f.requests.find((request) => request.displayText === 'Build: Log schema');
@@ -204,7 +205,7 @@ describe('crew runner', () => {
       const f = fixture({ plan: [cardPlan] });
       let reads = 0;
       f.ports.excerpts = async () => { reads += 1; return []; };
-      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
       await runToIdle(f.runner, started.id);
       expect(reads).toBe(0);
     });
@@ -212,7 +213,7 @@ describe('crew runner', () => {
     it('still builds when the files cannot be read', async () => {
       const f = fixture({ plan: [cardPlan] });
       f.ports.excerpts = async () => { throw new Error('disk gone'); };
-      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: withLocalBuilder(f.config) }, 1);
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: withLocalBuilder(f.config) }, 1);
       const run = await runToIdle(f.runner, started.id);
       expect(run.tasks[0]?.status).toBe('accepted');
       expect(f.requests.find((request) => request.displayText === 'Build: Log schema')?.prompt).not.toContain('Code this card names');
@@ -223,7 +224,7 @@ describe('crew runner', () => {
     it('sends the task back without paying for another review when nothing in the project changed', async () => {
       const f = fixture({ lead: ['{"verdict":"sendBack","feedback":"The schema misses an index."}', '{"verdict":"accept"}'] });
       f.ports.fingerprint = async () => 'same-tree';
-      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
       const run = await runToIdle(f.runner, started.id);
       const leadReviews = f.requests.filter((request) => request.prompt.includes('You are the Lead. Check this finished task'));
       // One real review of the first task; every later hand-in of identical work was sent back unpaid.
@@ -237,7 +238,7 @@ describe('crew runner', () => {
       const f = fixture({ lead: ['{"verdict":"sendBack","feedback":"The schema misses an index."}', '{"verdict":"accept"}'] });
       let build = 0;
       f.ports.fingerprint = async () => `tree-${build++}`;
-      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
       const run = await runToIdle(f.runner, started.id);
       expect(run.tasks.map((task) => task.status)).toEqual(['accepted', 'accepted']);
     });
@@ -245,7 +246,7 @@ describe('crew runner', () => {
     it('does nothing when the setting is off', async () => {
       const f = fixture({ lead: ['{"verdict":"sendBack","feedback":"The schema misses an index."}', '{"verdict":"accept"}'] }, { savings: { ...createDefaultCrewConfig('claude', 'codex').savings, skipUnchangedReview: false } });
       f.ports.fingerprint = async () => 'same-tree';
-      const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+      const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
       const run = await runToIdle(f.runner, started.id);
       expect(run.tasks.map((task) => task.status)).toEqual(['accepted', 'accepted']);
     });
@@ -263,7 +264,7 @@ describe('crew runner', () => {
 
   it('plans, builds each task, has the Lead accept it, and finishes when the board says so', async () => {
     const f = fixture();
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('completed');
     expect(run.tasks.map((task) => task.status)).toEqual(['accepted', 'accepted']);
@@ -377,7 +378,7 @@ describe('crew runner', () => {
 
   it('waits for approval of the plan when asked to, then runs on its own', async () => {
     const f = fixture({}, { approvePlan: true });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const waiting = await runToIdle(f.runner, started.id);
     expect(waiting.status).toBe('awaitingApproval');
     expect(waiting.tasks).toHaveLength(2);
@@ -390,7 +391,7 @@ describe('crew runner', () => {
     const base = createDefaultCrewConfig('claude', 'codex');
     const roles = base.roles.map((role) => (role.id === 'builder' ? { ...role, execution: 'api' as const, model: 'gpt-5.6-sol' } : role));
     const f = fixture({}, { roles, autonomy: 'full' });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     await runToIdle(f.runner, started.id);
     const build = f.requests.find((request) => request.prompt.startsWith('Project goal:'))!;
     expect(build).toMatchObject({ agent: 'codex', execution: 'api', autonomy: 'full', model: 'gpt-5.6-sol', freshSession: true });
@@ -407,7 +408,7 @@ describe('crew runner', () => {
       access: 'read' as const, subAgents: { max: 0 }, instructions: '',
     });
     const f = fixture({}, { roles: [...base.roles, role('tester', 'tester', 'Tester'), role('auditor', 'auditor', 'Auditor')] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
 
     expect(run.status).toBe('completed');
@@ -423,7 +424,7 @@ describe('crew runner', () => {
   it('turns a role\'s sub-agent count into the composer\'s helper setting', async () => {
     expect([0, 1, 2, 3, 5, 9].map(helperChoiceFor)).toEqual(['off', '2', '3', '4', '6', '8']);
     const f = fixture();
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     await runToIdle(f.runner, started.id);
     // The default planner may use 2 sub-agents (3 agents in all); security uses none.
     expect(f.requests.find((request) => request.prompt.includes('Lead of a small crew'))?.helpers).toBe('3');
@@ -432,7 +433,7 @@ describe('crew runner', () => {
 
   it('sends work back to the builder with the Lead\'s feedback, then accepts the fix', async () => {
     const f = fixture({ lead: ['{"verdict":"sendBack","feedback":"No rate limit (AC-1)."}', '{"verdict":"accept"}'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('completed');
     const first = run.tasks.find((task) => task.id === 'schema')!;
@@ -444,14 +445,14 @@ describe('crew runner', () => {
 
   it('stops and asks when the same problem comes back, instead of looping', async () => {
     const f = fixture({ lead: ['{"verdict":"sendBack","feedback":"No rate limit."}'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('needsYou');
     expect(run.ask?.reason).toBe('sameFailure');
     expect(run.tasks.find((task) => task.id === 'ingest')?.status).toBe('backlog');
     // The user gives guidance and the crew carries on to the end.
     const f2 = fixture({ lead: ['{"verdict":"sendBack","feedback":"No rate limit."}', '{"verdict":"sendBack","feedback":"no rate limit"}', '{"verdict":"accept"}'] });
-    const second = await f2.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f2.config }, 1);
+    const second = await f2.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f2.config }, 1);
     expect((await runToIdle(f2.runner, second.id)).status).toBe('needsYou');
     await f2.runner.answer(second.id, 'continue', 'Put it in middleware.', 1);
     const finished = await runToIdle(f2.runner, second.id);
@@ -463,7 +464,7 @@ describe('crew runner', () => {
       lead: ['{"verdict":"sendBack","feedback":"No rate limit."}', '{"verdict":"sendBack","feedback":"no rate limit"}', '{"verdict":"accept"}'],
       stuck: ['{"decision":"retry","guidance":"Put the limit in middleware."}'],
     });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('completed');
     expect(run.feed.some((entry) => entry.who === 'lead' && entry.text.includes('a different way'))).toBe(true);
@@ -471,7 +472,7 @@ describe('crew runner', () => {
 
   it('lets the Lead skip a task that keeps crashing, and finishes the rest', async () => {
     const f = fixture({ buildFails: 99, stuck: ['{"decision":"skip","reason":"Not needed for the goal."}'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).not.toBe('needsYou');
     expect(run.tasks.every((task) => task.status === 'skipped')).toBe(true);
@@ -479,10 +480,10 @@ describe('crew runner', () => {
 
   it('asks the user when the Lead says the question is theirs, or when its answer cannot be read', async () => {
     const asked = fixture({ lead: ['{"verdict":"sendBack","feedback":"No rate limit."}'], stuck: ['{"decision":"ask","reason":"Needs a key."}'] });
-    const one = await asked.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: asked.config }, 1);
+    const one = await asked.runner.start({ projectId: 'p1', goal: 'Build sample log', config: asked.config }, 1);
     expect((await runToIdle(asked.runner, one.id)).ask?.reason).toBe('sameFailure');
     const unreadable = fixture({ lead: ['{"verdict":"sendBack","feedback":"No rate limit."}'], stuck: ['I would try again.'] });
-    const two = await unreadable.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: unreadable.config }, 1);
+    const two = await unreadable.runner.start({ projectId: 'p1', goal: 'Build sample log', config: unreadable.config }, 1);
     expect((await runToIdle(unreadable.runner, two.id)).ask?.reason).toBe('sameFailure');
   });
 
@@ -491,7 +492,7 @@ describe('crew runner', () => {
       lead: ['{"verdict":"sendBack","feedback":"No rate limit."}'],
       stuck: ['{"decision":"ask","reason":"Two valid designs.","options":["Use middleware for the limit.","Use a per-route decorator.","  "]}'],
     });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.ask?.options).toEqual(['Use middleware for the limit.', 'Use a per-route decorator.']);
     expect(run.ask?.message).toContain('Two valid designs.');
@@ -505,7 +506,7 @@ describe('crew runner', () => {
       lead: ['{"verdict":"sendBack","feedback":"No rate limit."}', '{"verdict":"sendBack","feedback":"no rate limit"}', '{"verdict":"accept"}'],
       stuck: ['{"decision":"retry","guidance":"Put the limit in middleware.","lesson":"The repo lint rejects default exports; use named exports."}'],
     });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.goal).toContain('The repo lint rejects default exports');
   });
@@ -516,7 +517,7 @@ describe('crew runner', () => {
       approvals: [{ what: 'zod', why: 'A small library that checks the messages inside the app are well-formed.' }],
     });
     const f = fixture({ plan: [withApproval] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const held = await runToIdle(f.runner, started.id);
     expect(held.status).toBe('needsYou');
     expect(held.ask?.reason).toBe('approval');
@@ -541,7 +542,7 @@ describe('crew runner', () => {
       approvals: [{ what: 'ZOD', why: 'Checks messages.' }],
     });
     const f = fixture({ plan: [withApproval, again] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const held = await runToIdle(f.runner, started.id);
     await f.runner.decide(started.id, held.approvals[0]!.id, false, 1);
     const done = await runToIdle(f.runner, started.id);
@@ -555,7 +556,7 @@ describe('crew runner', () => {
 
   it('finds what is left in the plan on request, without changing the board', async () => {
     const f = fixture({ coverage: ['{"complete":true}', '{"complete":false,"remaining":["Phase 1: Shell","Phase 2: Providers"]}'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const before = await runToIdle(f.runner, started.id);
     expect(before.remaining).toEqual([]);
     const found = await f.runner.findPhases(started.id, 1);
@@ -567,7 +568,7 @@ describe('crew runner', () => {
 
   it('writes the Lead\'s answers for someone who is not very technical when asked to, and not otherwise', async () => {
     const f = fixture({ answer: 'Done.' });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     await runToIdle(f.runner, started.id);
     await f.runner.message(started.id, 'ask', 'What is done?', 1);
     expect(f.requests.at(-1)?.prompt).toContain('not very technical');
@@ -579,7 +580,7 @@ describe('crew runner', () => {
 
   it('says what is left instead of claiming the project is done, when the plan has more phases', async () => {
     const f = fixture({ coverage: ['{"complete":false,"remaining":["Phase 1: Shell and gating","Phase 2: Provider layer"]}'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('completed');
     expect(run.remaining).toEqual(['Phase 1: Shell and gating', 'Phase 2: Provider layer']);
@@ -595,7 +596,7 @@ describe('crew runner', () => {
       plan: [PLAN, nextPlan],
       coverage: ['{"complete":false,"remaining":["Phase 1: Shell"]}', '{"complete":true}'],
     });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: { ...f.config } }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: { ...f.config } }, 1);
     await f.runner.setKeepGoing(started.id, true, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('completed');
@@ -607,7 +608,7 @@ describe('crew runner', () => {
 
   it('answers a question from the Chat tab without changing the board', async () => {
     const f = fixture({ answer: 'Phase 0 is finished; Phase 1 has not started.' });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const before = await runToIdle(f.runner, started.id);
     const after = await f.runner.message(started.id, 'ask', 'What is done so far?', 1);
     expect(after.tasks).toEqual(before.tasks);
@@ -618,7 +619,7 @@ describe('crew runner', () => {
 
   it('stops an answer in progress, cancels only that answer\'s conversation, and keeps the question', async () => {
     const f = fixture();
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const finished = await runToIdle(f.runner, started.id);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -647,7 +648,7 @@ describe('crew runner', () => {
 
   it('keeps a steer for a working crew, and refuses it on a finished one', async () => {
     const f = fixture({ lead: ['{"verdict":"sendBack","feedback":"No rate limit."}'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const waiting = await runToIdle(f.runner, started.id);
     expect(waiting.status).toBe('needsYou');
     const steered = await f.runner.message(started.id, 'steer', 'Use middleware for the limit.', 1);
@@ -659,7 +660,7 @@ describe('crew runner', () => {
   it('turns a steer on a finished crew into what it plans next', async () => {
     const more = JSON.stringify({ tasks: [{ id: 'dark', title: 'Dark mode', role: 'builder', description: 'Add it', acceptance: ['Dark mode works'], dependsOn: [] }] });
     const g = fixture({ plan: [PLAN, more] });
-    const done = await g.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: g.config }, 1);
+    const done = await g.runner.start({ projectId: 'p1', goal: 'Build sample log', config: g.config }, 1);
     await runToIdle(g.runner, done.id);
     await g.runner.message(done.id, 'steer', 'Add a dark mode.', 1);
     const run = await runToIdle(g.runner, done.id);
@@ -670,7 +671,7 @@ describe('crew runner', () => {
   it('gets past a commit hook that rejects a word by telling every agent, without spending retries or asking the person', async () => {
     const hook = 'git commit failed: \u001b[0;31m[BLOCKED]\u001b[0m Self-tagging detected: \'copilot\' Commit blocked.';
     const f = fixture({ buildFails: 1, buildError: hook });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('completed');
     expect(run.knownBlockers).toEqual(['selftag:copilot']);
@@ -686,7 +687,7 @@ describe('crew runner', () => {
   it('still stops and asks when the same hook keeps blocking after the instruction was given', async () => {
     const hook = 'git commit failed: [BLOCKED] Self-tagging detected: \'copilot\' Commit blocked.';
     const f = fixture({ buildFails: 99, buildError: hook });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('needsYou');
     expect(run.ask?.message).not.toContain('\u001b');
@@ -695,7 +696,7 @@ describe('crew runner', () => {
 
   it('asks the Lead on the second failure with the same cause, and the redirect does not spend a retry', async () => {
     const f = fixture({ buildFails: 2, buildError: 'The test runner cannot find the module.', stuck: ['{"decision":"retry","guidance":"Install the missing module first.","lesson":"The test runner needs the module installed before any test."}'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('completed');
     expect(f.requests.filter((request) => request.prompt.includes('A task has failed or been sent back too many times'))).toHaveLength(1);
@@ -705,14 +706,14 @@ describe('crew runner', () => {
 
   it('does not bother the Lead about a first failure', async () => {
     const once = fixture({ buildFails: 1, buildError: 'A one-off crash.' });
-    const a = await once.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: once.config }, 1);
+    const a = await once.runner.start({ projectId: 'p1', goal: 'Build sample log', config: once.config }, 1);
     await runToIdle(once.runner, a.id);
     expect(once.requests.some((request) => request.prompt.includes('A task has failed or been sent back too many times'))).toBe(false);
   });
 
   it('puts options on the question at once when the Lead has them for a repeated failure', async () => {
     const f = fixture({ buildFails: 99, buildError: 'The API key is rejected.', stuck: ['{"decision":"ask","reason":"Needs a key.","options":["Use the sandbox key.","Mock the API."]}'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('needsYou');
     expect(run.ask?.options).toEqual(['Use the sandbox key.', 'Mock the API.']);
@@ -726,7 +727,7 @@ describe('crew runner', () => {
       stuck: ['{"decision":"ask","reason":"Needs a key.","options":["Use the sandbox key.","Mock the API."]}'],
       away: ['{"choice":2,"reason":"Mocking is reversible."}'],
     });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const stuck = await runToIdle(f.runner, started.id);
     expect(stuck.status).toBe('needsYou');
     await f.runner.setAway(started.id, true, 0, 1);
@@ -744,7 +745,7 @@ describe('crew runner', () => {
       stuck: ['{"decision":"ask","reason":"Needs a key.","options":["Buy a paid plan.","Mock the API."]}'],
       away: ['{"choice":"none","reason":"Both change what the person pays for or relies on."}'],
     });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     await runToIdle(f.runner, started.id);
     await f.runner.setAway(started.id, true, 0, 1);
     const run = (await f.runner.get(started.id))!;
@@ -755,7 +756,7 @@ describe('crew runner', () => {
 
   it('keeps a question with no options waiting when the Lead finds no safe way forward', async () => {
     const f = fixture({ buildFails: 99, buildError: 'The API key is rejected.' });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     await runToIdle(f.runner, started.id);
     await f.runner.setAway(started.id, true, 0, 1);
     const run = (await f.runner.get(started.id))!;
@@ -769,7 +770,7 @@ describe('crew runner', () => {
       buildFails: 99, buildError: 'The API key is rejected.',
       away: ['{"choice":"own","instruction":"Mock the API and record it in the report.","reason":"Reversible.","check":"Whether a mock is acceptable for the demo."}'],
     });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const stuck = await runToIdle(f.runner, started.id);
     await f.runner.setAway(started.id, true, 0, 1);
     await f.runner.whenIdle(started.id);
@@ -782,7 +783,7 @@ describe('crew runner', () => {
   it('tries the planned task titles against the commit rules before the first build', async () => {
     const f = fixture();
     f.ports.preflight = async (_project, text) => (/ingestion/i.test(text) ? { key: 'selftag:ingestion', note: 'A commit hook rejects the word "ingestion".' } : null);
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.knownBlockers).toContain('selftag:ingestion');
     expect(run.goal).toContain('A commit hook rejects the word "ingestion".');
@@ -802,7 +803,7 @@ describe('crew runner', () => {
       return inner(request, ...rest);
     };
     f.ports.cancelAgent = () => { release(); return true; };
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     await new Promise((resolve) => setTimeout(resolve, 20));
     stopped = true;
     const run = await f.runner.stop(started.id);
@@ -813,7 +814,7 @@ describe('crew runner', () => {
 
   it('asks once when an agent has run out of usage, instead of retrying and wasting the retries', async () => {
     const f = fixture({ buildFails: 99, buildError: 'You have reached your usage limit. Try again later.' });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('needsYou');
     expect(run.ask?.message).toContain('has run out of usage');
@@ -825,7 +826,7 @@ describe('crew runner', () => {
 
   it('lets the team be changed on a crew that is not working, and refuses it on one that is', async () => {
     const f = fixture({ buildFails: 99, buildError: 'You have reached your usage limit.' });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const stuck = await runToIdle(f.runner, started.id);
     expect(stuck.status).toBe('needsYou');
     const changed = { ...stuck.config, roles: stuck.config.roles.map((role) => (role.id === 'builder' ? { ...role, agent: 'claude' as const } : role)) };
@@ -838,7 +839,7 @@ describe('crew runner', () => {
     await expect(f.runner.updateConfig(started.id, withoutBuilder)).rejects.toThrow(/still needs the builder role/);
 
     const slow = fixture();
-    const live = await slow.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: slow.config }, 1);
+    const live = await slow.runner.start({ projectId: 'p1', goal: 'Build sample log', config: slow.config }, 1);
     await expect(slow.runner.updateConfig(live.id, slow.config)).rejects.toThrow(/Pause the crew first/);
     await runToIdle(slow.runner, live.id);
   });
@@ -846,7 +847,7 @@ describe('crew runner', () => {
   it('plans more work from the Chat tab onto a finished board', async () => {
     const more = JSON.stringify({ tasks: [{ id: 'install', title: 'Install it', role: 'builder', description: 'Install', acceptance: ['Installed'], dependsOn: [] }] });
     const f = fixture({ plan: [PLAN, more] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     await runToIdle(f.runner, started.id);
     await f.runner.message(started.id, 'work', 'Now install it.', 1);
     const run = await runToIdle(f.runner, started.id);
@@ -858,7 +859,7 @@ describe('crew runner', () => {
   it('turns a bare "continue" into the next unfinished part of the plan, found by the crew, not guessed from one word', async () => {
     const next = JSON.stringify({ tasks: [{ id: 'shell', title: 'Build the shell', role: 'builder', description: 'Phase 1', acceptance: ['The shell opens'], dependsOn: [] }] });
     const f = fixture({ plan: [PLAN, next], coverage: ['{"complete":true}', '{"complete":false,"remaining":["Phase 1: Shell","Phase 2: Providers"]}'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const finished = await runToIdle(f.runner, started.id);
     expect(finished.remaining).toEqual([]);
 
@@ -875,7 +876,7 @@ describe('crew runner', () => {
 
   it('says there is nothing left, and plans nothing, when "continue" is said and the plan is finished', async () => {
     const f = fixture({ coverage: ['{"complete":true}', '{"complete":true}'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const before = await runToIdle(f.runner, started.id);
     const after = await f.runner.message(started.id, 'work', 'Keep going', 1);
     expect(after.status).toBe('completed');
@@ -887,7 +888,7 @@ describe('crew runner', () => {
   it('treats an empty plan with a reason as the Lead finding nothing to build, not as a failure', async () => {
     const empty = JSON.stringify({ tasks: [], note: 'Every part of the plan is already built.' });
     const f = fixture({ plan: [PLAN, empty] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     await runToIdle(f.runner, started.id);
     await f.runner.message(started.id, 'work', 'Add more features.', 1);
     const run = await runToIdle(f.runner, started.id);
@@ -897,7 +898,7 @@ describe('crew runner', () => {
 
   it('shows what the Lead said when its reply was not a plan, so it can be understood', async () => {
     const f = fixture({ plan: [PLAN, 'I think Phase 1 is the next part, but it needs a decision first.'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     await runToIdle(f.runner, started.id);
     await f.runner.message(started.id, 'work', 'Do the next bit.', 1);
     const run = await runToIdle(f.runner, started.id);
@@ -912,7 +913,7 @@ describe('crew runner', () => {
     ] });
     const next = JSON.stringify({ tasks: [{ id: 'shell', title: 'Shell', role: 'builder', description: 'Build it', acceptance: ['Opens'], dependsOn: [] }] });
     const f = fixture({ plan: [phased, next], coverage: ['{"complete":false,"remaining":["Phase 1: Shell"]}', '{"complete":true}'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.tasks[0]?.phase).toBe('Phase 0: Spike');
     expect(run.remaining).toEqual(['Phase 1: Shell']);
@@ -931,7 +932,7 @@ describe('crew runner', () => {
     f.ports.checkpoint = async () => ({ ref: `ref-${restored.length}-${Math.random().toString(36).slice(2, 6)}`, untracked: [], createdAt: new Date(Date.now() + restored.length).toISOString() });
     f.ports.diffSince = async () => [{ path: 'src/a.ts', added: 3, removed: 1 }];
     f.ports.restore = async (_projectId, checkpoint) => { restored.push(checkpoint.ref); return { restored: ['src/a.ts'], deleted: ['src/new.ts'] }; };
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     const first = run.tasks[0]!;
     expect(first.checkpoint).not.toBeNull();
@@ -949,7 +950,7 @@ describe('crew runner', () => {
 
   it('refuses to undo while the crew is working, and a task that has no saved starting point', async () => {
     const f = fixture();
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     await expect(f.runner.revertTask(started.id, 'schema')).rejects.toThrow(/Pause the crew first/);
     const done = await runToIdle(f.runner, started.id);
     await expect(f.runner.previewRevert(started.id, done.tasks[0]!.id)).rejects.toThrow(/no saved starting point/);
@@ -963,7 +964,7 @@ describe('crew runner', () => {
       load: async () => [{ key: 'hook:old', note: 'Run the formatter before every commit.' }],
       save: async (projectId, item) => { saved.push({ projectId, key: item.key }); },
     };
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.goal).toContain('Run the formatter before every commit.');
     expect(run.knownBlockers).toEqual(['hook:old', 'selftag:copilot']);
@@ -973,7 +974,7 @@ describe('crew runner', () => {
   it('gives a task a stronger setting from its third attempt', async () => {
     const base = createDefaultCrewConfig('claude', 'codex');
     const f = fixture({ buildFails: 2 }, { savings: { ...base.savings, lightModelForRoutine: false } });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     await runToIdle(f.runner, started.id);
     const attempts = f.requests.filter((request) => request.prompt.includes('Your task: Log schema'));
     expect(attempts.length).toBeGreaterThanOrEqual(3);
@@ -984,7 +985,7 @@ describe('crew runner', () => {
 
   it('carries on with the tasks already on the board when told to continue, without asking the Lead to plan them again', async () => {
     const f = fixture();
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const finished = await runToIdle(f.runner, started.id);
     // A crew that was stopped part way keeps what it had not built.
     f.saved.set(started.id, { ...finished, status: 'stopped', tasks: finished.tasks.map((task) => (task.id === 'ingest' ? { ...task, status: 'backlog' as const, round: 0, reviews: [] } : task)) });
@@ -1000,7 +1001,7 @@ describe('crew runner', () => {
 
   it('carries on with planned tasks, instead of finishing with them undone, when a follow-up has nothing new to plan', async () => {
     const f = fixture({ plan: [PLAN, 'The existing board already covers that.'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const finished = await runToIdle(f.runner, started.id);
     f.saved.set(started.id, { ...finished, status: 'stopped', tasks: finished.tasks.map((task) => (task.id === 'ingest' ? { ...task, status: 'backlog' as const, round: 0, reviews: [] } : task)) });
 
@@ -1014,7 +1015,7 @@ describe('crew runner', () => {
   it('plans a follow-up onto the same board after the crew has finished', async () => {
     const followPlan = JSON.stringify({ tasks: [{ id: 'schema', title: 'Install the app', role: 'builder', description: 'Build and install', acceptance: ['The app is installed'], dependsOn: [] }] });
     const f = fixture({ plan: [PLAN, followPlan] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const first = await runToIdle(f.runner, started.id);
     expect(first.status).toBe('completed');
     expect(first.tasks).toHaveLength(2);
@@ -1031,7 +1032,7 @@ describe('crew runner', () => {
 
   it('puts a finished crew back as it was when the Lead cannot plan the follow-up', async () => {
     const f = fixture({ plan: [PLAN, 'not a plan'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     await runToIdle(f.runner, started.id);
     await f.runner.followUp(started.id, 'Do more.', 1);
     const run = await runToIdle(f.runner, started.id);
@@ -1043,7 +1044,7 @@ describe('crew runner', () => {
 
   it('never accepts work when the Lead\'s reply cannot be read', async () => {
     const f = fixture({ lead: ['I think it is fine.'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('needsYou');
     expect(run.tasks.some((task) => task.status === 'accepted')).toBe(false);
@@ -1053,7 +1054,7 @@ describe('crew runner', () => {
 
   it('stops for the user when the security reviewer blocks, before the Lead sees the task', async () => {
     const f = fixture({ security: ['{"verdict":"needsYou","feedback":"API key is hard-coded."}'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('needsYou');
     expect(run.ask).toMatchObject({ reason: 'securityBlock' });
@@ -1062,19 +1063,28 @@ describe('crew runner', () => {
 
   it('retries a build that crashed, then stops and asks if it keeps crashing', async () => {
     const once = fixture({ buildFails: 1 });
-    const started = await once.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: once.config }, 1);
+    const started = await once.runner.start({ projectId: 'p1', goal: 'Build sample log', config: once.config }, 1);
     expect((await runToIdle(once.runner, started.id)).status).toBe('completed');
     const always = fixture({ buildFails: 99 });
-    const stuck = await always.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: always.config }, 1);
+    const stuck = await always.runner.start({ projectId: 'p1', goal: 'Build sample log', config: always.config }, 1);
     const run = await runToIdle(always.runner, stuck.id);
     expect(run.status).toBe('needsYou');
     expect(run.ask?.reason).toBe('noProgress');
   });
 
+  it('escalates any builder to the configured stronger role after two matching failures', async () => {
+    const f = fixture({ buildFails: 2, buildError: 'The compiler reports the same missing symbol.' }, { savings: { ...createDefaultCrewConfig().savings, localFirst: false }, escalation: { execution: 'cli', agent: 'claude' } });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
+    await runToIdle(f.runner, started.id);
+    const builds = f.requests.filter((request) => request.displayText === 'Build: Log schema');
+    expect(builds.slice(0, 2).every((request) => request.agent === 'codex')).toBe(true);
+    expect(builds[2]?.agent).toBe('claude');
+  });
+
   it('asks instead of continuing once the spend limit is reached, and Finish keeps what is accepted', async () => {
     const base = createDefaultCrewConfig('claude', 'codex');
     const f = fixture({ costPerCall: 1 }, { limits: { ...base.limits, maxUsd: 4, onLimit: 'ask' } });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('needsYou');
     expect(run.ask?.reason).toBe('spend');
@@ -1089,7 +1099,7 @@ describe('crew runner', () => {
     const f = fixture({}, { checkCommand: 'npm test' });
     // Failing from the start means no task is blamed; the final check fails once too, then passes after the fix task.
     f.ports.runCheck = async (_project, command) => { f.checks.push(command); calls += 1; return { passed: calls > 2, output: 'FAIL src/a.test.ts' }; };
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(f.checks).toEqual(['npm test', 'npm test', 'npm test']);
     expect(run.tasks.map((task) => task.id)).toContain('check-fix-1');
@@ -1101,7 +1111,7 @@ describe('crew runner', () => {
     const f = fixture({}, { checkCommand: 'npm test' });
     // Call 1 is the baseline, which passes; call 2 is the first task's check, which fails.
     f.ports.runCheck = async (_project, command) => { f.checks.push(command); calls += 1; return { passed: calls !== 2, output: 'FAIL src/a.test.ts' }; };
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     const sentBack = run.tasks.flatMap((task) => task.reviews).find((review) => review.reviewer === 'check' && review.verdict === 'sendBack');
     expect(sentBack?.feedback).toContain('npm test');
@@ -1113,7 +1123,7 @@ describe('crew runner', () => {
   it('does not blame a task for a check that already failed before the crew started', async () => {
     const f = fixture({}, { checkCommand: 'npm test' });
     f.ports.runCheck = async (_project, command) => { f.checks.push(command); return { passed: false, output: 'FAIL already' }; };
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.tasks.flatMap((task) => task.reviews).some((review) => review.reviewer === 'check')).toBe(false);
     expect(run.feed.some((item) => item.text.includes('already fails'))).toBe(true);
@@ -1121,7 +1131,7 @@ describe('crew runner', () => {
 
   it('pauses on request and picks up where it left off', async () => {
     const f = fixture({}, { approvePlan: true });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     await runToIdle(f.runner, started.id);
     const paused = await f.runner.pause(started.id);
     expect(['awaitingApproval', 'paused']).toContain(paused.status);
@@ -1232,7 +1242,7 @@ describe('crew runner, second round', () => {
 
   it('keeps a reviewer note without sending the task back', async () => {
     const f = fixture({ security: ['{"verdict":"accept","notes":["Electron is past end of support."]}'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('completed');
     expect(run.notes[0]?.text).toContain('Electron');
@@ -1241,7 +1251,7 @@ describe('crew runner, second round', () => {
 
   it('stops after a phase the person chose even when keeping going', async () => {
     const f = fixture({ plan: [phasedPlan], coverage: ['{"complete":false,"remaining":["Phase 1: Shell"]}'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config, keepGoing: true }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config, keepGoing: true }, 1);
     await f.runner.setPauseAfter(started.id, 'Phase 0: Spike', true);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('paused');
@@ -1253,7 +1263,7 @@ describe('crew runner, second round', () => {
     const written: Array<{ path: string; content: string }> = [];
     f.ports.writeReport = async (_project, relativePath, content) => { written.push({ path: relativePath, content }); return relativePath; };
     f.ports.preflight = async () => ({ key: 'hook:commit-msg', note: 'The commit hook rejects the word copilot.' });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     expect(started.goal).toContain('rejects the word copilot');
     await runToIdle(f.runner, started.id);
     await f.runner.acceptPhase(started.id, 'Phase 0: Spike');
@@ -1263,7 +1273,7 @@ describe('crew runner, second round', () => {
 
   it('warns when another crew on the project is not finished', async () => {
     const f = fixture();
-    const first = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const first = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const second = await f.runner.start({ projectId: 'p1', goal: 'Another thing', config: f.config }, 1);
     expect(second.feed.some((entry) => entry.text.includes('Another crew on this project'))).toBe(true);
     await runToIdle(f.runner, first.id);
@@ -1310,7 +1320,7 @@ describe('crew runner, second round', () => {
   it('retries a build whose connection was cut without counting it as a failure or asking the Lead', async () => {
     const f = fixture({ buildFails: 2, buildError: 'terminated' });
     f.runner.dropRetryMs = 0;
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('completed');
     expect(run.feed.some((entry) => entry.text.includes('The connection to the agent was cut'))).toBe(true);
@@ -1319,7 +1329,7 @@ describe('crew runner, second round', () => {
 
   it('stops a task that has cost far more than a usual one, and asks later the next time', async () => {
     const f = fixture();
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const base = await runToIdle(f.runner, started.id);
     const accepted = (id: string, cost: number) => ({ ...base.tasks[0]!, id, title: id, status: 'accepted' as const, costUsd: cost });
     const pricey = { ...base.tasks[0]!, id: 'big', title: 'Big task', status: 'sentBack' as const, costUsd: 5, round: 4 };
@@ -1335,7 +1345,7 @@ describe('crew runner, second round', () => {
 
   it('posts a summary of the stretch away when away mode is turned off', async () => {
     const f = fixture();
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     const on = setAway(run, true, 0, '2026-11-01T09:00:00.000Z');
     expect(on.away.since).toBe('2026-11-01T09:00:00.000Z');
@@ -1349,7 +1359,7 @@ describe('crew runner, second round', () => {
   it('tells the planner and the reviewers not to stop on criteria only the person can meet, or on wording late in a task', async () => {
     const f = fixture();
     expect(planPrompt('Build it', f.config, '', { tasks: [] })).toContain('Never write a criterion only the person can meet');
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     const task = { ...run.tasks[0]!, round: 4 };
     const prompt = reviewPrompt(run, task, 'done');
@@ -1363,25 +1373,82 @@ describe('crew runner, second round', () => {
 
   it('never treats an unreadable security reply as a security block', async () => {
     const f = fixture({ security: ['I looked at it and it seems fine overall.'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('needsYou');
     expect(run.ask?.reason).toBe('noProgress');
     expect(run.ask?.message).toContain('could not give a readable verdict');
   });
 
-  it('goes on without an unreadable check while away, and lists it for the person', async () => {
-    const f = fixture({ security: ['I looked at it and it seems fine overall.'] });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+  it('uses a configured backup reviewer for an unreadable specialist reply, even while away', async () => {
+    const base = createDefaultCrewConfig('claude', 'codex');
+    const reviewer = { ...base.roles.find((role) => role.kind === 'security')!, id: 'reviewer', kind: 'reviewer' as const, label: 'Reviewer' };
+    const f = fixture({ security: ['I looked at it and it seems fine overall.'] }, { roles: [...base.roles, reviewer] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     await f.runner.setAway(started.id, true, 0, 1);
     const run = await runToIdle(f.runner, started.id);
     expect(run.status).toBe('completed');
-    expect(run.away.decisions.some((item) => item.choice.includes("Went on without"))).toBe(true);
+    expect(run.tasks[0]?.reviews.some((review) => review.reviewer === 'reviewer' && review.verdict === 'accept')).toBe(true);
+    expect(run.tasks.flatMap((task) => task.reviews).some((review) => review.verdict === 'accept' && /^Not checked:/i.test(review.feedback))).toBe(false);
+  });
+
+  it('keeps the malformed reviewer reply visible and leaves the task unchecked when no backup exists', async () => {
+    const base = createDefaultCrewConfig('claude', 'codex');
+    const config = crewConfigSchema.parse({ ...base, approvePlan: false, roles: base.roles.filter((role) => role.kind !== 'reviewer') });
+    const f = fixture({ security: ['raw malformed response: no verdict'] }, config);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.status).toBe('needsYou');
+    expect(run.tasks[0]?.reviews.some((review) => review.verdict === 'accept' && /Not checked/i.test(review.feedback))).toBe(false);
+    expect(run.ask?.message).toContain('raw malformed response');
+  });
+
+  it('shows legacy Not checked accepts as unchecked when loading', async () => {
+    const f = fixture();
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    const saved = { ...run, tasks: run.tasks.map((task, index) => index ? task : { ...task, reviews: [...task.reviews, { round: task.round, verdict: 'accept' as const, feedback: 'Not checked: old malformed response', reviewer: 'security', at: run.updatedAt }] }) };
+    f.saved.set(run.id, saved);
+    const loaded = await f.runner.get(run.id);
+    expect(loaded?.tasks[0]?.reviews.at(-1)?.verdict).toBe('needsYou');
+  });
+
+  it('includes the privacy, ownership, session and evidence checklist in builder tasks', async () => {
+    const f = fixture();
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
+    await runToIdle(f.runner, started.id);
+    const prompt = f.requests.find((request) => request.prompt.startsWith('Project goal:'))?.prompt ?? '';
+    expect(prompt).toContain('Check ownership and authorization');
+    expect(prompt).toContain('Check input size limits');
+    expect(prompt).toContain('Keep secrets and personal data out of logs');
+    expect(prompt).toContain('After any wait, recheck');
+    expect(prompt).toContain('For every acceptance criterion, report the concrete');
+  });
+
+  it('detects a project check when configuration is empty, runs a baseline, and tells the builder to run it', async () => {
+    const f = fixture();
+    f.ports.suggestCheck = async () => 'npm test';
+    const config = crewConfigSchema.parse({ ...f.config, checkCommand: '' });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.config.checkCommand).toBe('npm test');
+    expect(f.checks.length).toBeGreaterThanOrEqual(2);
+    expect(f.requests.find((request) => request.prompt.startsWith('Project goal:'))?.prompt).toContain('Run the project check command: npm test');
+  });
+
+  it('marks the run unverified when no project check can be detected', async () => {
+    const f = fixture();
+    f.ports.suggestCheck = async () => null;
+    const config = crewConfigSchema.parse({ ...f.config, checkCommand: '' });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.feed.some((item) => item.text.includes('work will be reported as unverified'))).toBe(true);
+    expect(f.checks).toHaveLength(0);
   });
 
   it('never stops a task for cost when the person turned the check off, and 0 means no limit while away', async () => {
     const f = fixture();
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const base = await runToIdle(f.runner, started.id);
     const accepted = (id: string) => ({ ...base.tasks[0]!, id, title: id, status: 'accepted' as const, costUsd: 1 });
     const run: CrewRun = { ...base, status: 'running', tasks: [accepted('x'), accepted('y'), accepted('z'), { ...base.tasks[0]!, id: 'big', title: 'Big', status: 'sentBack' as const, costUsd: 50 }] };
@@ -1393,7 +1460,7 @@ describe('crew runner, second round', () => {
 
   it('reads spend records saved before the cost was kept as a step each, not as $0', async () => {
     const f = fixture();
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const base = await runToIdle(f.runner, started.id);
     const accepted = (id: string) => ({ ...base.tasks[0]!, id, title: id, status: 'accepted' as const, costUsd: 1.67 });
     const run: CrewRun = { ...base, status: 'running', spendAsked: ['big', 'big', 'big'], tasks: [accepted('x'), accepted('y'), accepted('z'), { ...base.tasks[0]!, id: 'big', title: 'Big', status: 'sentBack' as const, costUsd: 18.6 }] };
@@ -1402,7 +1469,7 @@ describe('crew runner, second round', () => {
 
   it('moves the spend ceiling past what the task already cost once the person says carry on', async () => {
     const f = fixture();
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const base = await runToIdle(f.runner, started.id);
     const accepted = (id: string) => ({ ...base.tasks[0]!, id, title: id, status: 'accepted' as const, costUsd: 1.67 });
     const run: CrewRun = { ...base, status: 'running', tasks: [accepted('x'), accepted('y'), accepted('z'), { ...base.tasks[0]!, id: 'big', title: 'Big', status: 'sentBack' as const, costUsd: 15.97 }] };
@@ -1413,7 +1480,7 @@ describe('crew runner, second round', () => {
 
   it('lets a costly task carry on by itself while away, under the person\'s limit, and records it', async () => {
     const f = fixture();
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const base = await runToIdle(f.runner, started.id);
     const accepted = (id: string) => ({ ...base.tasks[0]!, id, title: id, status: 'accepted' as const, costUsd: 1 });
     const run: CrewRun = { ...base, status: 'running', away: { ...base.away, enabled: true }, tasks: [accepted('x'), accepted('y'), accepted('z'), { ...base.tasks[0]!, id: 'big', title: 'Big', status: 'sentBack' as const, costUsd: 5 }] };
@@ -1426,7 +1493,7 @@ describe('crew runner, second round', () => {
 
   it('follows the person\'s away rules: what the Lead may decide, what it must leave, and their own words', async () => {
     const f = fixture({ buildFails: 99, buildError: 'The API key is rejected.' });
-    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: f.config }, 1);
     const stuck = await runToIdle(f.runner, started.id);
     const policy = { ...stuck.away.policy, other: 'Never change the database schema.' };
     const changed = await f.runner.setAway(started.id, true, 0, 1, policy);

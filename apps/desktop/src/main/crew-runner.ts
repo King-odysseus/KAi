@@ -16,6 +16,7 @@ export interface CrewRunnerPorts {
   runAgent(request: AgentRunRequest, ownerWindowId: number, options?: { cwd?: string }): Promise<AgentRunResult>;
   cancelAgent(conversationId: string): boolean;
   runCheck(projectId: string, command: string, signal: AbortSignal, options?: { cwd?: string }): Promise<{ passed: boolean; output: string }>;
+  suggestCheck?(projectId: string): Promise<string | null>;
   save(run: CrewRun): Promise<void>;
   load(id: string): Promise<CrewRun | null>;
   list(projectId?: string): Promise<CrewRun[]>;
@@ -186,11 +187,19 @@ export class DesktopCrewRunner {
     const runs = await this.ports.list(projectId);
     // A run saved as running with nothing driving it was interrupted (the app closed): it is paused, not running.
     // Planning counts too: a crew closed while the Lead was still writing tasks has nothing driving it either.
-    return runs.map((run) => ((run.status === 'running' || run.status === 'planning') && !this.active.has(run.id) ? { ...run, status: 'paused' as const } : run));
+    return runs.map((run) => this.displayLegacyUnchecked((run.status === 'running' || run.status === 'planning') && !this.active.has(run.id) ? { ...run, status: 'paused' as const } : run));
+  }
+
+  /** Older away-mode runs stored an unreadable review as an accept. Present it as unchecked. */
+  private displayLegacyUnchecked(run: CrewRun): CrewRun {
+    return { ...run, tasks: run.tasks.map((task) => ({ ...task, reviews: task.reviews.map((review) => review.verdict === 'accept' && /^Not checked:/i.test(review.feedback)
+      ? { ...review, verdict: 'needsYou' as const, feedback: `${review.feedback} This review did not verify the task.` }
+      : review) })) };
   }
 
   async get(runId: string): Promise<CrewRun | null> {
-    return this.active.get(runId)?.run ?? (await this.list()).find((run) => run.id === runId) ?? null;
+    const active = this.active.get(runId)?.run;
+    return active ? this.displayLegacyUnchecked(active) : (await this.list()).find((run) => run.id === runId) ?? null;
   }
 
   /** The user approved the plan. */
@@ -773,8 +782,20 @@ export class DesktopCrewRunner {
 
   /** On a fresh run, runs the project check once before any task, so a repository that already fails is not blamed on the first builder. */
   private async measureBaseline(active: ActiveRun): Promise<void> {
-    const { run } = active;
+    let { run } = active;
+    if (!run.config.checkCommand && this.ports.suggestCheck) {
+      const detected = await this.ports.suggestCheck(run.projectId).catch(() => null);
+      if (detected?.trim()) {
+        run = { ...run, config: { ...run.config, checkCommand: detected.trim() } };
+        await this.commit(active, this.info(run, `Detected the project's check command: ${detected.trim()}.`));
+      }
+    }
     const command = run.config.checkCommand;
+    if (!command) {
+      active.baselineFailing = true;
+      await this.commit(active, this.info(active.run, 'No project check command was configured or detected; work will be reported as unverified.'));
+      return;
+    }
     if (!command || active.baselineFailing !== undefined || run.tasks.some((task) => task.status !== 'backlog' || task.reviews.length > 0)) return;
     const check = await this.ports.runCheck(run.projectId, command, active.controller.signal);
     if (active.cancelled) return;
@@ -1051,6 +1072,11 @@ export class DesktopCrewRunner {
     const task = active.run.tasks.find((item) => item.id === taskId);
     const key = `${active.run.id}|${taskId}`;
     if (!task || task.status !== 'backlog' || (!force && !repeatsFailure(previousNote, error)) || ruleBlock(error) || isUsageLimit(error) || (this.triaged.get(key) ?? 0) >= 2) return;
+    const failures = Number(task.note.match(/^Build failed \((\d+)\):/)?.[1] ?? 0);
+    if (failures >= 2 && !task.escalated && active.run.config.escalation && escalatedRole(active.run.config, active.run.config.roles.find((role) => role.id === task.role) ?? active.run.config.roles[0]!)) {
+      // Give the next attempt to the model the person explicitly allowed. The normal loop enforces spend limits first.
+      return;
+    }
     const lead = active.run.config.roles.find((role) => role.kind === 'lead');
     if (!lead) return;
     this.triaged.set(key, (this.triaged.get(key) ?? 0) + 1);
@@ -1096,7 +1122,7 @@ export class DesktopCrewRunner {
     const attempt = task.round + 1;
     let builder = role;
     let escalated = false;
-    if (role.kind !== 'designer' && shouldEscalate(active.run.config, role, attempt)) {
+    if (role.kind !== 'designer' && (shouldEscalate(active.run.config, role, attempt) || (active.run.config.escalation && attempt >= 3 && !task.escalated))) {
       const stronger = escalatedRole(active.run.config, role);
       if (stronger) {
         builder = stronger;
@@ -1191,10 +1217,25 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
         let answer = await this.askJson(active, reviewer, reviewRolePrompt(kind, active.run, task()), 'review', parseReview);
         if (active.cancelled) return;
         if (!answer.value) {
-          // An unreadable reply is asked for once more from the start, before anyone is bothered with it.
+          // Keep retrying malformed responses. A configured plain reviewer is the backup for a specialist.
           const again = await this.askJson(active, reviewer, reviewRolePrompt(kind, active.run, task()), 'review', parseReview);
           if (active.cancelled) return;
-          answer = { value: again.value, costUsd: answer.costUsd + again.costUsd, raw: again.raw || answer.raw };
+          answer = { ...again, costUsd: answer.costUsd + again.costUsd, raw: [answer.raw, again.raw].filter(Boolean).join('\n--- retry ---\n') };
+          const backup = !answer.value && kind !== 'reviewer' ? roles.find((role) => role.kind === 'reviewer' && role.id !== reviewer.id) : undefined;
+          if (backup) {
+            const fallback = await this.askJson(active, backup, reviewRolePrompt('reviewer', active.run, task()), 'review', parseReview);
+            if (active.cancelled) return;
+            answer = { ...fallback, costUsd: answer.costUsd + fallback.costUsd, raw: [answer.raw, fallback.raw].filter(Boolean).join('\n--- backup reviewer ---\n') };
+            if (answer.value) {
+              const spend = addSpend(active.run, taskId, answer.costUsd, at());
+              if (answer.value.verdict === 'accept') {
+                await this.commit(active, { ...spend, tasks: spend.tasks.map((item) => item.id === taskId ? { ...item, reviews: [...item.reviews, { round: item.round, verdict: 'accept' as const, feedback: `Backup reviewer ${backup.label} accepted after ${reviewer.label} returned an unreadable reply.`, reviewer: backup.id, at: at() }] } : item) });
+                continue;
+              }
+              await this.commit(active, reviewTask(spend, taskId, { ...answer.value, reviewer: backup.id }, at()));
+              return;
+            }
+          }
         }
         let run = addSpend(active.run, taskId, answer.costUsd, at());
         if (answer.value?.notes.length) run = addNotes(run, reviewer.id, taskId, answer.value.notes, at());
@@ -1205,14 +1246,8 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
           // A reply nobody could read is a reading problem, not a finding: it must not stop the crew as a security block,
           // which away mode is never allowed to settle. Away, with the person's say-so, the crew goes on and the report
           // says which check is missing; otherwise it waits as a stuck task.
-          const unreadable = `${reviewer.label} could not give a readable verdict after four tries, so it did not check "${task().title}".`;
-          const policy = run.away.policy ?? DEFAULT_AWAY_POLICY;
-          if (run.away.enabled && policy.recheck) {
-            run = { ...run, tasks: run.tasks.map((item) => (item.id === taskId ? { ...item, reviews: [...item.reviews, { round: item.round, verdict: 'accept' as const, feedback: `Not checked: ${reviewer.label}'s reply could not be read.`, reviewer: reviewer.id, at: at() }] } : item)) };
-            run = recordAwayDecision(run, taskId, unreadable, `Went on without ${reviewer.label}'s check.`, '', `Have ${reviewer.label} check "${task().title}" again.`, at());
-            await this.commit(active, run);
-            continue;
-          }
+          const unreadable = `${reviewer.label} could not give a readable verdict after retries. The raw replies were:\n${answer.raw || '(empty reply)'}`;
+          run = addSpend(run, taskId, answer.costUsd, at());
           const blocked = reviewTask(run, taskId, { verdict: 'needsYou', feedback: unreadable, reviewer: reviewer.id }, at());
           await this.commit(active, blocked.ask ? { ...blocked, ask: { ...blocked.ask, reason: 'noProgress' } } : blocked);
           return;
@@ -1230,7 +1265,7 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
     if (!answer.value) {
       const again = await this.askJson(active, lead, reviewPrompt(active.run, task(), this.builderReply.get(taskId) ?? '', this.checkNote.get(taskId)), 'review', parseReview);
       if (active.cancelled) return;
-      answer = { value: again.value, costUsd: answer.costUsd + again.costUsd, raw: again.raw || answer.raw };
+      answer = { value: again.value, costUsd: answer.costUsd + again.costUsd, raw: again.raw || answer.raw, callFailed: again.callFailed };
     }
     let run = addSpend(active.run, taskId, answer.costUsd, at());
     if (answer.value?.notes.length) run = addNotes(run, lead.id, taskId, answer.value.notes, at());
@@ -1278,16 +1313,16 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
   }
 
   /** Asks a role for a reply that must parse; if it does not, asks once more with a stricter request. */
-  private async askJson<T>(active: ActiveRun, role: CrewRole, prompt: string, kind: 'plan' | 'review' | 'stuck' | 'coverage' | 'away', parse: (text: string) => T | null): Promise<{ value: T | null; costUsd: number; raw: string }> {
+  private async askJson<T>(active: ActiveRun, role: CrewRole, prompt: string, kind: 'plan' | 'review' | 'stuck' | 'coverage' | 'away', parse: (text: string) => T | null): Promise<{ value: T | null; costUsd: number; raw: string; callFailed: boolean }> {
     let costUsd = 0;
     const first = await this.call(active, role, prompt, { fresh: true, label: ASK_LABEL[kind] });
     costUsd += first.costUsd ?? 0;
-    if (active.cancelled) return { value: null, costUsd, raw: '' };
+    if (active.cancelled) return { value: null, costUsd, raw: first.output, callFailed: true };
     const value = first.status === 'completed' ? parse(first.output) : null;
-    if (value !== null || first.status === 'failed') return { value, costUsd, raw: first.output };
-    const second = await this.call(active, role, retryPrompt(kind), { fresh: false, label: `${ASK_LABEL[kind]} (asked again)`, escalate: true });
+    if (value !== null) return { value, costUsd, raw: first.output, callFailed: false };
+    const second = await this.call(active, role, `${prompt}\n\n${retryPrompt(kind)}\nYour previous call ${first.status === 'failed' ? 'failed to complete' : 'completed but did not contain a readable verdict'}. Reply with the required format.`, { fresh: false, label: `${ASK_LABEL[kind]} (asked again)`, escalate: true });
     costUsd += second.costUsd ?? 0;
-    return { value: second.status === 'completed' ? parse(second.output) : null, costUsd, raw: first.output || second.output };
+    return { value: second.status === 'completed' ? parse(second.output) : null, costUsd, raw: [first.output, second.output].filter(Boolean).join('\n--- retry ---\n'), callFailed: first.status === 'failed' || second.status === 'failed' };
   }
 
   private async call(active: ActiveRun, role: CrewRole, prompt: string, options: { fresh: boolean; effortFrom?: string; cwd?: string; conversationId?: string; label?: string; escalate?: boolean }): Promise<CallResult> {
