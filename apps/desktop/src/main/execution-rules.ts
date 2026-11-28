@@ -182,6 +182,47 @@ export function buildExecutionRulesBriefing(markdown: string): string {
   ].join('\n\n');
 }
 
+const COMPACT_RULE_CHARS = 170;
+
+/**
+ * The standing rules in a short form, for a model on the person's own hardware: the full set is about 4,500 tokens
+ * sent with every request, a large part of a small window and minutes of reading over a long run. Built from the same
+ * document, so an edit to a rule reaches it. Every numbered rule stays, as its title and first sentence; the commit
+ * rules and any exception stay whole; the session scripts and tool reference tables are left out. A document that is
+ * not laid out as numbered rules is returned as it is.
+ */
+export function compactRules(markdown: string): string {
+  const text = markdown.replace(/\r\n/g, '\n');
+  const rules = [...text.matchAll(/^(\d+)\.\s+\*\*(.+?)\*\*[ \t]*(.*)$/gm)]
+    // The session checklist numbers its steps too; its entries are not rules.
+    .filter((match) => (match.index ?? 0) > Math.max(0, text.search(/^## Rules\b/m)));
+  if (rules.length < 10) return markdown;
+  const lines = rules.map((match) => {
+    const body = match[3]!.replace(/^[\u2014\u2013-]\s*/, '').trim();
+    const sentence = /^.*?[.!?](?=\s+[A-Z`]|$)/.exec(body)?.[0] ?? body;
+    const line = `${match[1]}. ${match[2]!.trim().replace(/[.:]$/, '')}${sentence ? `: ${sentence}` : ''}`;
+    return line.length > COMPACT_RULE_CHARS ? `${line.slice(0, COMPACT_RULE_CHARS - 3)}...` : line;
+  });
+  const commit = section(text, /^## Commit & Push\b/m).trim();
+  const exceptions = [...text.matchAll(/^## Exception\b.*$/gm)].map((match) => section(text.slice(match.index), /^## Exception\b/m).trim());
+  return [
+    '# Standing rules (short form)',
+    'Each line is a rule\'s title and first sentence. All of them apply. Recall from the project brain before a task and record what you learn when those tools are offered.',
+    lines.join('\n'),
+    commit,
+    ...exceptions,
+  ].filter(Boolean).join('\n\n');
+}
+
+/** A level-two section, from its heading to the next one or to a rule line. */
+function section(text: string, heading: RegExp): string {
+  const start = text.search(heading);
+  if (start < 0) return '';
+  const rest = text.slice(start);
+  const next = rest.slice(1).search(/^(?:## |---\s*$)/m);
+  return next < 0 ? rest : rest.slice(0, next + 1);
+}
+
 export function applyExecutionRulesToPrompt(prompt: string, briefing: string): string {
   if (!briefing.trim()) return prompt;
   return `${briefing}\n\n[USER REQUEST]\n${prompt}`;

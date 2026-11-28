@@ -54,7 +54,6 @@ export const ROUNDS_BEFORE_ASKING = 6;
  * Tool rounds one local builder turn may take. A small model that is stuck does not stop on its own; it re-reads and
  * restates, for hours. At this many rounds it is asked to report what it did, and the Architect takes it from there.
  */
-export const LOCAL_BUILDER_ROUNDS = 30;
 
 /** A builder that runs on this machine or the home network: the one that needs small steps and a round budget. */
 export function isSmallBuilder(target: RoleTarget | null | undefined): boolean {
@@ -1037,8 +1036,6 @@ export class ArchitectLoop {
         ...(args.first ? (context.firstTurn ?? {}) : {}),
         splitRole: 'implementer',
         taskText: input.prompt,
-        // A local builder that is stuck does not stop on its own; at this many rounds it reports and the Architect steps in.
-        ...(isSmallBuilder(target) ? { toolRoundLimit: LOCAL_BUILDER_ROUNDS } : {}),
       });
       // A turn that starts repeating the same paragraph is going in circles: it is ended and handed to the Architect, who
       // keeps the work so far and gives it a smaller first step. Said in the log; the same blocker twice asks the person.
@@ -1152,8 +1149,8 @@ export class ArchitectLoop {
       await writeSteps(brief);
       if (context.smallBuilder) {
         this.record(conversationId, owner, null, turns.some((turn) => turn.step)
-          ? `${implementerLabel} is a local model, so the brief runs as ${turns.filter((turn) => turn.step).length} short steps, each a fresh turn of at most ${LOCAL_BUILDER_ROUNDS} tool rounds.`
-          : `${implementerLabel} is a local model; the brief has no steps, so it runs as one turn of at most ${LOCAL_BUILDER_ROUNDS} tool rounds.`);
+          ? `${implementerLabel} is a local model, so the brief runs as ${turns.filter((turn) => turn.step).length} short steps, each a fresh turn.`
+          : `${implementerLabel} is a local model; the brief has no steps, so it runs as one turn.`);
       }
       let revisionsInARow = 0;
       let roundsSinceAsk = 0;

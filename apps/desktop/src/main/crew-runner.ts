@@ -77,11 +77,19 @@ export interface CrewStartInput {
 
 /** The reviewer id the per-task project check is recorded under; it is not a role. */
 const CHECK_REVIEWER = 'check';
-/** A local Crew builder gets a bounded turn per small board task, just like the Architect loop's local builder. */
-export const LOCAL_CREW_TASK_ROUND_LIMIT = 30;
-
 function isLocalCrewRole(role: CrewRole): boolean {
   return role.execution === 'api' && Boolean(role.api && isOwnNetworkApi(role.api));
+}
+
+export function crewBatchForLocalResidency<T extends { role: string }>(
+  next: T,
+  ready: readonly T[],
+  roles: readonly CrewRole[],
+  serialRetry: boolean,
+  maxParallelTasks: number,
+): T[] {
+  if (serialRetry || roles.some(isLocalCrewRole)) return [next];
+  return ready.filter((task) => roles.find((role) => role.id === task.role)?.kind !== 'designer').slice(0, maxParallelTasks);
 }
 /** The model a role runs on, as a person reads it: "qwen3-coder", "claude opus". */
 function roleModelLabel(role: CrewRole): string {
@@ -854,12 +862,7 @@ export class DesktopCrewRunner {
       const pricey = ready.map((task) => askTaskSpend(run, task.id, this.now().toISOString())).find((item) => item !== null);
       if (pricey) { await this.commit(active, pricey); continue; }
       const roles = run.config.roles;
-      const batch = serialRetry
-        ? [next]
-        : ready.filter((task) => {
-          const role = roles.find((item) => item.id === task.role);
-          return role?.kind !== 'designer';
-        }).slice(0, run.config.limits.maxParallelTasks);
+      const batch = crewBatchForLocalResidency(next, ready, roles, Boolean(serialRetry), run.config.limits.maxParallelTasks);
       if (batch.length > 1 && !this.ports.worktrees && !active.run.feed.some((item) => item.text.includes('parallel Crew work needs a Git project'))) {
         await this.commit(active, { ...active.run, feed: [...active.run.feed, { id: `feed_${randomUUID()}`, at: this.now().toISOString(), who: 'crew', kind: 'info', text: 'Independent tasks are running one at a time because parallel Crew work needs a Git project with a commit.' }] });
       }
@@ -1337,7 +1340,6 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
       execution: role.execution,
       route: role.route,
       ...(role.execution === 'api' && role.api ? { apiConnection: role.api } : {}),
-      ...(isLocalCrewRole(role) ? { toolRoundLimit: LOCAL_CREW_TASK_ROUND_LIMIT } : {}),
       // A role that cannot edit runs in Plan, whatever the crew's autonomy says.
       autonomy: roleAccess(role) === 'edit' ? config.autonomy : 'plan',
       helpers: helperChoiceFor(subAgentsFor(config, role.id, 0)),

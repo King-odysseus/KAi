@@ -98,7 +98,7 @@ import { buildProjectContext, namedPaths } from './context-builder';
 import { resolveApiConnection, withGatewayProfile } from './api-connection';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort, DirectApiApprovalRequest } from './direct-provider-runtime';
 import { awaitsTheUser } from './direct-provider-runtime';
-import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, injectRulesIntoProjects, plainDashes, RULES_MARKER, shouldCarryRules, withAutopilotException, withCrewException, withCrewReadOnlyException } from './execution-rules';
+import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, compactRules, injectRulesIntoProjects, plainDashes, RULES_MARKER, shouldCarryRules, withAutopilotException, withCrewException, withCrewReadOnlyException } from './execution-rules';
 import type { DesktopExecutionRules } from './execution-rules';
 import type { DesktopMcpRuntime } from './mcp-runtime';
 import type { Cognitive1Client } from './cognitive1-client';
@@ -2126,6 +2126,8 @@ export async function runConversationAgent(
     // The Lead, planners and reviewers only read; the session tools the rules ask for need an approval they cannot get.
     if (crewRun && request.autonomy === 'plan') authoritativeRules = withCrewReadOnlyException(authoritativeRules);
   }
+  // A model on the person's own hardware gets the short form, after any exception has been added to the rules.
+  if (ownModelRun) authoritativeRules = compactRules(authoritativeRules);
   const rulesBriefing = buildExecutionRulesBriefing(authoritativeRules);
 
   const executionMode = request.execution ?? 'cli';
@@ -3239,7 +3241,7 @@ async function buildConversationContext(
     : filesInPlay.slice(-12);
   const projectContext = await buildProjectContext(projectPath, {
     selectedPaths: preload,
-    ...(lean ? { outlineFilesOver: LEAN_FILE_CHARACTERS } : {}),
+    ...(lean ? { outlineFilesOver: LEAN_FILE_CHARACTERS, skipInjectedRules: Boolean(authoritativeRules) } : {}),
     touchedPaths: filesInPlay,
     memories: recall.memories,
     memoryNote: recall.note,

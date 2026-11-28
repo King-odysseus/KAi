@@ -28,6 +28,10 @@ export function deriveAgentActivity(
   const action = last ? describeEvent(last) : null;
   const learningNuggets = codingNuggets(events);
   if (awaitingApproval) return { kind: 'waiting', label: 'Waiting for approval', detail: 'KAI paused before a protected action.', lastAction: action, lastAt: last?.timestamp ?? null, learningNuggets };
+  if (running && last?.type === 'agent.lifecycle' && last.status === 'running' && last.detail?.startsWith('Waiting for your hardware:')) {
+    const detail = last.detail.slice('Waiting for your hardware:'.length).trim().split('.', 1)[0]!.trim();
+    return { kind: 'waiting', label: `Waiting on Mac${detail ? ` · ${detail}` : ''}`, detail: last.detail, lastAction: action, lastAt: last.timestamp, learningNuggets };
+  }
   // Said before "Paused": this state is drawn as paused everywhere else, and the label that read "suspended, and can
   // continue from the same point" sent a person who had paused nothing looking for the run they thought they had held.
   if (running && autoWaiting) return { kind: 'waiting', label: 'Waiting for you', detail: 'Auto stopped to ask something. Answer in the composer, or press Resume to let it carry on without an answer.', lastAction: action, lastAt: last?.timestamp ?? null, learningNuggets };

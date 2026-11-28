@@ -182,6 +182,9 @@ async function fetchFromOwnHardware(
         AbortSignal.any([init.signal, giveUp.signal]),
       );
     } catch (error) {
+      // Stopped by the person: take the request out of the gateway's queue, where it would otherwise keep its place and
+      // count against the limit. The gateway refuses this for one that has started, which is harmless.
+      if (init.signal.aborted && requestId && options.statusRoot) withdraw(options.statusRoot, requestId, options.apiKey, timing);
       if (!(error instanceof SendFailure)) throw error;
       const waitedMs = Date.now() - startedAt;
       if (error.timedOut) {
@@ -214,6 +217,12 @@ async function fetchFromOwnHardware(
     if (!options.statusRoot && elapsedMs >= timing.relayCutMs && [502, 503, 504, 524].includes(response.status)) {
       void response.body?.cancel().catch(() => undefined);
       throw relayCut(elapsedMs);
+    }
+    if (response.status === 409) {
+      const body = await response.text();
+      // The model the route points at is not available. Asking again straight away gets the same answer.
+      if (body.includes('routing_error')) throw new ModelHostError(`The gateway cannot route this request (409${errorDetail(body)}). Check that the model for this route is available on the Mac.`, 'failed');
+      return new Response(body, { status: 409, headers: response.headers });
     }
     if (response.status === 503) {
       const detail = errorDetail(await response.text());
@@ -365,7 +374,7 @@ function bodyStream(message: http.IncomingMessage): ReadableStream<Uint8Array> {
 }
 
 interface QueueRecord {
-  state: ModelWaitStatus['state'] | 'failed' | 'unknown';
+  state: ModelWaitStatus['state'] | 'done' | 'failed' | 'unknown';
   position?: number;
   detail?: string;
   /** The gateway's own word for the state, shown when KAI does not recognise it. */
@@ -392,16 +401,22 @@ async function readStatus(
     if (!response.ok) return 'unreachable';
     const value = await response.json() as { status?: unknown; detail?: unknown; position?: unknown };
     const status = typeof value.status === 'string' ? value.status.toLowerCase() : '';
-    // Matched loosely: only a clear failure changes what KAI does, everything else is shown to the person.
-    const state: QueueRecord['state'] = /fail|error|cancel|reject|expired/.test(status) ? 'failed'
-      : /queue|wait|pending/.test(status) ? 'queued'
-        : /run|work|active|process|start|generat|load/.test(status) ? 'running'
-          : 'unknown';
+    // The gateway's words: queued, preparing, running, done, failed, cancelled. Anything else is shown as it is.
+    const state: QueueRecord['state'] = status === 'failed' || status === 'cancelled' ? 'failed'
+      : status === 'queued' || status === 'preparing' ? 'queued'
+        : status === 'running' ? 'running'
+          // Finished: the reply is on its way, and there is nothing to tell.
+          : status === 'done' ? 'done'
+            : 'unknown';
+    // A position is given only to a queued request; elsewhere the gateway sends 0.
+    const position = typeof value.position === 'number' && value.position > 0 ? value.position : undefined;
+    const detail = typeof value.detail === 'string' && value.detail ? value.detail.slice(0, 300)
+      : status === 'preparing' ? 'Preparing the model.' : undefined;
     return {
       state,
       status: status.slice(0, 40),
-      ...(typeof value.position === 'number' ? { position: value.position } : {}),
-      ...(typeof value.detail === 'string' && value.detail ? { detail: value.detail.slice(0, 300) } : {}),
+      ...(position !== undefined ? { position } : {}),
+      ...(detail ? { detail } : {}),
     };
   } catch {
     return 'unreachable';
@@ -460,6 +475,15 @@ async function watchQueue(
       });
     }
   }
+}
+
+/** Best effort, and not waited for: the run is already over. */
+function withdraw(statusRoot: string, requestId: string, apiKey: string | undefined, timing: ModelTiming): void {
+  void fetch(statusUrl(statusRoot, requestId), {
+    method: 'DELETE',
+    headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+    signal: AbortSignal.timeout(timing.statusTimeoutMs),
+  }).then((response) => response.body?.cancel()).catch(() => undefined);
 }
 
 async function isGone(

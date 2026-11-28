@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { BrainEntry, ContextPreview, ContextPreviewItem, ContextPreviewSection } from '@kai/contracts';
 import { buildRepoMap, outlineFile } from './repo-map';
+import { INJECTED_RULES_PATH } from './execution-rules';
 import { globMatches } from './glob-match';
 
 const INSTRUCTION_FILES = [
@@ -36,6 +37,8 @@ interface ContextEntry {
 }
 
 export interface BuildProjectContextOptions {
+  /** Leaves out the copy of the standing rules written into the project, when the rules are sent anyway. */
+  skipInjectedRules?: boolean;
   /** Selected files longer than this many characters are given as an outline instead of in full. */
   outlineFilesOver?: number;
   selectedPaths?: readonly string[];
@@ -78,7 +81,7 @@ export async function buildProjectContext(
     : await collectPathRules(root, options.touchedPaths ?? options.selectedPaths ?? []);
   const instructions = options.omitStatic
     ? []
-    : [...collectAuthoritativeInstructions(options.authoritativeRules), ...collectConventions(options.conventions), ...(await collectInstructions(root)), ...pathRules];
+    : [...collectAuthoritativeInstructions(options.authoritativeRules), ...collectConventions(options.conventions), ...(await collectInstructions(root)).filter((entry) => !(options.skipInjectedRules && entry.item.source === INJECTED_RULES_PATH)), ...pathRules];
   const instructionPaths = new Set(instructions.map((entry) => entry.item.source));
   const files = await collectSelectedFiles(root, options.selectedPaths ?? [], instructionPaths, options.outlineFilesOver);
   const skills = options.omitStatic ? [] : await collectSkills(root);

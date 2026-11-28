@@ -872,6 +872,8 @@ export const ipcInputSchemas = {
       logRetentionEntries: z.number().int().min(100).max(100_000).optional(),
       diagnosticsEnabled: z.boolean().optional(),
       gatewayOwnHardware: z.boolean().optional(),
+      // The whole map is sent, so clearing a model's override removes it.
+      modelContextOverride: z.record(z.string().min(1).max(300), z.number().int().positive().max(10_000_000)).optional(),
       gatewayAwayUrl: z.string().url().max(500).refine((url) => !/:1234(?:\/|$)/.test(url), 'LM Studio port 1234 is not a gateway address.').nullable().optional(),
       gatewayCredentialId: z.string().min(1).max(200).nullable().optional(),
       gatewayHomeUrl: z.string().url().max(500).refine((url) => !/:1234(?:\/|$)/.test(url), 'LM Studio port 1234 is not a gateway address.').nullable().optional(),
@@ -1515,6 +1517,7 @@ export interface SettingsUpdate {
   gatewayAwayUrl?: AppSettings['gatewayAwayUrl'];
   gatewayCredentialId?: AppSettings['gatewayCredentialId'];
   gatewayHomeUrl?: AppSettings['gatewayHomeUrl'];
+  modelContextOverride?: AppSettings['modelContextOverride'];
   webSearch?: Partial<AppSettings['webSearch']>;
   learningTutor?: Partial<AppSettings['learningTutor']>;
   experienceCapture?: Partial<AppSettings['experienceCapture']>;

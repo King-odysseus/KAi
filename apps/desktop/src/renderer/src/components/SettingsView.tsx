@@ -11,7 +11,7 @@ import { ProjectAutomation } from './AutomationSettings';
 import { SaveToBrainDialog } from './SaveToBrain';
 import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups, type SettingsGroup } from './settings-groups';
 import { ThemeColors } from './ThemeColors';
-import { ACCESS_LEVELS, capabilityBundleSchema, CLI_MODEL_SUGGESTIONS, cliApiKeyCredentialId, DIRECT_PROVIDER_ORDER, EXPERIENCE_PROFILES, experienceProfile, KAI_TERMINAL_MCP_SERVER_ID, KAI_WINDOW_MCP_SERVER_ID, OPENPENCIL_MCP_SERVER_ID, PLAYWRIGHT_MCP_SERVER_ID, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, WEB_SEARCH_SOURCES, WEB_SEARCH_SOURCE_LABEL, directProviderPreset, isLocalProvider, localProviderGuide, nativeSearchProvider, pickLocalModel, searchCredentialId } from '@kai/contracts';
+import { ACCESS_LEVELS, capabilityBundleSchema, CLI_MODEL_SUGGESTIONS, cliApiKeyCredentialId, DIRECT_PROVIDER_ORDER, EXPERIENCE_PROFILES, experienceProfile, KAI_TERMINAL_MCP_SERVER_ID, KAI_WINDOW_MCP_SERVER_ID, OPENPENCIL_MCP_SERVER_ID, PLAYWRIGHT_MCP_SERVER_ID, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, WEB_SEARCH_SOURCES, WEB_SEARCH_SOURCE_LABEL, directProviderPreset, isLocalProvider, localProviderGuide, nativeSearchProvider, pickLocalModel, searchCredentialId, gatewayContextFor } from '@kai/contracts';
 import type { AgentConfigImportPreview, AppSettings, ConnectorCatalogEntry, MemoryImprovementSuggestion, ProjectAutomation as ProjectAutomationSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate, WebSearchTestResult } from '@kai/contracts';
 import { confirmDialog } from './AppDialog';
 import { ModelField } from './ModelField';
@@ -1032,6 +1032,35 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           onClearKey={() => void clearProviderCredential('direct')}
           vaultAvailable={credentialStatus.available}
         />
+
+        <section className="settings-section span-two" aria-label="Model context windows">
+          <div className="section-title"><Cpu size={17} /><span>Model context windows</span></div>
+          <p className="settings-note">Set a per-model window override. Reported sizes come from the latest model refresh; gateway defaults are shown when no server size is reported. Clear an override to use the reported or default size.</p>
+          <div className="field-grid">
+            {[...new Set([...Object.keys(draft.modelContextOverride), ...Object.keys(providerModels.direct?.contextLengths ?? {})])].sort().map((model) => {
+              const override = draft.modelContextOverride[model];
+              const reported = providerModels.direct?.contextLengths?.[model];
+              const gatewayDefault = gatewayContextFor(model);
+              return <div className="settings-field" key={model}>
+                <span>{model}</span>
+                <small>{reported ? `Reported: ${reported.toLocaleString()} tokens` : gatewayDefault ? `Gateway default: ${gatewayDefault.toLocaleString()} tokens` : 'No reported size or gateway default'}</small>
+                <div className="flex items-center gap-2">
+                  <UiTextInput aria-label={`${model} context window override`} type="number" min="1" value={override ?? ''} placeholder="Use reported/default" onChange={(event) => {
+                    const value = Number(event.currentTarget.value);
+                    const next = { ...draft.modelContextOverride };
+                    if (event.currentTarget.value && Number.isSafeInteger(value) && value > 0) next[model] = value;
+                    else delete next[model];
+                    setDraft({ ...draft, modelContextOverride: next });
+                  }} />
+                  {override !== undefined && <UiButton type="button" className="secondary-button" aria-label={`Clear ${model} context override`} onClick={() => {
+                    const next = { ...draft.modelContextOverride }; delete next[model]; setDraft({ ...draft, modelContextOverride: next });
+                  }}>Clear</UiButton>}
+                </div>
+              </div>;
+            })}
+          </div>
+          {cardSave('directApi', 'Save model context windows', ['directApi'])}
+        </section>
 
         <section className="settings-section span-two">
             <div className="section-title"><Cpu size={17} /><span>Gateway hardware</span></div>

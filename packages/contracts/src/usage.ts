@@ -123,6 +123,7 @@ export function modelContextFor(
 /** Gateway aliases omit context lengths from /v1/models, so use the gateway's configured loaded windows. */
 export function gatewayContextFor(model: string): number | undefined {
   if (/^gateway\/(?:general|vision|research)$/i.test(model)) return 65_536;
-  if (/^gateway\/coding$/i.test(model)) return 65_536;
+  // The coding route has no fallback: it is served by the coder model or refused.
+  if (/^gateway\/coding$/i.test(model)) return 131_072;
   return undefined;
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildReport, createDefaultCrewConfig, crewConfigSchema } from '@kai/contracts';
 import type { AgentRunRequest, AgentRunResult, CrewConfig, CrewRun } from '@kai/contracts';
-import { DesktopCrewRunner } from '../apps/desktop/src/main/crew-runner';
+import { crewBatchForLocalResidency, DesktopCrewRunner } from '../apps/desktop/src/main/crew-runner';
 import type { CrewRunnerPorts } from '../apps/desktop/src/main/crew-runner';
 import type { ParallelSession } from '../apps/desktop/src/main/parallel-session';
 import { parsePlan, planPrompt, reviewPrompt } from '../apps/desktop/src/main/crew-prompts';
@@ -12,6 +12,17 @@ const PLAN = JSON.stringify({
     { id: 'schema', title: 'Log schema', role: 'builder', description: 'Tables', acceptance: ['Migrations run'], dependsOn: [] },
     { id: 'ingest', title: 'Ingestion endpoint', role: 'builder', description: 'POST /logs', acceptance: ['Rate limit 100/min'], dependsOn: ['schema'] },
   ],
+});
+
+describe('local Crew model residency', () => {
+  it('runs only one task at a time whenever a role uses a local API model', () => {
+    const config = createDefaultCrewConfig();
+    const roles = config.roles.map((role) => role.id === 'builder'
+      ? { ...role, execution: 'api' as const, api: { provider: 'ollama' as const, model: 'qwen3-coder' } }
+      : role);
+    const tasks = [{ id: 'a', role: 'builder' }, { id: 'b', role: 'builder' }];
+    expect(crewBatchForLocalResidency(tasks[0]!, tasks, roles, false, 2)).toEqual([tasks[0]]);
+  });
 });
 
 interface Script {
@@ -83,7 +94,7 @@ async function runToIdle(runner: DesktopCrewRunner, runId: string): Promise<Crew
 }
 
 describe('crew runner', () => {
-  it('splits local builder work into atomic reviewed task cards and bounds each local turn', async () => {
+  it('splits local builder work into atomic reviewed task cards without a hard turn cap', async () => {
     const f = fixture();
     const localConfig = crewConfigSchema.parse({
       ...f.config,
@@ -97,7 +108,7 @@ describe('crew runner', () => {
     const started = await f.runner.start({ projectId: 'p1', goal: 'Build sample log', config: localConfig }, 1);
     const run = await runToIdle(f.runner, started.id);
     const builder = f.requests.find((request) => request.displayText === 'Build: Log schema');
-    expect(builder?.toolRoundLimit).toBe(30);
+    expect(builder?.toolRoundLimit).toBeUndefined();
     expect(builder?.prompt).toContain('This is a deliberately small Crew task for a local model');
     expect(run.tasks.map((task) => task.status)).toEqual(['accepted', 'accepted']);
   });
@@ -152,11 +163,11 @@ describe('crew runner', () => {
       const run = await runToIdle(f.runner, started.id);
       const schemaBuilds = f.requests.filter((request) => request.displayText === 'Build: Log schema');
       expect(schemaBuilds).toHaveLength(3);
-      expect(schemaBuilds.slice(0, 2).every((request) => request.execution === 'api' && request.toolRoundLimit === 30)).toBe(true);
+      expect(schemaBuilds.slice(0, 2).every((request) => request.execution === 'api' && request.toolRoundLimit === undefined)).toBe(true);
       expect(schemaBuilds[2]).toMatchObject({ execution: 'cli', agent: 'claude' });
       expect(schemaBuilds[2]?.toolRoundLimit).toBeUndefined();
       // The next card starts on the local model again.
-      expect(f.requests.find((request) => request.displayText === 'Build: Ingestion endpoint')).toMatchObject({ execution: 'api', toolRoundLimit: 30 });
+      expect(f.requests.find((request) => request.displayText === 'Build: Ingestion endpoint')).toMatchObject({ execution: 'api' });
       expect(run.tasks.find((task) => task.id === 'schema')).toMatchObject({ escalated: true, tier: 'cloud' });
       expect(run.tasks.find((task) => task.id === 'ingest')).toMatchObject({ escalated: false, tier: 'local' });
       expect(run.tiers).toEqual({ localBuilds: 3, cloudBuilds: 1, escalations: 1 });

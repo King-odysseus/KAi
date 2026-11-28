@@ -9,6 +9,8 @@ import { localServerHint, resolveApiConnection, withGatewayProfile } from './api
 import { resolveGatewayAddress } from './gateway-address';
 import { fetchWithHeaderTimeout, modelFetch, ModelHostError, type ModelTiming, type ModelWaitStatus } from './model-transport';
 import { capToolOutput, toolOutputLimit } from './tool-output-cap';
+import { checkProgress } from './check-progress';
+import { CARRIED_FILES_SHARE, ownFoldThreshold, startWorkingMemory, workingMemoryOf } from './working-memory';
 import type {
   AppSettings,
   AgentRunRequest,
@@ -336,6 +338,16 @@ function anthropicBlocksText(content: AnthropicMessage['content']): string {
       return '';
     })
     .join('\n');
+}
+
+/**
+ * Whether a run that keeps a working memory should fold now. Its fold replaces everything since the run began and
+ * carries the files forward, so it needs only to have done enough since the last one for another to be worth it.
+ */
+export function shouldFoldWorkingMemory(messages: readonly ChatMessage[], segmentStart: number, foldAt: number, reportedTokens = 0, fixedTokens = 0): boolean {
+  if (foldAt <= 0 || messages.length - segmentStart < 2) return false;
+  const history = Math.max(estimateChatTokens(messages) - estimateChatTokens(messages.filter((message) => message.role === 'system')), reportedTokens - fixedTokens);
+  return history >= foldAt && estimateChatTokens(messages.slice(segmentStart)) >= foldAt * 0.25;
 }
 
 /** The same decision as `shouldCompactRun`, for an Anthropic-shaped history. */
@@ -667,12 +679,16 @@ function hostOf(capability: DirectApiCapability): ModelHost | undefined {
 
 function waitMessage(capability: DirectApiCapability, status: ModelWaitStatus): string {
   if (status.state === 'running') return `${capability.model} has started on this request.`;
+  // Every waiting message starts the same way, which is how the screen tells waiting from working.
   if (status.state === 'queued') {
-    const place = status.position !== undefined ? `queue position ${status.position}` : 'no reply yet';
-    return `Waiting for your hardware: ${place}.${status.detail ? ` ${status.detail}` : ''}`;
+    const place = status.position !== undefined ? `queue position ${status.position}.` : '';
+    return `${HARDWARE_WAIT_PREFIX}${[place, status.detail ?? ''].filter(Boolean).join(' ') || 'no reply yet.'}`;
   }
-  return status.detail ?? 'Your hardware is busy. Waiting before trying again.';
+  return `${HARDWARE_WAIT_PREFIX}${status.detail ?? 'it is busy, and the request will be tried again.'}`;
 }
+
+/** Starts the detail of every lifecycle event that means a run is waiting on the person's own hardware. */
+export const HARDWARE_WAIT_PREFIX = 'Waiting for your hardware: ';
 
 interface DirectApiSettingsPort {
   load(): Promise<AppSettings>;
@@ -744,7 +760,8 @@ export class DesktopDirectProviderRuntime {
       apiKey,
       ...(capability.statusRoot ? { statusRoot: capability.statusRoot } : {}),
       ...(this.options.modelTiming ? { timing: this.options.modelTiming } : {}),
-      onStatus: (status) => emit(lifecycleEvent(request, 'starting', waitMessage(capability, status))),
+      // A run waiting its turn is a running run: the screen reads the wait from this event while it is the latest.
+      onStatus: (status) => emit(lifecycleEvent(request, status.state === 'running' ? 'starting' : 'running', waitMessage(capability, status))),
     });
     // The person's own hardware queues requests itself, and one can wait hours: it must not hold a pacing slot that a
     // cloud run is waiting for.
@@ -1657,6 +1674,15 @@ export class DesktopDirectProviderRuntime {
     const loadedSettings = await this.settings.load().catch(() => undefined);
     const compactAt = compactThresholdFor(loadedSettings?.usageBudget ?? { compactAtTokens: 0, compactAtTokensLocal: 0 }, capability.provider, modelContextFor(loadedSettings ?? {}, capability.model));
     let lastContextTokens = 0;
+    // A run on the person's own hardware, with a window KAI knows, folds against that window and keeps a working
+    // memory, so what it has read survives the fold. Folding turned off in Settings leaves the history alone.
+    const ownWindow = toolRuntime.outputLimit && compactAt > 0 && !isLeadRun(request)
+      ? modelContextFor(loadedSettings ?? {}, capability.model)
+      : undefined;
+    const memory = ownWindow ? startWorkingMemory(toolRuntime) : undefined;
+    const baseLength = messages.length;
+    /** What the model's own hardware served from its prompt cache, when it says. */
+    let cachedInputTokens: number | undefined;
 
     try {
       for (let providerRound = 0; providerRound < providerRoundLimit; providerRound += 1) {
@@ -1669,6 +1695,7 @@ export class DesktopDirectProviderRuntime {
         const interjected = takeInterjectionMessage(request.conversationId);
         if (interjected) {
           resumeAfterSteer = true;
+          memory?.noteSteering(interjected.context ? `${interjected.text}\n${interjected.context}` : interjected.text);
           messages.push({ role: 'user', content: textWithImages(steeringInstructionFor(interjected), interjectionImages(interjected), openAiImagePart) });
         }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
@@ -1676,7 +1703,9 @@ export class DesktopDirectProviderRuntime {
           messages.push({ role: 'user', content: isLeadRun(request) ? LEAD_FINAL_ANSWER : WRAP_UP_MESSAGE });
           emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached a run limit; asking it to sum up what it has done.`));
         }
-        const trimmedResults = trimChatToolResults(messages);
+        // With a working memory, earlier messages are never rewritten: the model's hardware can then reuse what it has
+        // already processed, and the space is won back in one go at the next fold.
+        const trimmedResults = memory ? 0 : trimChatToolResults(messages);
         if (trimmedResults > 0) emit(lifecycleEvent(request, 'starting', `Trimmed ${trimmedResults} earlier tool results to keep the request small.`));
         const pendingToolCalls = new Map<number, PendingChatToolCall>();
         let roundText = '';
@@ -1713,6 +1742,8 @@ export class DesktopDirectProviderRuntime {
           const roundInputTokens = integerValue(usage?.prompt_tokens) ?? integerValue(usage?.input_tokens);
           const roundOutputTokens = integerValue(usage?.completion_tokens) ?? integerValue(usage?.output_tokens);
           if (roundInputTokens !== undefined) { inputTokens = (inputTokens ?? 0) + roundInputTokens; lastContextTokens = roundInputTokens; emit(contextSizeEvent(request, lastContextTokens, fixedTokens())); }
+          const roundCachedTokens = integerValue(asRecord(usage?.prompt_tokens_details)?.cached_tokens);
+          if (roundCachedTokens !== undefined && toolRuntime.outputLimit) cachedInputTokens = (cachedInputTokens ?? 0) + roundCachedTokens;
           if (roundOutputTokens !== undefined) outputTokens = (outputTokens ?? 0) + roundOutputTokens;
 
           const choice = firstRecord(value.choices);
@@ -1861,14 +1892,29 @@ export class DesktopDirectProviderRuntime {
             forceFinalAnswer = true;
             messages.push({ role: 'user', content: WRAP_UP_MESSAGE });
           }
-        } else if (!forceFinalAnswer && toolRounds < totalToolRoundLimit && shouldCompactRun(messages, segmentStart, compactAt, lastContextTokens, fixedTokens())) {
+        } else if (!forceFinalAnswer && toolRounds < totalToolRoundLimit && (memory && ownWindow
+          ? shouldFoldWorkingMemory(messages, segmentStart, ownFoldThreshold(ownWindow, fixedTokens()), lastContextTokens, fixedTokens())
+          : shouldCompactRun(messages, segmentStart, compactAt, lastContextTokens, fixedTokens()))) {
           // The history reached the size chosen for auto-compact: the same fold as above, triggered by size.
-          const summary = compactChatToolHistory(messages.slice(segmentStart)) + await foldPlanNote(projectRoot, request.conversationId);
-          messages.length = segmentStart;
-          messages.push({ role: 'user', content: continuationMessage(summary, request) });
+          const planNote = await foldPlanNote(projectRoot, request.conversationId);
+          if (memory && ownWindow) {
+            const fileBudget = Math.floor(ownFoldThreshold(ownWindow, fixedTokens()) * 4 * CARRIED_FILES_SHARE);
+            const said = [...messages.slice(segmentStart)].reverse().find((message) => message.role === 'assistant' && typeof message.content === 'string' && message.content.trim());
+            const summary = await memory.fold(toolRuntime.rootPath, fileBudget, typeof said?.content === 'string' ? said.content : '');
+            // The memory holds the whole run so far, so it replaces every earlier fold as well.
+            messages.length = baseLength;
+            messages.push({ role: 'user', content: continuationMessage(`${summary}${planNote}`, request) });
+            emit(noticeEvent(request, 'Compacted this run: it was close to the model\'s window, so the earlier steps became a working memory with the files in use, and it carried on.'));
+          } else {
+            const summary = compactChatToolHistory(messages.slice(segmentStart)) + planNote;
+            messages.length = segmentStart;
+            messages.push({ role: 'user', content: continuationMessage(summary, request) });
+            emit(noticeEvent(request, `Compacted this run: its conversation reached the ${compactAt.toLocaleString()} tokens you set, so its earlier steps became a summary and it carried on.`));
+          }
           segmentStart = messages.length;
           segmentRounds = 0;
-          emit(noticeEvent(request, `Compacted this run: its conversation reached the ${compactAt.toLocaleString()} tokens you set, so its earlier steps became a summary and it carried on.`));
+          // The size reported for the request before the fold says nothing about the one after it.
+          lastContextTokens = 0;
         }
       }
     } catch (error) {
@@ -1904,7 +1950,8 @@ export class DesktopDirectProviderRuntime {
         inputTokens,
         outputTokens,
         estimateProvenance: 'measured',
-        ...costFields(capability.provider, capability.model, inputTokens, outputTokens, undefined, hostOf(capability)),
+        ...costFields(capability.provider, capability.model, inputTokens, outputTokens, cachedInputTokens, hostOf(capability)),
+        ...cacheFields(capability.provider, capability.model, inputTokens, cachedInputTokens, hostOf(capability)),
       });
     }
     if (error) {
@@ -2844,6 +2891,13 @@ const SPEND_QUESTION = (costUsd: number, limitUsd: number) => ({
   runQuestion: CONTINUE_OR_FINISH,
 });
 
+const STUCK_QUESTION = (message: string) => ({
+  title: 'The same check keeps failing',
+  detail: `${message} Continue lets it try again; Finish stops here and asks it to sum up what is left.`,
+  risk: 'medium' as const,
+  runQuestion: CONTINUE_OR_FINISH,
+});
+
 const REPEAT_QUESTION = (message: string) => ({
   title: 'The agent is repeating itself',
   detail: `${message} Continue lets it carry on; Finish stops here and asks it to sum up.`,
@@ -3635,6 +3689,28 @@ async function executeToolCalls(
     if (repeat === 'warn') {
       execution.output = { ...(asRecord(execution.output) ?? { result: execution.output }), kaiNotice: REPEAT_WARNING };
     }
+    // A model on the person's own hardware gets a second kind of watch: different edits, the same failing check.
+    if (toolRuntime.outputLimit && repeat !== 'stop' && !isLeadRun(request)) {
+      const verdict = checkProgress(toolRuntime).observe(name, argumentsValue, execution.output);
+      if (verdict.kind === 'warn') {
+        execution.output = { ...(asRecord(execution.output) ?? { result: execution.output }), kaiNotice: verdict.notice };
+      } else if (verdict.kind === 'stuck') {
+        if (request.splitRole === 'implementer' && notifyRepeatDetected(request.conversationId)) {
+          execution.output = { ...(asRecord(execution.output) ?? { result: execution.output }), kaiNotice: `${verdict.notice} Handing this turn to the Architect.` };
+          emit(toolCallEvent(request, name, 'failed', argumentsValue, execution.output, callId));
+          throw signal.reason ?? new Error('The Architect is taking over after the same check kept failing.');
+        }
+        // Shown before the question, so the result that caused it is on screen while the person decides.
+        emit(noticeEvent(request, verdict.notice));
+        const answer = await askToContinue(approvals, STUCK_QUESTION(verdict.notice));
+        if (answer === 'wrap-up') toolRuntime.guard.requestWrapUp();
+        else checkProgress(toolRuntime).reset();
+        execution.output = {
+          ...(asRecord(execution.output) ?? { result: execution.output }),
+          kaiNotice: answer === 'wrap-up' ? verdict.notice : `${verdict.notice} Carrying on because you asked: try a different approach.`,
+        };
+      }
+    }
     emit(toolCallEvent(request, name, execution.ok ? 'completed' : 'failed', argumentsValue, execution.output, callId));
     if (execution.changedFile) {
       if (execution.changedFile.action === 'created') {
@@ -3677,10 +3753,12 @@ async function executeToolCalls(
         });
       }
     }
-    // The person sees the whole result; the model gets what its window can hold.
-    results.push(formatOutput(callId, toolRuntime.outputLimit
+    // The person sees the whole result; the model gets what its window can hold, and not what it can already see.
+    const sized = toolRuntime.outputLimit
       ? await capToolOutput(toolRuntime.rootPath, callId, name, execution.output, toolRuntime.outputLimit)
-      : execution.output));
+      : execution.output;
+    const memory = workingMemoryOf(toolRuntime);
+    results.push(formatOutput(callId, memory ? memory.observe(name, argumentsValue, sized, execution.ok) : sized));
   }
   return results;
 }
@@ -4096,7 +4174,7 @@ function toolCallEvent(
 
 function lifecycleEvent(
   request: AgentRunRequest,
-  status: 'starting' | 'completed' | 'failed' | 'cancelled',
+  status: 'starting' | 'running' | 'completed' | 'failed' | 'cancelled',
   detail: string,
 ): PersistedEvent {
   return {

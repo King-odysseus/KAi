@@ -2888,7 +2888,7 @@ export function WorkspaceView({
           </div>
         )}
         <div className="composer-status-line">
-          <UiButton type="button" aria-expanded={composerStatusOpen} onClick={() => setComposerStatusOpen((open) => !open)}><ChevronDown size={12} className={composerStatusOpen ? 'rotate-180' : ''} /> {running ? 'Running' : 'Ready'} · {apiRun ? 'API' : 'CLI'} · {runLabel}</UiButton>
+          <UiButton type="button" aria-expanded={composerStatusOpen} onClick={() => setComposerStatusOpen((open) => !open)}><ChevronDown size={12} className={composerStatusOpen ? 'rotate-180' : ''} /> {awaitingApproval || (activity.kind === 'waiting' && !activity.label.startsWith('Waiting on Mac')) ? 'Needs you' : running && activity.kind === 'waiting' ? activity.label : running ? 'Running' : 'Ready'} · {apiRun ? 'API' : 'CLI'} · {runLabel}</UiButton>
           <span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation?.compaction ? `Context compacted ${relativeTime(activeConversation.compaction.createdAt)}` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span>
           {limitPolicy && <span className="flex min-w-0 flex-wrap items-center justify-end gap-x-2" title={limitPolicy}>{limitPolicy}<UiButton type="button" className="composer-text-button" onClick={onOpenUsage}>Usage</UiButton></span>}
         </div>

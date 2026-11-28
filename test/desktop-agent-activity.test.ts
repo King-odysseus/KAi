@@ -42,6 +42,11 @@ describe('desktop agent activity summary', () => {
     expect(deriveAgentActivity([read], true, true, true, true)).toMatchObject({ label: 'Waiting for approval' });
   });
 
+  it('shows Mac queue status and position in the activity line', () => {
+    const waiting = event({ type: 'agent.lifecycle', status: 'running', detail: 'Waiting for your hardware: queue position 3. Still waiting.' });
+    expect(deriveAgentActivity([waiting], true, false, false)).toMatchObject({ kind: 'waiting', label: 'Waiting on Mac · queue position 3' });
+  });
+
   it('surfaces reviewable changes and the last meaningful action when idle', () => {
     const changes = event({
       type: 'turn.changes',

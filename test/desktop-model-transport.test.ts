@@ -230,6 +230,50 @@ describe('model transport: the person\'s own hardware', () => {
     expect(server.sends).toHaveLength(1);
   });
 
+  it('reads the gateway\'s own status words, and shows no position of 0', async () => {
+    const statuses: ModelWaitStatus[] = [];
+    const words = [{ status: 'queued', position: 2, detail: '' }, { status: 'preparing', position: 0, detail: '' }, { status: 'running', position: 0, detail: 'Generating.' }, { status: 'done', position: 0 }];
+    const server = await gateway(
+      (response, seen, index) => { setTimeout(() => ok(response, seen, index), 150); },
+      (response, _seen, index) => json(response, 200, words[Math.min(index, words.length - 1)]),
+    );
+    await (await post(server.url, { statusRoot: server.root, onStatus: (status) => statuses.push(status) })).text();
+
+    expect(statuses.slice(0, 3)).toEqual([
+      { state: 'queued', position: 2 },
+      { state: 'queued', detail: 'Preparing the model.' },
+      { state: 'running', detail: 'Generating.' },
+    ]);
+    expect(statuses.every((status) => !String(status.detail ?? '').includes('done'))).toBe(true);
+  });
+
+  it('takes a queued request out of the queue when the person stops it', async () => {
+    const methods: string[] = [];
+    const server = http.createServer((incoming, response) => {
+      incoming.resume();
+      if (!incoming.url!.startsWith('/v1/')) {
+        methods.push(`${incoming.method} ${incoming.headers.authorization}`);
+        json(response, 200, { status: 'queued', position: 1 });
+      }
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address() as { port: number };
+    const root = `http://127.0.0.1:${address.port}`;
+    const stop = new AbortController();
+    const pending = post(`${root}/v1/chat/completions`, { statusRoot: root, apiKey: 'test-key' }, stop.signal);
+    setTimeout(() => stop.abort(), 50);
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await expect.poll(() => methods.includes('DELETE Bearer test-key')).toBe(true);
+  });
+
+  it('does not ask again when the gateway cannot route the request', async () => {
+    const server = await gateway((response) => json(response, 409, { error: { code: 'routing_error', message: 'coder unavailable' } }));
+    expect((await failure(post(server.url))).message).toContain('coder unavailable');
+    expect(server.sends).toHaveLength(1);
+  });
+
   it('shows a status word it does not recognise', async () => {
     const statuses: ModelWaitStatus[] = [];
     const server = await gateway(

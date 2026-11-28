@@ -46,6 +46,8 @@ interface ReplayResult {
   folds: number;
   edited: number;
   largestRequestChars: number;
+  /** Requests whose earlier messages differ from the request before: each one makes the server start over. */
+  rewrites: number;
 }
 
 async function replay(windowTokens: number): Promise<ReplayResult> {
@@ -56,7 +58,8 @@ async function replay(windowTokens: number): Promise<ReplayResult> {
   for (const file of SHARED) fs.writeFileSync(path.join(root, file), contents(file, 45));
   for (const file of SOURCES) fs.writeFileSync(path.join(root, file), contents(file, 70));
 
-  const result: ReplayResult = { status: '', rounds: 0, reads: 0, rereads: 0, folds: 0, edited: 0, largestRequestChars: 0 };
+  const result: ReplayResult = { status: '', rounds: 0, reads: 0, rereads: 0, folds: 0, edited: 0, largestRequestChars: 0, rewrites: 0 };
+  let previous: string[] = [];
   const edited = new Set<string>();
   const readSinceChange = new Set<string>();
 
@@ -73,7 +76,11 @@ async function replay(windowTokens: number): Promise<ReplayResult> {
       const body = JSON.parse(raw) as { messages: Array<{ role: string; content?: unknown }> };
       result.rounds += 1;
       result.largestRequestChars = Math.max(result.largestRequestChars, raw.length);
-      const seen = body.messages.filter((message) => message.role === 'tool').map((message) => String(message.content)).join('\n');
+      const sent = body.messages.map((message) => JSON.stringify(message));
+      if (previous.some((message, index) => sent[index] !== message)) result.rewrites += 1;
+      previous = sent;
+      // Everything the request holds, as a model would see it: tool results and anything carried forward at a fold.
+      const seen = body.messages.map((message) => String(message.content ?? '')).join('\n');
       const next = SOURCES.find((file) => !edited.has(file));
       const missing = next ? [...SHARED, next].find((file) => !seen.includes(endOf(file))) : undefined;
 
@@ -124,16 +131,17 @@ describe('replay of a long task on a local model', () => {
     const roomy = await replay(200_000);
     console.log('replay, roomy window', roomy);
 
-    expect(roomy).toMatchObject({ status: 'completed', edited: SOURCES.length, folds: 0, rereads: 0, reads: SOURCES.length + SHARED.length });
+    expect(roomy).toMatchObject({ status: 'completed', edited: SOURCES.length, folds: 0, rereads: 0, rewrites: 0, reads: SOURCES.length + SHARED.length });
   }, 60_000);
 
-  // The "before" figures for the working-memory work (K7 to K9 in docs/desktop/LOCAL_FIRST_PLAN.md). When that lands,
-  // these expectations become the target: no re-reads of unchanged files, however often the run folds.
-  it('re-reads unchanged files after each fold when the window is small', async () => {
+  // Before the working memory (version 1.2.50) this run took 19 reads for the same 10 files: 9 re-reads over 3 folds.
+  it('reads each file once when the window is small, because a fold carries the files forward', async () => {
     const small = await replay(12_000);
     console.log('replay, small window', small);
 
+    expect(small).toMatchObject({ status: 'completed', edited: SOURCES.length, rereads: 0, reads: SOURCES.length + SHARED.length });
     expect(small.folds).toBeGreaterThan(0);
-    expect(small.rereads).toBeGreaterThan(0);
+    // Earlier messages change only when the run folds, so the server's prompt cache holds in between.
+    expect(small.rewrites).toBeLessThanOrEqual(small.folds);
   }, 60_000);
 });

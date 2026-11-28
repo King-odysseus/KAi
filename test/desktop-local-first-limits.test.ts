@@ -230,6 +230,49 @@ describe('the agent loop on the person\'s own gateway', () => {
     expect(questions[0]!.runQuestion?.continueLabel).toBe('Continue');
   }, 30_000);
 
+  it('asks by the fourth identical check failure, although every edit in between differs', async () => {
+    const root = project({ 'check.js': 'console.log("Tests  2 failed | 12 passed (14)"); console.log("Duration " + Math.random() + "s"); process.exit(1);\n', 'work.txt': '0' });
+    let round = 0;
+    const server = http.createServer((incoming, response) => {
+      let raw = '';
+      incoming.setEncoding('utf8');
+      incoming.on('data', (chunk) => { raw += chunk; });
+      incoming.on('end', () => {
+        const body = JSON.parse(raw) as { tools?: unknown[] };
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        if (!body.tools || round >= 40) {
+          response.end('data: {"choices":[{"delta":{"content":"Stopping."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+          return;
+        }
+        round += 1;
+        // Edit, check, edit, check: no two calls are the same.
+        const call = round % 2
+          ? { name: 'write_file', arguments: JSON.stringify({ path: 'work.txt', content: String(round) }) }
+          : { name: 'run_command', arguments: JSON.stringify({ command: 'node check.js' }) };
+        const toolCall = { index: 0, id: `call_${round}`, type: 'function', function: call };
+        response.end(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [toolCall] } }] })}\n\ndata: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n`);
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Test server did not bind.');
+    const asked: string[] = [];
+
+    const result = await runtime(`http://127.0.0.1:${address.port}/v1`, 'gateway/coding').run(
+      request,
+      root,
+      undefined,
+      undefined,
+      { request: async (approval) => { asked.push(approval.title); return false; } },
+    );
+
+    expect(asked).toEqual(['The same check keeps failing']);
+    // Four checks and the edits before them; the person said finish.
+    expect(round).toBe(8);
+    expect(result.output).toContain('Stopping.');
+  }, 60_000);
+
   it('refuses gateway/auto before sending anything', async () => {
     const bodies: Array<{ messages: Array<{ role: string; content?: string }> }> = [];
     const result = await runtime(await gateway(bodies, 'node -v'), 'gateway/auto').run(request, project());

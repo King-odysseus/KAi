@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultSettings } from '../packages/contracts/src';
+import { createDefaultSettings, parseIpcInput } from '../packages/contracts/src';
 import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups } from '../apps/desktop/src/renderer/src/components/settings-groups';
 
 describe('per-card settings saves', () => {
@@ -31,7 +31,7 @@ describe('per-card settings saves', () => {
     expect(Object.keys(updateForGroups(draft, ['proxy', 'editor'])).sort()).toEqual(['editor', 'proxy']);
     expect(Object.keys(updateForGroups(draft, SETTINGS_GROUP_NAMES)).sort()).toEqual([
       'agentModels', 'agentTeam', 'autoModel', 'cliApiKeys', 'cognitive1', 'defaultAgent', 'defaultAutonomy', 'defaultRoute', 'diagnosticsEnabled',
-      'directApi', 'editor', 'experienceCapture', 'experienceLevel', 'gatewayAwayUrl', 'gatewayCredentialId', 'gatewayHomeUrl', 'gatewayOwnHardware', 'learningTutor', 'logRetentionEntries', 'mcpServers', 'notifications', 'promptGuide', 'proxy',
+      'directApi', 'editor', 'experienceCapture', 'experienceLevel', 'gatewayAwayUrl', 'gatewayCredentialId', 'gatewayHomeUrl', 'gatewayOwnHardware', 'learningTutor', 'logRetentionEntries', 'mcpServers', 'modelContextOverride', 'notifications', 'promptGuide', 'proxy',
       'shortcuts', 'theme', 'webSearch',
     ]);
   });
@@ -42,6 +42,14 @@ describe('per-card settings saves', () => {
     expect(changedGroups(draft, saved)).toEqual(['webSearch']);
     expect(updateForGroups(draft, ['webSearch'])).toEqual({ webSearch: draft.webSearch });
     expect(changedGroups({ ...draft, directApi: { ...draft.directApi, model: 'another-model' } }, saved)).toEqual(['directApi', 'webSearch']);
+  });
+
+  it('saves and clears model context overrides with the Direct API settings card', () => {
+    const saved = createDefaultSettings();
+    const draft = { ...saved, modelContextOverride: { 'gateway/coding': 65_536 } };
+    expect(changedGroups(draft, saved)).toEqual(['directApi']);
+    expect(updateForGroups(draft, ['directApi']).modelContextOverride).toEqual({ 'gateway/coding': 65_536 });
+    expect(updateForGroups(saved, ['directApi']).modelContextOverride).toEqual({});
   });
 
   it('saves the agent team on its own card without touching the other cards', () => {
@@ -73,3 +81,21 @@ describe('per-card settings saves', () => {
     expect(changedGroups({ ...incoming, agentModels: { codex: 'gpt-6-astra' } }, saved)).toEqual(['agentDefaults']);
   });
 });
+
+describe('every settings card can be saved', () => {
+  // A key a card sends but the channel does not list rejects the whole save, not just that key.
+  it.each(SETTINGS_GROUP_NAMES)('the %s card passes the settings:update channel', (group) => {
+    const draft = createDefaultSettings();
+    draft.modelContextOverride = { 'gateway/general': 40_000 };
+    expect(() => parseIpcInput('settings:update', updateForGroups(draft, [group]))).not.toThrow();
+  });
+
+  it('keeps a context override through the channel, and an emptied map', () => {
+    const draft = createDefaultSettings();
+    draft.modelContextOverride = { 'gateway/general': 40_000 };
+    expect(parseIpcInput('settings:update', updateForGroups(draft, ['directApi']))).toMatchObject({ modelContextOverride: { 'gateway/general': 40_000 } });
+    draft.modelContextOverride = {};
+    expect(parseIpcInput('settings:update', updateForGroups(draft, ['directApi']))).toMatchObject({ modelContextOverride: {} });
+  });
+});
+

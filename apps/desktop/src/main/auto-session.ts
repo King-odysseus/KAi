@@ -36,7 +36,6 @@ import {
   type ArchitectCoach,
   type CoachContext,
   isSmallBuilder,
-  LOCAL_BUILDER_ROUNDS,
   stepPrompt,
 } from './architect-loop';
 import { stepFilePath } from './step-file';
@@ -667,7 +666,7 @@ export class DesktopAutoSession {
     }
     if (this.ports.writeSteps) await this.ports.writeSteps(input.projectId, conversationId, brief, input.prompt).catch(() => undefined);
     arch.step = 0;
-    this.record(conversationId, active.ownerWindowId, 'info', `${label} is a local model, so the brief runs as ${steps.length} short steps, each a fresh turn of at most ${LOCAL_BUILDER_ROUNDS} tool rounds.`);
+    this.record(conversationId, active.ownerWindowId, 'info', `${label} is a local model, so the brief runs as ${steps.length} short steps, each a fresh turn.`);
     return stepPrompt(brief, input.prompt, label, 0, this.ports.writeSteps ? stepFilePath(conversationId) : undefined);
   }
 
@@ -838,7 +837,6 @@ export class DesktopAutoSession {
       taskText: input.prompt,
       ...(architectSplitActive(input.architect) ? { splitRole: 'implementer' as const } : {}),
       // A local builder that is stuck does not stop on its own; at this many rounds it reports and the Architect steps in.
-      ...(execution === 'api' && architectSplitActive(input.architect) && isSmallBuilder(input.architect.implementer) ? { toolRoundLimit: LOCAL_BUILDER_ROUNDS } : {}),
       // The Implementer's own API connection, while it is the one running. After a fall back from a spent CLI window
       // the global API connection applies instead, exactly as it did before the split existed.
       ...(execution === 'api' && architectSplitActive(input.architect) && input.architect.implementer.execution === 'api' && input.architect.implementer.api

@@ -40,7 +40,6 @@ import {
   namedStuckCause,
   REVISIONS_BEFORE_STEP_IN,
   ROUNDS_BEFORE_ASKING,
-  LOCAL_BUILDER_ROUNDS,
   isSmallBuilder,
   planPrompt,
   stepPrompt,
@@ -1086,7 +1085,7 @@ ${ARCHITECT_BRIEF_SENTINEL} ${JSON.stringify({ ...BRIEF, steps: STEPS })}`;
     expect(s.buildPrompts).toHaveLength(3);
     s.buildPrompts.forEach((prompt, index) => expect(prompt).toContain(`step ${index + 1} of 3`));
     const builds = s.requests.filter((request) => !request.freshSession);
-    for (const request of builds) expect(request.toolRoundLimit).toBe(LOCAL_BUILDER_ROUNDS);
+    for (const request of builds) expect(request.toolRoundLimit).toBeUndefined();
     const reviews = s.architectPrompts.filter((prompt) => prompt.includes('reviewing the Implementer'));
     expect(reviews).toHaveLength(3);
     expect(s.buildPrompts.filter((prompt) => /step \d of 3/.test(prompt))).toHaveLength(3);
@@ -1201,7 +1200,7 @@ ${ARCHITECT_BRIEF_SENTINEL} ${JSON.stringify({ ...BRIEF, steps: STEPS })}`;
     expect(h.s.buildPrompts).toHaveLength(3);
     h.s.buildPrompts.forEach((prompt, index) => expect(prompt).toContain(`step ${index + 1} of 3`));
     expect(ticked).toEqual([0, 1, 2]);
-    for (const request of h.s.requests.filter((r) => !r.freshSession)) expect(request.toolRoundLimit).toBe(LOCAL_BUILDER_ROUNDS);
+    for (const request of h.s.requests.filter((r) => !r.freshSession)) expect(request.toolRoundLimit).toBeUndefined();
     const reviews = h.s.architectPrompts.filter((prompt) => prompt.includes('reviewing the Implementer'));
     expect(reviews).toHaveLength(4);
     expect(reviews.every((prompt) => prompt.includes('parse() lives in src/core/parse.ts'))).toBe(true);

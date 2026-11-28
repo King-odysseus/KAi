@@ -471,7 +471,7 @@ Task: add a test for one untested component. Home address used; cost 0; starting
 |---|---|---|
 | Result | stopped by hand | passed, 11 of 11 tests |
 | Time | 13 min | 45 s |
-| Input tokens | 3.8M over 68 requests (about 56k each, none cached) | 402k |
+| Input tokens | 3.8M over 68 requests (about 56k each, 92% from cache) | 402k |
 | File reads | 16 (several files 4 times) | 3 |
 | Folds | 1, at 65,536 | 0 |
 
@@ -483,7 +483,7 @@ What Round 2 and 3 take from this:
   Fixed: run questions are now sent to the screen.
 - The model first **changed app code to satisfy its own new test**, and later removed an assertion rather than
   correct it. The first-pass review (X13) should flag source edits and removed assertions in a test-writing task.
-- No prompt-cache hits were reported, so each step re-read about 56k tokens (K9).
+- KAI saw no cached-token count, but this did **not** mean nothing was cached (see 12): the gateway reused 92% (K9).
 
 ## 11. Round 2 work split (2026-11-28, after the first real runs)
 Replaces the Round 2 row of 9.3. The rules in 9.1 and 9.2 still apply; handoff notes continue in 11.4.
@@ -513,3 +513,35 @@ Replaces the Round 2 row of 9.3. The rules in 9.1 and 9.2 still apply; handoff n
   `main/crew-*.ts`.
 
 ### 11.4 Handoff notes
+2026-11-28 — Round 2 baseline before edits: `npm run desktop:typecheck` passed. No pre-existing typecheck failures observed.
+2026-11-28 — X15: Workspace composer status now prioritizes “Needs you” for pending approvals/questions and shows “Waiting on Mac” with the queue position from the engine’s existing lifecycle event. Activity test passes (6/6). No live queued gateway request or separate Lead pane tested.
+2026-11-28 — X16: Settings now lists model context overrides with refreshed reported sizes and gateway defaults, supports clearing saved values, and saves the map with the Direct API settings card. Settings group test passes (8/8). No live gateway size report verified.
+2026-11-28 — X10: Local Crew residency now serializes task batches whenever any role uses a local API model; removed the local 30-round request cap from Crew and Architect/Auto builders so these turns follow the engine’s ask-to-continue behavior. Regression tests cover the Crew local batch and no-cap requests. Targeted Crew/Architect/Auto suites pass (216/216); desktop typecheck passes; no real local server was used.
+2026-11-28 — Round 2 verification after Codex edits: the five touched focused suites pass (230/230) and `npm run desktop:typecheck` passes. The background full suite completed with 3,227 passed, 4 skipped, 1 failed; the failure was the queue-label expectation from `desktop-agent-activity.test.ts`, which was running against the earlier label formatting. That test passes in the post-fix focused run. Re-run of the full suite after the final label fix remains outstanding.
+2026-11-28 — Claude, for X15: no contract change needed. A waiting run emits `agent.lifecycle` (status `starting`) whose `detail` begins `Waiting for your hardware: ` followed by `queue position N.` or the reason; when the request starts it emits `<model> has started on this request.` The exported constant is `HARDWARE_WAIT_PREFIX` in `direct-provider-runtime.ts`.
+2026-11-28 — Claude K12: `check-progress.ts`; own-model runs warn on the 3rd identical check failure and ask Continue or Finish on the 4th. Replayed on the saved first run it asks at 16:23:42, about 4 minutes before the repeat guard did. Cloud runs unchanged.
+2026-11-28 — Claude K7-K9: `working-memory.ts`. Own-model runs with a known window fold at 75% of the whole request, carry the files in use (read fresh from disk), steps, last check and steering; repeated reads of visible unchanged lines get a note once; earlier messages are not rewritten between folds; cached tokens are recorded when reported. Replay on a 12,000-token window: 19 reads and 9 re-reads before, 10 reads and 0 after. Scripted model only; not yet run on the real gateway.
+2026-11-28 — Claude K10: own-model runs get the standing rules in short form (every numbered rule's title and first sentence, commit section and exceptions whole): 4,532 to about 1,500 tokens on the current document. The injected `.kai/instructions.md` copy is no longer sent twice to them.
+
+## 12. Gateway report on the first runs (2026-11-28, from its logs and code)
+- All coding requests were served by the coder; no fallback, load or unload. **The coding route's fallback is
+  removed**: coder at 131,072, or HTTP 409 `routing_error`. This replaces the 65,536 rule in 7c and 7d.
+- One request runs at a time across all models; a helper waits behind a build.
+- **Prompt cache is reused** (92% of prompt tokens). The large misses (prompt 53k to 78k, 12 to 23 s reading each) fell
+  exactly where KAI 1.2.49 trimmed old tool results (16:21:52, 16:23:02, 16:24:04, 16:25:04). K9 removes that for
+  own-model runs. This model resumes only from saved checkpoints, so fold rarely and in large steps.
+- Coder speed, approximate: reads about 3,000 tok/s at 20k and 1,700 to 2,000 at 90k; writes 70 to 90 tok/s.
+- Status words: queued, preparing, running, done, failed, cancelled. `position` is 1-based when queued, else 0.
+  `DELETE` on a request cancels it only while queued. A new `gateway_request_id` per attempt.
+- LM Studio reports no cached tokens. The gateway could add them from its log (code change, not done).
+- Large image jobs unload both chat models; the next request reloads with an empty cache.
+- The report asks KAI to send the key on `GET /api/routing/queue/`. **Not changing it**: that call is the check that
+  decides whether the home address is the gateway, and the key is not sent to an address before that is known. Its 401
+  is the expected answer.
+
+### 12.1 Notes
+2026-11-28 — Claude: transport reads the gateway's status words, withdraws a queued request on Stop, and does not retry a 409 `routing_error`; `gateway/coding` defaults to 131,072; carried files capped at 96,000 characters. For X15: waiting events are now status `running` (they were `starting`, which the composer line did not match).
+2026-11-28 — Claude review of X15, X16, X10:
+(R5, fixed by Claude while Codex was stopped) X16: `modelContextOverride` was missing from the `settings:update` channel schema, which is strict, so saving the Direct API, gateway or context cards would all be rejected. Added it, with a test that every card passes the channel. The card also showed a 65,536 default for `gateway/coding`; it now uses `gatewayContextFor`.
+(R6, for Codex) X10 and `isSmallBuilder` decide "local" with `isOwnNetworkApi`, which is false for the owned gateway through its public away address, and for a role naming no address. Use `modelHostOf` with settings, with a test through the away address.
+(R7, for Codex) One local role makes every Crew task run one at a time, cloud ones included. Serialise only tasks that use the owned hardware. Also remove the comments that still describe the dropped round budget.
