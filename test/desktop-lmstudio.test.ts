@@ -1,3 +1,4 @@
+import { scopeConversationRequest } from '../apps/desktop/src/main/conversation-scope';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as os from 'node:os';
@@ -248,7 +249,7 @@ describe('LM Studio as a provider', () => {
     expect(cost).toMatchObject({ provider: 'lmstudio', model: 'gpt-oss-20b', inputTokens: 40, outputTokens: 6, amountUsd: 0 });
   });
 
-  it('wraps up a local model after 30 tool rounds instead of letting it loop for hours', async () => {
+  it('lets a local model work past 30 tool rounds, and still wraps up at a limit that is set', async () => {
     const requests: Array<{ messages: Array<Record<string, unknown>> }> = [];
     const projectRoot = emptyProject();
     fs.writeFileSync(path.join(projectRoot, 'notes.txt'), Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join('\n'));
@@ -275,13 +276,13 @@ describe('LM Studio as a provider', () => {
       });
     });
     const baseUrl = await listen(server);
-    const runtime = new DesktopDirectProviderRuntime({ load: async () => lmStudioSettings(baseUrl) }, noVault());
+    const runtime = new DesktopDirectProviderRuntime({ load: async () => lmStudioSettings(baseUrl) }, noVault(), undefined, { maxToolRounds: 35 });
 
     const result = await runtime.run({ ...request(), autonomy: 'full' }, projectRoot);
 
     expect(result).toMatchObject({ status: 'completed', output: 'I read the file; the task is unfinished.' });
-    expect(requests).toHaveLength(32); // 30 executed tool rounds, one refused round, then the tool-free wrap-up.
-    expect(requests[31]!.messages.some((message) => typeof message.content === 'string' && message.content.includes('Stop calling tools'))).toBe(true);
+    expect(requests).toHaveLength(37); // 35 executed tool rounds, one refused round, then the tool-free wrap-up.
+    expect(requests[36]!.messages.some((message) => typeof message.content === 'string' && message.content.includes('Stop calling tools'))).toBe(true);
   }, 30_000);
 
   it('hands repeated tool calls from a split Implementer to the Architect', async () => {
@@ -382,4 +383,59 @@ describe('folding counts the conversation, not what rides along with every reque
     expect(shouldCompactRun(history, 1, 3_000, 20_000, 16_000)).toBe(true);
     expect(shouldCompactRun(history, 1, 6_000, 20_000, 16_000)).toBe(false);
   });
+});
+
+it('finishes a Lead handoff without nudging it into Builder execution', async () => {
+ const bodies: Array<{tools?: Array<{function: {name: string}}>; messages: unknown[]}> = [];
+ const server = http.createServer((incoming, response) => {
+  let raw = ''; incoming.setEncoding('utf8'); incoming.on('data', (part) => { raw += part; });
+  incoming.on('end', () => {
+   if (incoming.url === '/v1/models') { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({data: [{id: 'local-test'}]})); return; }
+   bodies.push(JSON.parse(raw));
+   response.setHeader('Content-Type', 'text/event-stream');
+   response.end(`data: ${JSON.stringify({choices:[{delta:{content: 'BUILDER TASK:\nRun the project check.\nEND BUILDER TASK\n\nI will run the check now.'},finish_reason:'stop'}]})}\n\ndata: [DONE]\n\n`);
+  });
+ });
+ const baseUrl = await listen(server);
+ const runtime = new DesktopDirectProviderRuntime({load: async () => lmStudioSettings(baseUrl, 'local-test')}, noVault());
+ const leadRequest = scopeConversationRequest({origin:{kind:'lead',projectId:'project-a'}}, {...request(),prompt:'Prepare the task for Builder.',autonomy:'plan'});
+ await runtime.run(leadRequest, emptyProject());
+ expect(bodies).toHaveLength(1);
+ const tools = bodies[0]!.tools!.map((tool) => tool.function.name);
+ expect(tools).toEqual(expect.arrayContaining(['read_file','search_files','list_files']));
+ for (const name of ['run_command','write_file','update_plan','task','create_file']) expect(tools).not.toContain(name);
+});
+
+it.each(['write_file', 'task'])('refuses hallucinated Lead %s calls and wraps up without retrying', async (toolName) => {
+  const bodies: Array<{ tools?: unknown[]; messages: Array<{ content?: string }> }> = [];
+  const server = http.createServer((incoming, response) => {
+    let raw = '';
+    incoming.setEncoding('utf8');
+    incoming.on('data', (part) => { raw += part; });
+    incoming.on('end', () => {
+      if (incoming.url === '/v1/models') {
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify({ data: [{ id: 'local-test' }] }));
+        return;
+      }
+      bodies.push(JSON.parse(raw));
+      response.setHeader('Content-Type', 'text/event-stream');
+      const delta = bodies.length === 1
+        ? { tool_calls: [0, 1].map((index) => ({ index, id: `blocked-${index}`, type: 'function', function: { name: toolName, arguments: JSON.stringify({ path: 'notes.txt', content: 'overwritten', prompt: 'Overwrite notes.txt', role: 'implement' }) } })) }
+        : { content: 'I will run the check now.' };
+      response.end(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: bodies.length === 1 ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`);
+    });
+  });
+  const baseUrl = await listen(server);
+  const projectRoot = emptyProject();
+  fs.writeFileSync(path.join(projectRoot, 'notes.txt'), 'original');
+  const runtime = new DesktopDirectProviderRuntime({ load: async () => lmStudioSettings(baseUrl, 'local-test') }, noVault());
+  const leadRequest = scopeConversationRequest({ origin: { kind: 'lead', projectId: 'project-a' } }, request());
+
+  await runtime.run(leadRequest, projectRoot);
+
+  expect(bodies).toHaveLength(2);
+  expect(bodies[1]!.tools).toBeUndefined();
+  expect(bodies[1]!.messages.some((message) => message.content?.includes('Lead is read-only'))).toBe(true);
+  expect(fs.readFileSync(path.join(projectRoot, 'notes.txt'), 'utf8')).toBe('original');
 });

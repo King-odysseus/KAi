@@ -1,4 +1,6 @@
 import { ImageCard, ImageChip } from './ImageAttachment';
+import { TabBar } from './ui/TabBar';
+import { BuilderOutcome } from './BuilderOutcome';
 
 import { Switch } from './ui/Switch';
 import { AutoSettings } from './AutoSettings';
@@ -192,9 +194,13 @@ export interface WorkspaceCommandRequest {
 }
 
 interface WorkspaceViewProps {
+  surface?: 'conversation' | 'code';
+  onSurfaceChange?: (surface: 'conversation' | 'code') => void;
+  codeContent?: ReactNode;
   activeProject: ProjectRecord | null;
   leadBuilderEnabled: boolean;
   onLeadBuilderEnabledChange: (enabled: boolean) => void;
+  onOpenResultLead?: (leadId: string) => void;
   activeConversation: ConversationRecord | null;
   settings: AppSettings;
   projectPreferences: ProjectPreferences | null;
@@ -391,9 +397,11 @@ const PERMISSIONS: ReadonlyArray<{ key: PermissionKey; label: string; descriptio
 ];
 
 export function WorkspaceView({
+  surface = 'conversation', onSurfaceChange, codeContent,
   activeProject,
   leadBuilderEnabled,
   onLeadBuilderEnabledChange,
+  onOpenResultLead,
   activeConversation,
   settings,
   projectPreferences,
@@ -516,7 +524,7 @@ export function WorkspaceView({
   const runModel = guidedBuild?.enabled ? guidedBuild.coachModel || coachTarget?.api?.model || selectedModel : selectedModel;
   const guidedStep = guidedBuild?.steps[guidedBuild.currentStep];
   const guidedAgentNames = Object.fromEntries(agentCapabilities.map((agent) => [agent.id, agent.displayName]));
-  const guidedCoachRole = describeRole(withSettingsModel(coachTarget ?? { execution: 'cli', agent: coachAgent, ...(guidedBuild?.coachModel ? { model: guidedBuild.coachModel } : {}) }, settings), guidedAgentNames);
+  const guidedCoachRole = describeRole(withSettingsModel(coachTarget ?? { execution: 'cli', agent: coachAgent, ...(guidedBuild?.coachModel ? { model: guidedBuild.coachModel } : {}) }, settings), guidedAgentNames, settings);
   // Every model one step could be built with, by name, for the With menu.
   const liveGatewayModels = useDirectApiModels(settings);
   const guidedStepChoices = stepModelChoices({
@@ -526,7 +534,7 @@ export function WorkspaceView({
     coach: coachTarget ?? { execution: 'cli', agent: coachAgent, ...(guidedBuild?.coachModel ? { model: guidedBuild.coachModel } : {}) },
     agentNames: guidedAgentNames,
   });
-  const guidedBuilderRole = describeRole(withSettingsModel(builderTarget ?? { execution: 'cli', agent: builderAgent, ...(builderModel ? { model: builderModel } : {}) }, settings), guidedAgentNames);
+  const guidedBuilderRole = describeRole(withSettingsModel(builderTarget ?? { execution: 'cli', agent: builderAgent, ...(builderModel ? { model: builderModel } : {}) }, settings), guidedAgentNames, settings);
   /** The Builder's last reply, when it stopped and said it was stuck: the card then offers a way forward. */
   const guidedBuilderStuck = (() => {
     const turns = activeConversation?.turns ?? [];
@@ -613,7 +621,7 @@ export function WorkspaceView({
     if (!guidedStep) return;
     // A provider chosen from the menu has no model of its own; the run would use the one saved in Settings, so say which.
     const target = withSettingsModel(picked, settings);
-    const role = describeRole(target, guidedAgentNames);
+    const role = describeRole(target, guidedAgentNames, settings);
     const prompt = role.local ? guidedLocalBuilderPrompt(guidedStep) : guidedBuilderStepPrompt(guidedStep);
     const model = target.execution === 'cli' ? target.model : target.api?.model;
     const options: WorkspaceSendOptions = {
@@ -1986,7 +1994,7 @@ export function WorkspaceView({
   return (
     <div className="workspace-view">
       <PageHeader
-        title={activeConversation?.title ?? activeProject?.name ?? 'Workspace'}
+        title={activeConversation ? `Builder · ${activeConversation.title}` : 'Builder'}
         detail={activeConversation ? activeProject?.name ?? 'Conversation' : activeProject ? 'Workspace' : 'Open a project to begin'}
         actions={<>
           {guidedBuild?.enabled && <GuidedBuildChip state={guidedBuild} agents={agentCapabilities} onOpen={() => { setDismissedGuidedBuildConversation(null); setAdvancedComposerOpen(true); }} />}
@@ -2269,7 +2277,10 @@ export function WorkspaceView({
         </div>
       , document.body)}
 
-      <div ref={canvasRef} className="conversation-canvas" onScroll={onCanvasScroll}>
+      <TabBar label="Workspace view" value={surface} onChange={(value) => onSurfaceChange?.(value)} tabs={[{ id: 'conversation', label: 'Conversation' }, { id: 'code', label: 'Code' }]} />
+      <BuilderOutcome conversation={activeConversation} onOpenLead={onOpenResultLead} />
+      <div className="workspace-code-slot" style={surface !== 'code' ? { display: 'none' } : undefined}>{codeContent}</div>
+      <div ref={canvasRef} className="conversation-canvas" style={surface === 'code' ? { display: 'none' } : undefined} onScroll={onCanvasScroll}>
         {activeConversation?.turns.length || streamingText || pendingUser || visibleSteers.length || pendingQuestion ? (
           <>
             {visibleConversationTurns.map((turn, index) => (
@@ -2776,6 +2787,7 @@ export function WorkspaceView({
               )}
             </>}
           />
+          {!leadBuilderEnabled && <p role="status" className="text-xs text-[var(--text-dim)]">Builder off · Discuss your project with the Lead, or enable Lead &amp; Builder in More run options.</p>}
           <ArchitectStatusLine status={architectStatus} />
           {advancedComposerOpen && <div className="mt-2.5 flex flex-col gap-4 border-t border-[color:var(--border)] pt-3" aria-label="More run options">
             <OptionSection title="How it runs">
@@ -3189,7 +3201,7 @@ function RunEventCardBase({ event, originalRequest, projectId, reviewMode, defau
     const stale = latestFiles.some((file) => file.status === 'stale');
     const failed = latestFiles.some((file) => file.status === 'failed');
     const verified = latestFiles.length > 0 && latestFiles.every((file) => file.status === 'verified');
-    const verificationLabel = !verification?.latest ? 'Not checked yet' : stale ? 'Checks stale after later edits' : failed ? 'Latest check failed' : verified ? 'Changed files verified' : 'Verification is partial';
+    const verificationLabel = verification?.latest?.unverifiedReason ? `Not checked · ${verification.latest.unverifiedReason}` : !verification?.latest ? 'Not checked yet' : stale ? 'Checks stale after later edits' : failed ? 'Latest check failed' : verified ? 'Changed files verified' : 'Verification is partial';
     const securityReview = securityReviewHint(event.files.map((file) => file.path));
     return (
       <section className={`changes-card ${changesExpanded ? 'expanded' : ''}`}>

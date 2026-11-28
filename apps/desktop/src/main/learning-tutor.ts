@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import { jsonrepair } from 'jsonrepair';
 import {
@@ -26,10 +25,15 @@ import {
   type SetupGuideAnswer,
   type TeachingDraft,
   type TeachingDraftGenerateInput,
+  modelHostOf,
+  type ModelHost,
 } from '@kai/contracts';
 import { lenient, lenientIfZod } from '@kai/contracts';
 import { teachingDraftJsonSchema, teachingDraftPrompt } from './teaching-library';
 import { loadLearningStudioContext } from './learning-studio-context';
+import { modelFetch } from './model-transport';
+import type { ModelWaitStatus } from './model-transport';
+import { resolveGatewayAddress } from './gateway-address';
 
 interface SettingsPort {
   load(): Promise<AppSettings>;
@@ -124,7 +128,11 @@ interface LearningProviderConfiguration {
   apiKey: string;
   protocol: 'responses' | 'chat-completions' | 'anthropic-messages' | 'google-generative-ai';
   openRouter: boolean;
+  host: ModelHost;
+  statusRoot?: string;
 }
+
+const modelTransportOptions = new AsyncLocalStorage<{ host: ModelHost; statusRoot?: string; apiKey?: string; onStatus?: (status: ModelWaitStatus) => void }>();
 
 interface LearningProviderResult {
   content: string;
@@ -278,6 +286,7 @@ export class DesktopLearningTutor {
     private readonly resolveProjectRoot: (projectId: string) => Promise<string>,
     private readonly teachingLibrary?: TeachingLibraryPort,
     private readonly requestTimeoutMs = 120_000,
+    private readonly onModelStatus?: (status: ModelWaitStatus) => void,
   ) {}
 
   async readiness(): Promise<LearningReadiness> {
@@ -485,12 +494,22 @@ export class DesktopLearningTutor {
     }
     if (!storedKey && !local) throw new Error(`Save the ${connection.credentialId} credential in ${names.card} settings before using ${names.feature}.`);
     const apiKey = storedKey ?? LOCAL_PROVIDER_PLACEHOLDER_KEY;
+    const settings = await this.settings.load();
+    const host = modelHostOf(connection, settings);
+    if (host === 'own-hardware' && connection.model.toLowerCase() === 'gateway/auto') {
+      throw new Error('gateway/auto cannot be used as a role model. Choose gateway/general or gateway/vision for this helper.');
+    }
+    const address = host === 'own-hardware'
+      ? await resolveGatewayAddress(connection, settings, storedKey)
+      : null;
     return {
-      baseUrl: connection.baseUrl,
+      baseUrl: address?.baseUrl ?? connection.baseUrl,
       model: connection.model,
       apiKey,
       protocol: preset.protocol,
       openRouter: connection.provider === 'openrouter',
+      host,
+      ...(address?.statusRoot ? { statusRoot: address.statusRoot } : {}),
     };
   }
 
@@ -505,11 +524,16 @@ export class DesktopLearningTutor {
     prompt: { system: string; user: string },
     images: ReadonlyArray<{ mediaType: string; base64: string }>,
   ): Promise<string> {
-    const provider = await this.connectionConfiguration(connection, names);
+    const settings = await this.settings.load();
+    const imageConnection = modelHostOf(connection, settings) === 'own-hardware'
+      ? { ...connection, model: 'gateway/vision' }
+      : connection;
+    const provider = await this.connectionConfiguration(imageConnection, names);
     const dataUrl = (image: { mediaType: string; base64: string }): string => `data:${image.mediaType};base64,${image.base64}`;
+    return modelTransportOptions.run({ host: provider.host, ...(provider.statusRoot ? { statusRoot: provider.statusRoot } : {}), apiKey: provider.apiKey, onStatus: this.onModelStatus }, async () => {
     try {
       if (provider.protocol === 'anthropic-messages') {
-        const response = await fetch(anthropicMessagesUrl(provider.baseUrl), {
+        const response = await fetchModel(anthropicMessagesUrl(provider.baseUrl), {
           method: 'POST',
           headers: { 'x-api-key': provider.apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -524,7 +548,7 @@ export class DesktopLearningTutor {
               ],
             }],
           }),
-          signal: AbortSignal.timeout(this.requestTimeoutMs),
+          signal: requestSignal(undefined, this.requestTimeoutMs),
         });
         if (!response.ok) throw await providerFailure(response);
         return anthropicOutputText(await response.json() as Record<string, unknown>).trim();
@@ -533,7 +557,7 @@ export class DesktopLearningTutor {
         throw new Error('this connection type is not supported for images yet');
       }
       if (provider.protocol === 'responses') {
-        const response = await fetch(responsesUrl(provider.baseUrl), {
+        const response = await fetchModel(responsesUrl(provider.baseUrl), {
           method: 'POST',
           headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -549,12 +573,12 @@ export class DesktopLearningTutor {
               ],
             }],
           }),
-          signal: AbortSignal.timeout(this.requestTimeoutMs),
+          signal: requestSignal(undefined, this.requestTimeoutMs),
         });
         if (!response.ok) throw await providerFailure(response);
         return (responseOutputText(await response.json() as Record<string, unknown>) ?? '').trim();
       }
-      const response = await fetch(chatCompletionsUrl(provider.baseUrl), {
+      const response = await fetchModel(chatCompletionsUrl(provider.baseUrl), {
         method: 'POST',
         headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -571,13 +595,14 @@ export class DesktopLearningTutor {
             },
           ],
         }),
-        signal: AbortSignal.timeout(this.requestTimeoutMs),
+        signal: requestSignal(undefined, this.requestTimeoutMs),
       });
       if (!response.ok) throw await providerFailure(response);
       return (chatOutputText(await response.json() as Record<string, unknown>) ?? '').trim();
     } catch (error) {
       throw new Error(`${names.card} could not read the images (${messageOf(error)}). The model set for it may not accept images: pick one that does in Settings, or describe the style in words in the brief instead.`);
     }
+    });
   }
 
   /**
@@ -635,11 +660,7 @@ export class DesktopLearningTutor {
     }
   }
 
-  /**
-   * A dropped connection ("fetch failed": reset, DNS, a provider closing an idle socket) says nothing about the
-   * request, and on patchy networks one drop used to fail a whole artifact. Retry those twice, briefly; an HTTP
-   * answer, a timeout or a bad reply is never retried here.
-   */
+  /** The shared transport owns all connection retries, so a caller never resends a queued helper request. */
   private async requestStructured(
     provider: LearningProviderConfiguration,
     prompt: { system: string; user: string },
@@ -647,20 +668,22 @@ export class DesktopLearningTutor {
     schema: object,
     signal?: AbortSignal,
   ): Promise<LearningProviderResult> {
-    for (let attempt = 0; ; attempt += 1) {
+    const transport = {
+      host: provider.host,
+      ...(provider.statusRoot ? { statusRoot: provider.statusRoot } : {}),
+      ...(provider.apiKey ? { apiKey: provider.apiKey } : {}),
+      onStatus: this.onModelStatus,
+    };
+    return modelTransportOptions.run(transport, async () => {
       signal?.throwIfAborted();
       try {
         return await this.requestStructuredOnce(provider, prompt, schemaName, schema, signal);
       } catch (error) {
-        const dropped = error instanceof TypeError && /fetch failed/i.test(error.message);
-        if (!dropped || attempt >= 2) {
-          if (!dropped) throw error;
-          const cause = (error as TypeError & { cause?: { code?: string } }).cause?.code;
-          throw new Error(`The connection to ${new URL(provider.baseUrl).host} dropped after three attempts${cause ? ` (${cause})` : ''}. Check the Learning Tutor endpoint and try again.`);
-        }
-        await delay(1_500 * (attempt + 1), undefined, signal ? { signal } : undefined);
+        if (!(error instanceof TypeError && /fetch failed/i.test(error.message))) throw error;
+        const cause = (error as TypeError & { cause?: { code?: string } }).cause?.code;
+        throw new Error(`The connection to ${new URL(provider.baseUrl).host} dropped after three attempts${cause ? ` (${cause})` : ''}. Check the Learning Tutor endpoint and try again.`);
       }
-    }
+    });
   }
 
   private async requestStructuredOnce(
@@ -691,7 +714,7 @@ export class DesktopLearningTutor {
     _schema: object,
     signal?: AbortSignal,
   ): Promise<LearningProviderResult> {
-    const response = await fetch(anthropicMessagesUrl(baseUrl), {
+    const response = await fetchModel(anthropicMessagesUrl(baseUrl), {
       method: 'POST',
       headers: {
         'x-api-key': apiKey,
@@ -704,7 +727,7 @@ export class DesktopLearningTutor {
         max_tokens: currentOutputTokens(),
         messages: [{ role: 'user', content: prompt.user }],
       }),
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)]) : AbortSignal.timeout(this.requestTimeoutMs),
+      signal: requestSignal(signal, this.requestTimeoutMs),
     });
     if (!response.ok) throw await providerFailure(response);
     const value = await response.json() as Record<string, unknown>;
@@ -720,7 +743,7 @@ export class DesktopLearningTutor {
     _schema: object,
     signal?: AbortSignal,
   ): Promise<LearningProviderResult> {
-    const response = await fetch(geminiGenerateUrl(baseUrl, model), {
+    const response = await fetchModel(geminiGenerateUrl(baseUrl, model), {
       method: 'POST',
       headers: {
         'x-goog-api-key': apiKey,
@@ -734,7 +757,7 @@ export class DesktopLearningTutor {
           responseMimeType: 'application/json',
         },
       }),
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)]) : AbortSignal.timeout(this.requestTimeoutMs),
+      signal: requestSignal(signal, this.requestTimeoutMs),
     });
     if (!response.ok) throw await providerFailure(response);
     const value = await response.json() as Record<string, unknown>;
@@ -750,7 +773,7 @@ export class DesktopLearningTutor {
     schema: object,
     signal?: AbortSignal,
   ): Promise<LearningProviderResult> {
-    const response = await fetch(responsesUrl(baseUrl), {
+    const response = await fetchModel(responsesUrl(baseUrl), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -770,7 +793,7 @@ export class DesktopLearningTutor {
           },
         },
       }),
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)]) : AbortSignal.timeout(this.requestTimeoutMs),
+      signal: requestSignal(signal, this.requestTimeoutMs),
     });
     if (!response.ok) throw await providerFailure(response);
     const value = await response.json() as Record<string, unknown>;
@@ -844,7 +867,7 @@ export class DesktopLearningTutor {
     signal?: AbortSignal,
   ): Promise<{ ok: true; content: string; usage: LearningProviderUsage | null } | { ok: false; status: number; empty?: boolean; error: Error }> {
     try {
-      const response = await fetch(chatCompletionsUrl(baseUrl), {
+      const response = await fetchModel(chatCompletionsUrl(baseUrl), {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -871,7 +894,7 @@ export class DesktopLearningTutor {
             },
           } : {}),
         }),
-        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)]) : AbortSignal.timeout(this.requestTimeoutMs),
+        signal: requestSignal(signal, this.requestTimeoutMs),
       });
       if (!response.ok) return { ok: false, status: response.status, error: await providerFailure(response) };
       const value = await response.json() as Record<string, unknown>;
@@ -1522,6 +1545,20 @@ function limitMiddle(value: string, maxCharacters: number): string {
   const head = Math.floor(maxCharacters * 0.65);
   const tail = maxCharacters - head;
   return `${value.slice(0, head)}\n\n[context truncated by KAI Learning Mode]\n\n${value.slice(-tail)}`;
+}
+
+async function fetchModel(input: string | URL, init: RequestInit): Promise<Response> {
+  const transport = modelTransportOptions.getStore() ?? { host: 'cloud' as const };
+  return modelFetch(String(input), {
+    ...init,
+    signal: init.signal instanceof AbortSignal ? init.signal : new AbortController().signal,
+  }, transport);
+}
+
+function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  if (modelTransportOptions.getStore()?.host === 'own-hardware') return signal ?? new AbortController().signal;
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
 function responsesUrl(baseUrl: string): string {

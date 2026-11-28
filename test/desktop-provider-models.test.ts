@@ -83,6 +83,21 @@ describe('desktop provider model catalogs', () => {
     expect(catalog.error).toMatch(/save a credential/i);
     expect(catalog.models).toContain('deepseek-v4-pro');
   });
+
+  it('reads LM Studio loaded context from its own models API', async () => {
+    const requests: string[] = [];
+    const server = http.createServer((request, response) => {
+      requests.push(request.url ?? '');
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(request.url === '/v1/models'
+        ? { data: [{ id: 'qwen-local' }] }
+        : { data: [{ id: 'qwen-local', loaded_context_length: 65_536, max_context_length: 262_144 }] }));
+    });
+    const baseUrl = `${await listen(server)}/v1`;
+    const catalog = await listProviderModels({ provider: 'lmstudio', baseUrl, credentialId: 'provider.lmstudio' }, { get: async () => undefined });
+    expect(requests).toEqual(['/v1/models', '/api/v0/models']);
+    expect(catalog.contextLengths).toEqual({ 'qwen-local': 65_536 });
+  });
 });
 
 async function listen(server: http.Server): Promise<string> {

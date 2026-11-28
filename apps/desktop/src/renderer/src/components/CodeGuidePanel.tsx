@@ -21,9 +21,8 @@ interface Props {
   onUpdateGuidedBuild: (build: GuidedBuild) => void;
   onRunGuidedBuild: (prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code', userMessage?: string, override?: GuidedRunOverride) => void | Promise<void>;
   projectId: string | null;
-  modelSettings?: Pick<import('@kai/contracts').AppSettings, 'directApi' | 'savedLocalModels'>;
+  modelSettings?: Pick<import('@kai/contracts').AppSettings, 'directApi' | 'savedLocalModels' | 'gatewayOwnHardware' | 'gatewayAwayUrl' | 'gatewayHomeUrl'>;
   onOpenFile: (path: string, line?: number) => void;
-  onLeadMessage?: (message: string) => void;
 }
 
 export function CodeGuidePanel(props: Props): ReactNode {

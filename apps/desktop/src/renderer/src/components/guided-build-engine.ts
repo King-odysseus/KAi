@@ -42,7 +42,14 @@ export function defaultLocalBuilder(settings: Pick<AppSettings, 'directApi' | 's
 }
 
 /** Who a role is, as a person reads it, and whether it runs on this computer or the home network. */
-export function describeRole(target: RoleTarget | null | undefined, agentNames: Readonly<Record<string, string>> = {}): { label: string; local: boolean } {
+type GatewayRoleProfile = {
+  gatewayOwnHardware?: boolean;
+  gatewayAwayUrl?: string | null;
+  gatewayHomeUrl?: string | null;
+  directApi?: AppSettings['directApi'];
+};
+
+export function describeRole(target: RoleTarget | null | undefined, agentNames: Readonly<Record<string, string>> = {}, gatewayProfile?: GatewayRoleProfile): { label: string; local: boolean } {
   if (!target) return { label: 'the agent in use', local: false };
   if (target.execution === 'cli') {
     const name = agentNames[target.agent ?? ''] ?? target.agent ?? 'agent';
@@ -52,9 +59,14 @@ export function describeRole(target: RoleTarget | null | undefined, agentNames: 
   if (!api) return { label: 'API', local: false };
   const preset = directProviderPreset(api.provider);
   const model = api.model ?? preset.defaultModel ?? '';
-  const local = isOwnNetworkApi(api);
+  const ownedUrls = [gatewayProfile?.gatewayAwayUrl, gatewayProfile?.gatewayHomeUrl,
+    !gatewayProfile?.gatewayAwayUrl && gatewayProfile?.directApi?.provider === 'openai-compatible' ? gatewayProfile.directApi.baseUrl : null]
+    .filter((url): url is string => Boolean(url));
+  const ownGateway = gatewayProfile?.gatewayOwnHardware === true && api.provider === 'openai-compatible'
+    && (api.baseUrl ? ownedUrls.some((url) => url.replace(/\/$/, '') === api.baseUrl!.replace(/\/$/, '')) : ownedUrls.length > 0);
+  const local = isOwnNetworkApi(api) || ownGateway;
   // On this computer, or on the person's own network: either way it is theirs and not billed.
-  const where = local ? (isLoopbackUrl(api.baseUrl) || (isLocalProvider(api.provider) && !api.baseUrl) ? ' (on this computer)' : ' (on your network)') : '';
+  const where = local ? ownGateway ? ' (my hardware)' : isLoopbackUrl(api.baseUrl) || (isLocalProvider(api.provider) && !api.baseUrl) ? ' (on this computer)' : ' (on your network)' : '';
   // Never the provider's name twice: with no model known the label is just the provider, not "Gateway · Gateway".
   const label = local ? `${model || preset.displayName}${where}` : model && model !== preset.displayName ? `${model} · ${preset.displayName}` : preset.displayName;
   return { label, local };
@@ -93,7 +105,7 @@ export interface StepModelChoice {
  * a whole choice, agent and model together, so picking one never asks a second question.
  */
 export function stepModelChoices(input: {
-  settings: Pick<AppSettings, 'directApi' | 'savedLocalModels'>;
+  settings: Pick<AppSettings, 'directApi' | 'savedLocalModels' | 'gatewayOwnHardware' | 'gatewayAwayUrl' | 'gatewayHomeUrl'>;
   agents: ReadonlyArray<Pick<AgentCapability, 'id' | 'displayName' | 'available'>>;
   /** Models the direct API's server lists right now, when they were fetched. */
   liveModels?: readonly string[];
@@ -107,10 +119,10 @@ export function stepModelChoices(input: {
   const models = [...new Set([direct.model.trim(), ...(settings.savedLocalModels[direct.provider] ?? []), ...liveModels].filter(Boolean))].slice(0, 12);
   for (const model of models) {
     const target = withSettingsModel({ execution: 'api', api: { provider: direct.provider, model } }, settings);
-    const own = target.execution === 'api' && target.api ? isOwnNetworkApi(target.api) : false;
+    const own = describeRole(target, {}, settings).local;
     choices.push({ label: `${providerName} · ${model}${own ? ' (your network)' : ''}`, target });
   }
-  if (coach) choices.push({ label: `The Coach's model: ${describeRole(coach, input.agentNames).label}`, target: coach });
+  if (coach) choices.push({ label: `The Coach's model: ${describeRole(coach, input.agentNames, input.settings).label}`, target: coach });
   for (const agent of agents.filter((item) => item.available)) {
     choices.push({ label: `${agent.displayName} (subscription)`, target: { execution: 'cli', agent: agent.id } });
   }
@@ -350,9 +362,28 @@ export function coachPrompt(message: string, style: Style, detail: Detail, quest
   return `You are the Coach in Guided Build. Answer the user's message conversationally, in a few short paragraphs at most, and keep it on the project and the current step${step ? ` ("${step.title}")` : ''}. ${questionRule(questions)} Coach style: ${style}; detail: ${detail}. Do not run Builder or edit files unless the user explicitly presses the Builder action. User message: ${message}`;
 }
 
-/** Reuses the Guided Build Coach's voice for the read-only Lead chat; it does not create or maintain a second plan. */
-export function leadCoachPrompt(message: string, style: Style, detail: Detail, questions: Questions): string {
-  return `${coachPrompt(message, style, detail, questions)}\n\nLead is always read-only: inspect and explain project code, but never create, edit, delete or run a command that changes files. Use beginner-friendly words. Explain why and how; include risks and one simpler option. Do not make a multi-step implementation plan. If the user asks for work the Builder should do, end your response with exactly this marked section and one complete, concise task:\nBUILDER TASK:\n<one task the Builder can do>\nIf no Builder work is needed, end with:\nBUILDER TASK:\nNone`;
+/** Development Lead identity; shares planning helpers without inheriting the tutor persona. */
+export function leadCoachPrompt(message: string, _style: Style, _detail: Detail, _questions: Questions): string {
+  return `You are the Lead, the user's development partner for this project. Discuss requirements, architecture, relevant code and decisions. You are not the Guided Build Coach or tutor, even if older chat history calls you Coach. Read the project and existing decisions before recommending changes; state what you could not inspect. Ask at most three focused questions when needed. Use clear, practical language. Explain why and how; include risks and one simpler option when relevant. You may propose small multi-step implementation plans and show complete suggested code when requested. Lead is always read-only: never create, edit, delete or run a command that changes files. Only the user can hand a task to the Builder; never launch it yourself. When the user selects an option, resolve it from the preceding discussion, keep that scope, and prepare its handoff without asking them to choose again. Do not add installations, downloads, acceptance or sign-off unless separately authorised. A failed gate remains open; never mark a failed verification as accepted. Do not announce that you will execute commands. If a read-only restriction blocks a tool, explain it once and finish with the task; do not retry. Keep all discussion in this Lead conversation. Format substantial replies with short Markdown headings, bullet points for choices or constraints, numbered lists for steps, and fenced code blocks with a language for code. Keep paragraphs short. Use only sections relevant to the question; greetings may be brief.
+When an actionable change is agreed, end with this marked section containing only a standalone Builder task, relevant files, acceptance checks and a check command:
+BUILDER TASK:
+### Goal
+<goal>
+### Files
+- <relevant file>
+### Steps
+1. <small change>
+### Done checks
+- <acceptance check>
+### Check command
+<project check command, or say no real check is available; never invent one>
+END BUILDER TASK
+Use exactly one BUILDER TASK section. Do not append a second None marker or commentary inside the task.
+Otherwise end with:
+BUILDER TASK:
+None
+
+User message: ${message}`;
 }
 
 export function builderStepPrompt(step: GuidedBuildStep): string {

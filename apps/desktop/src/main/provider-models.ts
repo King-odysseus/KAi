@@ -46,7 +46,11 @@ export async function listProviderModels(
     const body = await response.json() as unknown;
     const models = parseModelIds(body);
     if (models.length === 0) return fallback('The provider returned an empty model list.');
-    const contextLengths = parseModelContexts(body, request.provider !== 'openai-compatible');
+    let contextLengths = parseModelContexts(body, request.provider !== 'openai-compatible');
+    if (request.provider === 'lmstudio') {
+      const studioContexts = await fetchLmStudioContexts(request.baseUrl, timeoutMs);
+      contextLengths = { ...contextLengths, ...studioContexts };
+    }
     return providerModelCatalogSchema.parse({
       provider: request.provider,
       models,
@@ -60,6 +64,17 @@ export async function listProviderModels(
       return fallback(`${preset.displayName} is not reachable at ${request.baseUrl}. Start its server and make sure a model is installed, then refresh. (${messageOf(error)})`);
     }
     return fallback(`The provider model list could not be refreshed: ${messageOf(error)}`);
+  }
+}
+
+async function fetchLmStudioContexts(baseUrl: string, timeoutMs: number): Promise<Record<string, number>> {
+  try {
+    const origin = new URL(baseUrl).origin;
+    const response = await fetch(`${origin}/api/v0/models`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!response.ok) return {};
+    return parseModelContexts(await response.json(), true);
+  } catch {
+    return {};
   }
 }
 

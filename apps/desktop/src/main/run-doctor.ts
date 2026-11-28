@@ -22,6 +22,9 @@ export type RunCause =
   | 'tool-denied'
   | 'not-signed-in'
   | 'provider-limit'
+  | 'gateway-queued'
+  | 'gateway-memory'
+  | 'gateway-queue-full'
   | 'cli-exit';
 
 export interface RunDiagnosis {
@@ -87,6 +90,17 @@ export function diagnoseRun(input: RunDoctorInput): RunDiagnosis | null {
   if (input.status !== 'failed') return null;
   const text = evidence(input);
   if (!text.trim()) return null;
+  const transportError = input.error ?? '';
+
+  if (/^The Mac's queue is still full \(model_queue_full\)/i.test(transportError)) {
+    return { cause: 'gateway-queue-full', summary: 'The Mac gateway has reached its request queue limit.', advice: 'Wait for a queued request to finish, then try again.' };
+  }
+  if (/^The Mac cannot take this request yet \(503(?:\b|\))/i.test(transportError)) {
+    return { cause: 'gateway-memory', summary: 'The Mac gateway is short of memory right now.', advice: 'Wait for the current model or media job to finish, then retry.' };
+  }
+  if (/^The Mac (?:did not answer within \d+ (?:minutes?|hours?)|may be busy: no reply came through the relay within \d+ minutes?)/i.test(transportError)) {
+    return { cause: 'gateway-queued', summary: 'The request is queued because the Mac is busy.', advice: 'Let the current Mac job finish; the request should continue when capacity is available.' };
+  }
 
   if (/produced only reasoning|whole output budget|reasoning used the/i.test(text)) {
     return {

@@ -1,3 +1,5 @@
+import { packLeadBuilderEvidence, type LeadBuilderEvidence } from './lead-builder-evidence';
+
 export const LEAD_SPEC_FILES = [
   '.kai/spec/brief.md',
   '.kai/spec/decisions.md',
@@ -10,6 +12,13 @@ export const LEAD_SPEC_FILES = [
 ] as const;
 
 export const LEAD_DESIGN_FILES = ['DESIGN.md', 'design.md'] as const;
+
+/** Studio owns the plan when its board exists; otherwise keep the project's Markdown plan. */
+export function authoritativeLeadFiles<T extends { path: string }>(files: readonly T[]): T[] {
+  const normal = (path: string) => path.replaceAll('\\', '/').toLowerCase();
+  const hasBoard = files.some((file) => normal(file.path) === '.kai/spec/board.json');
+  return files.filter((file) => !hasBoard || normal(file.path) !== '.kai/spec/plan.md');
+}
 
 /** Avoid sending a similarly named backend design note (for example, "database design") as visual guidance. */
 export function isLeadUiRequest(question: string): boolean {
@@ -77,10 +86,16 @@ function chooseContext(files: readonly LeadSpecFile[], question: string, budget:
     }
   }
   const ranked = sections.filter((section) => section.relevant).sort((a, b) => b.score - a.score || a.order - b.order);
+  // Reserve room to name omitted sections before filling the context budget.
+  const omissionGroups = new Map<string, number>();
+  for (const section of sections) omissionGroups.set(section.path, (omissionGroups.get(section.path) ?? 0) + 1);
+  const summaryReserve = `Sections omitted to fit the request: ${[...omissionGroups].map(([path, count]) => `${count} sections in ${path}`).join('; ')}.`.length + 2;
+  const allContext = sections.map((section) => `### ${section.path} — ${section.heading}\n${section.body}`).join('\n\n');
+  const contentBudget = allContext.length <= budget && ranked.length === sections.length ? budget : Math.max(0, budget - summaryReserve);
   const kept = new Set<typeof sections[number]>();
   for (const section of ranked) {
     const nextContent = [...kept, section].map((candidate) => `### ${candidate.path} — ${candidate.heading}\n${candidate.body}`).join('\n\n');
-    if (nextContent.length <= budget) kept.add(section);
+    if (nextContent.length <= contentBudget) kept.add(section);
   }
   const orderedKept = sections.filter((section) => kept.has(section));
   const omitted = sections.filter((section) => !kept.has(section));
@@ -114,6 +129,7 @@ export function buildLeadRequestText(input: {
   openFile?: LeadSpecFile;
   openFiles?: readonly LeadSpecFile[];
   contextNotes?: readonly string[];
+  builderEvidence?: readonly LeadBuilderEvidence[];
   includeProjectOrientation: boolean;
   style: 'tutor' | 'senior-dev';
   detail: 'brief' | 'step-by-step' | 'line-by-line';
@@ -121,13 +137,25 @@ export function buildLeadRequestText(input: {
   leadCoachPrompt: (message: string, style: 'tutor' | 'senior-dev', detail: 'brief' | 'step-by-step' | 'line-by-line', questions: 'blocked' | 'decisions' | 'each-step') => string;
 }): { prompt: string; displayText: string; included: string[]; omitted: string[] } {
   const orientation = input.includeProjectOrientation
-    ? 'Begin by stating the project goal and next useful step based on available project context. Keep project files unchanged. For authentication, permissions, payments, migrations, or deleting data, flag the risk and ask for approval before suggesting the change.'
-    : 'Keep project files unchanged. For authentication, permissions, payments, migrations, or deleting data, flag the risk and ask for approval before suggesting the change.';
+    ? 'Begin by stating the project goal and next useful step based on available project context. Keep project files unchanged. Discuss options for authentication, permissions, payments, migrations or deleting data, explain the risks, and ask for approval before implementing a high-risk assumption.'
+    : 'Keep project files unchanged. Discuss options for authentication, permissions, payments, migrations or deleting data, explain the risks, and ask for approval before implementing a high-risk assumption.';
   const wrappedQuestion = input.leadCoachPrompt('', input.style, input.detail, input.questions).length;
-  const separators = 6;
+  const separators = 8;
   const contextPrefix = 'Project context (read only):\n';
-  const notesText = (input.contextNotes ?? []).join('\n');
-  const contextBudget = Math.max(0, LEAD_PROMPT_LIMIT - wrappedQuestion - input.question.length - orientation.length - notesText.length - separators - contextPrefix.length);
+  const evidence = packLeadBuilderEvidence(input.builderEvidence ?? [], Math.max(0, Math.min(8_000, LEAD_PROMPT_LIMIT - wrappedQuestion - input.question.length - orientation.length - separators - contextPrefix.length - 80)));
+  const notes = input.contextNotes ?? [];
+  const noteBudget = Math.max(0, Math.min(3_000, LEAD_PROMPT_LIMIT - wrappedQuestion - input.question.length - orientation.length - evidence.text.length - separators - contextPrefix.length - 80));
+  const keptNotes: string[] = [];
+  const omittedNotes: string[] = [];
+  let noteSize = 0;
+  for (const [index, note] of notes.entries()) {
+    if (noteSize + note.length + 1 <= noteBudget) { keptNotes.push(note); noteSize += note.length + 1; }
+    else omittedNotes.push(`KAI context note ${index + 1} (size budget)`);
+  }
+  const omissionNotice = omittedNotes.length ? `KAI context notes omitted due to size: ${omittedNotes.length}.` : '';
+  const noticeFits = LEAD_PROMPT_LIMIT - wrappedQuestion - input.question.length - orientation.length - evidence.text.length - separators - contextPrefix.length - noteSize >= omissionNotice.length;
+  const notesText = [...keptNotes, ...(omissionNotice && noticeFits ? [omissionNotice] : [])].join('\n');
+  const contextBudget = Math.max(0, LEAD_PROMPT_LIMIT - wrappedQuestion - input.question.length - orientation.length - evidence.text.length - notesText.length - separators - contextPrefix.length);
   const contextFiles = [
     ...input.specFiles,
     ...(input.openFiles ?? []),
@@ -135,8 +163,8 @@ export function buildLeadRequestText(input: {
   ];
   const context = chooseContext(contextFiles, input.question, contextBudget);
   const contextText = context.text ? `${contextPrefix}${context.text}` : '';
-  const message = [input.question, contextText, notesText, orientation].filter(Boolean).join('\n\n');
+  const message = [input.question, evidence.text, contextText, notesText, orientation].filter(Boolean).join('\n\n');
   const prompt = input.leadCoachPrompt(message, input.style, input.detail, input.questions);
   if (prompt.length > LEAD_PROMPT_LIMIT) throw new Error('Lead request exceeds the 20,000 character limit; reduce the question length.');
-  return { prompt, displayText: input.question, included: context.included, omitted: context.omitted };
+  return { prompt, displayText: input.question, included: [...evidence.included, ...context.included], omitted: [...evidence.omitted, ...context.omitted, ...omittedNotes] };
 }

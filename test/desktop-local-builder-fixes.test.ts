@@ -88,6 +88,9 @@ describe('a local model folds at a share of its own window', () => {
     expect(modelContextFor({ localModelContext: { [id]: 65_536 } }, id)).toBe(65_536);
     expect(modelContextFor({ localModelContext: { [id]: 65_536 }, modelContextOverride: { [id]: 131_072 } }, id)).toBe(131_072);
     expect(modelContextFor({}, id)).toBeUndefined();
+    expect(modelContextFor({}, 'gateway/coding')).toBe(65_536);
+    expect(modelContextFor({}, 'gateway/general')).toBe(65_536);
+    expect(modelContextFor({}, 'gateway/auto')).toBeUndefined();
   });
 });
 

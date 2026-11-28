@@ -502,6 +502,8 @@ export function describeArgumentError(name: string, rawInput: unknown, error: z.
 }
 
 export class DesktopProjectToolRuntime {
+  /** The characters one result may take in the model's history, set for a model on the person's own hardware. */
+  outputLimit: number | undefined;
   private resolvedRoot: Promise<string> | undefined;
   /** Per-run limits: a spend ceiling and repeated-call detection. */
   readonly guard = new RunGuard();
@@ -1038,13 +1040,15 @@ export class DesktopProjectToolRuntime {
       void terminateProcessTree(child);
     };
     signal?.addEventListener('abort', onAbort, { once: true });
+    // A model with a small window is shown the end of a long output, so the end is what has to survive the limit.
+    const append = this.outputLimit ? appendKeepingEnd : appendLimited;
     child.stdout.on('data', (chunk: Buffer) => {
-      const appended = appendLimited(stdout, chunk.toString('utf8'), MAX_COMMAND_OUTPUT);
+      const appended = append(stdout, chunk.toString('utf8'), MAX_COMMAND_OUTPUT);
       stdout = appended.value;
       stdoutTruncated ||= appended.truncated;
     });
     child.stderr.on('data', (chunk: Buffer) => {
-      const appended = appendLimited(stderr, chunk.toString('utf8'), MAX_COMMAND_OUTPUT);
+      const appended = append(stderr, chunk.toString('utf8'), MAX_COMMAND_OUTPUT);
       stderr = appended.value;
       stderrTruncated ||= appended.truncated;
     });
@@ -1222,6 +1226,11 @@ export async function terminateProcessTree(child: ChildProcess): Promise<void> {
     }
   }, 1_000);
   timer.unref();
+}
+
+function appendKeepingEnd(current: string, appended: string, limit: number): { value: string; truncated: boolean } {
+  const joined = current + appended;
+  return joined.length <= limit ? { value: joined, truncated: false } : { value: joined.slice(-limit), truncated: true };
 }
 
 function appendLimited(current: string, appended: string, limit: number): { value: string; truncated: boolean } {

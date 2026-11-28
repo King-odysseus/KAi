@@ -21,6 +21,10 @@ describe('Lead model selection', () => {
     savedLocalModels: { ollama: ['qwen2.5-coder'] },
     agentModels: { codex: 'gpt-5-codex' },
   };
+  it('requires an explicit API model instead of borrowing a model from another role', () => {
+    const inventory = buildLeadModelInventory({ settings: apiSettings, credentialIds: ['provider.openai'], agents: [] });
+    expect(leadTargetUnavailableReason({ execution: 'api', api: { provider: 'openai', credentialId: 'provider.openai' } }, inventory)).toBe('Choose a model for this provider.');
+  });
 
   it('uses provider and model identity instead of list position', () => {
     const first: RoleTarget = { execution: 'api', api: { provider: 'openai', credentialId: 'provider.openai', model: 'gpt-4.1' } };
@@ -49,6 +53,38 @@ describe('Lead model selection', () => {
     expect(inventory.cliAgents.find((choice) => choice.agent === 'codex')?.tier).toBe('Subscription');
     expect(inventory.cliAgents.find((choice) => choice.agent === 'codex')?.models).toContain('gpt-5-codex');
     expect(leadTargetUnavailableReason({ execution: 'cli', agent: 'claude' }, inventory)).toBe('Sign in to Claude first.');
+  });
+
+  it('labels a gateway marked as owned hardware Local and excludes gateway/auto', () => {
+    const gatewaySettings = {
+      ...apiSettings,
+      gatewayOwnHardware: true,
+      directApi: { provider: 'openai-compatible' as ProviderId, credentialId: 'provider.custom', baseUrl: 'https://relay.example/v1', model: 'gateway/coding' },
+      savedLocalModels: { 'openai-compatible': ['gateway/auto', 'gateway/coding', 'gateway/general'] },
+    };
+    const inventory = buildLeadModelInventory({ settings: gatewaySettings, credentialIds: ['provider.custom'], agents: [] });
+    const gateway = inventory.apiProviders.find((choice) => choice.provider === 'openai-compatible');
+    expect(gateway?.tier).toBe('Local');
+    expect(gateway?.models).toContain('gateway/general');
+    expect(gateway?.models).not.toContain('gateway/auto');
+    expect(leadTargetUnavailableReason({ execution: 'api', api: { provider: 'openai-compatible', credentialId: 'provider.custom', model: 'gateway/auto' } }, inventory)).toMatch(/gateway\/auto cannot be used/i);
+  });
+
+  it('offers a saved gateway role as Local while Direct API defaults to DeepSeek', () => {
+    const settings = {
+      ...apiSettings,
+      gatewayOwnHardware: true,
+      gatewayAwayUrl: 'https://relay.example/v1',
+      gatewayHomeUrl: 'http://192.168.68.52:8000/v1',
+      gatewayCredentialId: 'provider.gateway',
+      directApi: { provider: 'deepseek' as ProviderId, credentialId: 'provider.deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-pro' },
+    };
+    const inventory = buildLeadModelInventory({ settings, credentialIds: ['provider.deepseek', 'provider.gateway'], agents: [] });
+    const gateway = inventory.apiProviders.find((choice) => choice.provider === 'openai-compatible');
+    const role: RoleTarget = { execution: 'api', api: { provider: 'openai-compatible', model: 'gateway/coding' } };
+    expect(gateway).toMatchObject({ tier: 'Local', available: true, defaultModel: 'gateway/general', baseUrl: 'https://relay.example/v1' });
+    expect(leadModelTier(role, inventory)).toBe('Local');
+    expect(leadTargetUnavailableReason(role, inventory)).toBeNull();
   });
 
   it('defaults only to the saved Coach and never to the composer model', () => {
@@ -107,4 +143,15 @@ describe('Lead conversation actions', () => {
     expect(leadQuestionText(longQuestion, true)).toBe(longQuestion);
     expect(leadQuestionText(longQuestion, false)).toBeNull();
   });
+});
+
+ it('keeps every line of the Builder task without sending the discussion', () => {
+   expect(leadTaskFromReply('Discussion.\nBUILDER TASK:\nChange the form.\nFiles: src/form.ts\nDone: validates input\nCheck: npm test')).toBe('Change the form.\nFiles: src/form.ts\nDone: validates input\nCheck: npm test');
+ });
+
+it('ends a legacy Builder task before a repeated None marker and commentary', () => {
+ expect(leadTaskFromReply('Discuss.\nBUILDER TASK:\n### Change\n- Add a form.\nBUILDER TASK:\nNone\nMore discussion.')).toBe('### Change\n- Add a form.');
+});
+it('uses the explicit task boundary without including the explanation after it', () => {
+ expect(leadTaskFromReply('BUILDER TASK:\nDo the change.\nEND BUILDER TASK\nWhy: it helps.')).toBe('Do the change.');
 });

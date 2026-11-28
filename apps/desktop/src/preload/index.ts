@@ -64,6 +64,8 @@ const bridge: KaiDesktopBridge = {
   publishProjectMockup: (projectId, path) => ipcRenderer.invoke('mockup:file', { projectId, path }),
   readProjectImage: (projectId, path) => ipcRenderer.invoke('files:image', { projectId, path }),
   writeProjectFile: (request) => ipcRenderer.invoke('files:write', request),
+  prepareLeadEdit: (input) => ipcRenderer.invoke('lead:prepare-edit', input),
+  decideLeadEdit: (input) => ipcRenderer.invoke('lead:decide-edit', input),
   deleteProjectPath: (request) => ipcRenderer.invoke('files:delete', request),
   renameProjectPath: (request) => ipcRenderer.invoke('files:rename', request),
   createProjectFolder: (request) => ipcRenderer.invoke('files:folder', request),
@@ -334,8 +336,8 @@ const bridge: KaiDesktopBridge = {
   clearCredential: (id) => ipcRenderer.invoke('credentials:clear', { id }),
   listConversations: () => ipcRenderer.invoke('conversations:list', {}),
   getConversation: (id) => ipcRenderer.invoke('conversations:get', { id }),
-  createConversation: (projectId, firstPrompt) =>
-    ipcRenderer.invoke('conversations:create', { projectId, firstPrompt }),
+  createConversation: (projectId, firstPrompt, origin) =>
+    ipcRenderer.invoke('conversations:create', { projectId, firstPrompt, ...(origin ? { origin } : {}) }),
   compactConversation: (conversationId, options) => ipcRenderer.invoke('conversations:compact', { conversationId, ...(options?.beforeNextRun ? { beforeNextRun: true } : {}) }),
   saveConversation: (conversation) => ipcRenderer.invoke('conversations:save', conversation),
   forkConversation: (request) => ipcRenderer.invoke('conversations:fork', request),

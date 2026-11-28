@@ -8,9 +8,10 @@ import { unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
 import { MockupFrame } from './MockupFrame';
 import { UiButton } from './UiButton';
+import { changedLineRange } from './workspace-code-follow';
 
 /** The same editor as Learn & Code, kept beside the conversation and composer. */
-export function WorkspaceFilePreview(props: { projectId: string; path: string; line?: number; formatOnSave: boolean; editorView?: EditorView; onClose: () => void; onDirtyChange: (dirty: boolean) => void }): ReactNode {
+export function WorkspaceFilePreview(props: { projectId: string; path: string; line?: number; changedRange?: { start: number; end: number }; refreshToken?: string; followChanges?: boolean; formatOnSave: boolean; editorView?: EditorView; onClose: () => void; onDirtyChange: (dirty: boolean) => void }): ReactNode {
   return IMAGE_PATH.test(props.path) ? <WorkspaceImagePreview projectId={props.projectId} path={props.path} onClose={props.onClose} onDirtyChange={props.onDirtyChange} /> : <WorkspaceCodePreview {...props} />;
 }
 
@@ -48,7 +49,7 @@ function WorkspaceImagePreview({ projectId, path, onClose, onDirtyChange }: { pr
   );
 }
 
-function WorkspaceCodePreview({ projectId, path, line, formatOnSave, editorView, onClose, onDirtyChange }: { projectId: string; path: string; line?: number; formatOnSave: boolean; editorView?: EditorView; onClose: () => void; onDirtyChange: (dirty: boolean) => void }): ReactNode {
+function WorkspaceCodePreview({ projectId, path, line, changedRange, refreshToken, followChanges, formatOnSave, editorView, onClose, onDirtyChange }: { projectId: string; path: string; line?: number; changedRange?: { start: number; end: number }; refreshToken?: string; followChanges?: boolean; formatOnSave: boolean; editorView?: EditorView; onClose: () => void; onDirtyChange: (dirty: boolean) => void }): ReactNode {
   const [opened, setOpened] = useState<OpenedFile | null>(null);
   const [draft, setDraft] = useState('');
   const [editing, setEditing] = useState(false);
@@ -62,11 +63,41 @@ function WorkspaceCodePreview({ projectId, path, line, formatOnSave, editorView,
   lineRef.current = line;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const changedDecorations = useRef<Monaco.editor.IEditorDecorationsCollection | null>(null);
+  const highlightRef = useRef({ range: changedRange, follow: followChanges });
+  highlightRef.current = { range: changedRange, follow: followChanges };
+  function highlight(range = highlightRef.current.range): void {
+    const editor = editorRef.current;
+    if (!range || !editor) return;
+    const lines = editor.getModel()?.getLineCount() ?? 1;
+    const start = Math.min(Math.max(1, range.start), lines);
+    const end = Math.min(Math.max(start, range.end), lines);
+    changedDecorations.current ??= editor.createDecorationsCollection();
+    changedDecorations.current.set([{ range: { startLineNumber: start, endLineNumber: end, startColumn: 1, endColumn: 1 }, options: { isWholeLine: true, className: 'workspace-code-changed-line' } }]);
+    if (highlightRef.current.follow) editor.revealLineInCenter(start);
+  }
   const modelRef = useRef<Monaco.editor.ITextModel | null>(null);
   const editingRef = useRef(editing);
   editingRef.current = editing;
   const saveRef = useRef<() => Promise<void>>(async () => undefined);
   const dirty = opened !== null && draft !== opened.content;
+  const loadedRef = useRef(opened);
+  loadedRef.current = opened;
+
+  useEffect(() => {
+    if (!refreshToken || dirty || editing || saving || !opened) return;
+    let alive = true;
+    void window.kaiDesktop.readProjectFile(projectId, path).then(unwrap).then((file) => {
+      if (!alive || editingRef.current || loadedRef.current?.hash === file.hash) return;
+      const range = changedLineRange(loadedRef.current?.content ?? '', file.content);
+      setOpened(file); setDraft(file.content);
+      modelRef.current?.setValue(file.content);
+      if (range && editorRef.current) {
+        highlight(range);
+      }
+    }).catch((caught) => { if (alive) setError(String(caught.message)); });
+    return () => { alive = false; };
+  }, [projectId, path, refreshToken, dirty, editing, saving, Boolean(opened)]);
 
   useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
 
@@ -108,6 +139,7 @@ function WorkspaceCodePreview({ projectId, path, line, formatOnSave, editorView,
         editor.revealLineInCenter(targetLine);
       }
       editorRef.current = editor;
+      highlight();
       editor.onDidChangeModelContent(() => setDraft(model.getValue()));
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { if (editingRef.current) void saveRef.current(); });
       observer = new MutationObserver(() => monaco.editor.setTheme(monacoThemeName()));
@@ -118,6 +150,8 @@ function WorkspaceCodePreview({ projectId, path, line, formatOnSave, editorView,
     return () => {
       disposed = true;
       observer?.disconnect();
+      changedDecorations.current?.clear();
+      changedDecorations.current = null;
       editorRef.current?.dispose();
       modelRef.current?.dispose();
       editorRef.current = null;
@@ -126,6 +160,8 @@ function WorkspaceCodePreview({ projectId, path, line, formatOnSave, editorView,
     // Keep the model mounted when saving changes opened.hash.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, path, reload, Boolean(opened)]);
+
+  useEffect(() => { if (!dirty && !editing) highlight(); }, [changedRange?.start, changedRange?.end, followChanges, dirty, editing]);
 
   useEffect(() => {
     if (!line || line < 1) return;

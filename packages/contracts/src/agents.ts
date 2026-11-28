@@ -96,6 +96,7 @@ export const agentRunRequestSchema = z
     conversationId: z.string().min(1),
     prompt: z.string().trim().min(1).max(20_000),
     clientMessageId: z.string().min(1).max(128).optional(),
+    maxCostUsd: z.number().positive().max(100).optional(),
     agent: agentIdSchema,
     execution: executionModeSchema.optional(),
     route: routeModeSchema,

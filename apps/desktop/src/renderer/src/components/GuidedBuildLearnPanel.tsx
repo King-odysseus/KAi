@@ -38,13 +38,12 @@ export function GuidedBuildLearnPanel(props: {
   /** The open project, so a review can run its check and read the real diff. */
   projectId: string | null;
   /** The saved model choices; a target picked without a model is shown (and sent) with the one saved here. */
-  modelSettings?: Pick<import('@kai/contracts').AppSettings, 'directApi' | 'savedLocalModels'>;
+  modelSettings?: Pick<import('@kai/contracts').AppSettings, 'directApi' | 'savedLocalModels' | 'gatewayOwnHardware' | 'gatewayAwayUrl' | 'gatewayHomeUrl'>;
   /** Sends teaching questions to the shared per-project Lead instead of opening a second Coach chat. */
-  onLeadMessage?: (message: string) => void;
 }): ReactNode {
   const {
     view, explaining, busy, error, onExplain, stripHidden, onToggleStrip, guidedBuild, conversation,
-    agentCapabilities, selectedAgent, onUpdateGuidedBuild, onRunGuidedBuild, onOpenFile, projectId, modelSettings, onLeadMessage,
+    agentCapabilities, selectedAgent, onUpdateGuidedBuild, onRunGuidedBuild, onOpenFile, projectId, modelSettings,
   } = props;
   const fallbackTarget = useMemo<RoleTarget>(() => ({ execution: 'cli', agent: selectedAgent }), [selectedAgent]);
   const [build, setBuild] = useState<GuidedBuild>(() => guidedBuild ?? emptyBuild(selectedAgent));
@@ -176,7 +175,6 @@ export function GuidedBuildLearnPanel(props: {
     if (!question) return;
     if (!build.steps.length) void run('plan', planPrompt(question, false));
     else {
-      if (onLeadMessage) { onLeadMessage(question); setMessage(''); return; }
       void run('coach', coachPrompt(question, build.style, build.detail, build.questions, step));
     }
   };
@@ -211,11 +209,10 @@ export function GuidedBuildLearnPanel(props: {
     if (!step) return;
     // A provider picked from the menu has no model of its own; the run uses the one saved in Settings, so say which.
     const target = modelSettings ? withSettingsModel(picked, modelSettings) : picked;
-    const role = describeRole(target, agentNames);
+    const role = describeRole(target, agentNames, modelSettings);
     void run('write-code', role.local ? localBuilderStepPrompt(step) : builderStepPrompt(step), justThisStep ? { target, local: role.local } : undefined);
   };
   const learn = (kind: LearnAction): void => {
-    if (onLeadMessage) { onLeadMessage(learnPrompt(kind, step, build.style, build.detail)); return; }
     void run('coach', learnPrompt(kind, step, build.style, build.detail));
   };
   const generatePlan = (): void => {
@@ -240,8 +237,8 @@ export function GuidedBuildLearnPanel(props: {
   const agentNames = Object.fromEntries(agentCapabilities.map((agent) => [agent.id, agent.displayName]));
   // Every model one step could be built with, by name, for the With menu.
   const stepChoices = modelSettings ? stepModelChoices({ settings: modelSettings, agents: agentCapabilities, liveModels: liveGatewayModels, coach, agentNames }) : [];
-  const coachRole = describeRole(modelSettings ? withSettingsModel(coach, modelSettings) : coach, agentNames);
-  const builderRole = describeRole(modelSettings ? withSettingsModel(builder, modelSettings) : builder, agentNames);
+  const coachRole = describeRole(modelSettings ? withSettingsModel(coach, modelSettings) : coach, agentNames, modelSettings);
+  const builderRole = describeRole(modelSettings ? withSettingsModel(builder, modelSettings) : builder, agentNames, modelSettings);
   const lastTurn = allTurns.at(-1);
   const lastAsked = [...allTurns].reverse().find((turn) => turn.role === 'user')?.text ?? '';
   const builderStuck = lastTurn?.role === 'assistant' && lastAsked.startsWith('Builder: implement') ? builderStuckReason(lastTurn.text) : null;
@@ -294,8 +291,8 @@ export function GuidedBuildLearnPanel(props: {
           onChange={update}
           onClose={() => setTeamOpen(false)}
           rolePickers={<div className="flex flex-wrap items-center gap-2">
-            {!onLeadMessage && <OptionMenu ariaLabel="Coach agent" icon={<Sparkles size={12} />} onChange={(value) => chooseTarget('coach', value)} options={options('coach', coach)} title="Choose the Coach that makes plans and answers your questions" value={targetValue(coach)} />}
-            {!onLeadMessage && <OptionMenu ariaLabel="Coach model" onChange={(value) => chooseModel('coach', coach, value)} options={modelOptions('coach', coach)} title="Choose Coach model" value={coach.execution === 'api' ? coach.api?.model ?? '' : coach.model ?? ''} />}
+            <OptionMenu ariaLabel="Coach agent" icon={<Sparkles size={12} />} onChange={(value) => chooseTarget('coach', value)} options={options('coach', coach)} title="Choose the Coach that makes plans and answers your questions" value={targetValue(coach)} />
+            <OptionMenu ariaLabel="Coach model" onChange={(value) => chooseModel('coach', coach, value)} options={modelOptions('coach', coach)} title="Choose Coach model" value={coach.execution === 'api' ? coach.api?.model ?? '' : coach.model ?? ''} />
             <OptionMenu ariaLabel="Builder agent" icon={<Cpu size={12} />} onChange={(value) => chooseTarget('builder', value)} options={options('builder', builder)} title="Choose the Builder that provides code or edits files" value={targetValue(builder)} />
             <OptionMenu ariaLabel="Builder model" onChange={(value) => chooseModel('builder', builder, value)} options={modelOptions('builder', builder)} title="Choose Builder model" value={builder.execution === 'api' ? builder.api?.model ?? '' : builder.model ?? ''} />
           </div>}
@@ -320,13 +317,13 @@ export function GuidedBuildLearnPanel(props: {
       {working && <div className="guided-build-working" role="status"><Loader2 size={14} className="spin" /> {currentSpeaker} is {working === 'plan' ? 'planning your steps' : working === 'review' ? 'checking your edit' : working === 'show-code' ? 'preparing code for you to type' : working === 'write-code' ? 'editing the file' : 'answering you'}.</div>}
 
       <Composer className="guided-build-mini-composer">
-        <ComposerInput aria-label={onLeadMessage ? 'Message the Lead or Builder' : 'Message the Coach or Builder'} placeholder={step ? `Ask ${onLeadMessage ? 'Lead' : 'Coach'} a question or tell Builder what to change…` : 'Describe your idea for Coach…'} value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); askCoach(); } }} />
+        <ComposerInput aria-label="Message the Coach or Builder" placeholder={step ? `Ask Coach a question or tell Builder what to change…` : 'Describe your idea for Coach…'} value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); askCoach(); } }} />
         <ComposerToolbar
           leading={<>
             <UiButton type="button" className="link-button" aria-expanded={composerSettingsOpen} onClick={() => setComposerSettingsOpen((open) => !open)}>Composer settings</UiButton>
             {composerSettingsOpen && <>
-              {!onLeadMessage && <OptionMenu ariaLabel="Coach agent" icon={<Sparkles size={12} />} onChange={(value) => chooseTarget('coach', value)} options={options('coach', coach)} title="Choose the Coach that makes plans and answers your questions" value={targetValue(coach)} />}
-              {!onLeadMessage && <OptionMenu ariaLabel="Coach model" onChange={(value) => chooseModel('coach', coach, value)} options={modelOptions('coach', coach)} title="Choose Coach model" value={coach.execution === 'api' ? coach.api?.model ?? '' : coach.model ?? ''} />}
+              <OptionMenu ariaLabel="Coach agent" icon={<Sparkles size={12} />} onChange={(value) => chooseTarget('coach', value)} options={options('coach', coach)} title="Choose the Coach that makes plans and answers your questions" value={targetValue(coach)} />
+              <OptionMenu ariaLabel="Coach model" onChange={(value) => chooseModel('coach', coach, value)} options={modelOptions('coach', coach)} title="Choose Coach model" value={coach.execution === 'api' ? coach.api?.model ?? '' : coach.model ?? ''} />
               <OptionMenu ariaLabel="Builder agent" icon={<Cpu size={12} />} onChange={(value) => chooseTarget('builder', value)} options={options('builder', builder)} title="Choose the Builder that provides code or edits files" value={targetValue(builder)} />
               <OptionMenu ariaLabel="Builder model" onChange={(value) => chooseModel('builder', builder, value)} options={modelOptions('builder', builder)} title="Choose Builder model" value={builder.execution === 'api' ? builder.api?.model ?? '' : builder.model ?? ''} />
               <OptionMenu ariaLabel="Coach style" onChange={(value) => update({ ...build, style: value as GuidedBuild['style'] })} options={settingsOptions} title="Choose how Coach explains the steps" value={build.style} />
@@ -340,7 +337,7 @@ export function GuidedBuildLearnPanel(props: {
             {build.steps.length > 0 && <UiButton type="button" className="secondary-button" disabled={!message.trim() || Boolean(working)} onClick={() => addIdea()}>Add idea to plan</UiButton>}
             {build.steps.length > 0 && <UiButton type="button" className="secondary-button" disabled={(!message.trim() && !step) || Boolean(working)} onClick={() => sendToBuilder('show-code')}>Show me code</UiButton>}
             {build.steps.length > 0 && <UiButton type="button" className="primary-button" disabled={(!message.trim() && !step) || Boolean(working)} onClick={() => sendToBuilder('write-code')}>Builder, edit the file</UiButton>}
-            <ComposerSend label={build.steps.length ? (onLeadMessage ? 'Ask Lead' : 'Ask Coach') : 'Create plan with Coach'} title={build.steps.length ? `Ask ${onLeadMessage ? 'Lead' : 'Coach'} a question` : 'Turn your idea into a step-by-step plan'} disabled={!message.trim() || Boolean(working)} onClick={askCoach} />
+            <ComposerSend label={build.steps.length ? 'Ask Coach' : 'Create plan with Coach'} title={build.steps.length ? `Ask Coach a question` : 'Turn your idea into a step-by-step plan'} disabled={!message.trim() || Boolean(working)} onClick={askCoach} />
           </>}
         />
       </Composer>

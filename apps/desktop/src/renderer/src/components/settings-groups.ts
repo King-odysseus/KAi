@@ -13,7 +13,7 @@ export const SETTINGS_GROUPS = {
   learningTutor: ['learningTutor'],
   experienceCapture: ['experienceCapture'],
   promptGuide: ['promptGuide'],
-  directApi: ['directApi'],
+  directApi: ['directApi', 'gatewayOwnHardware', 'gatewayAwayUrl', 'gatewayCredentialId', 'gatewayHomeUrl'],
   webSearch: ['webSearch'],
   mcpServers: ['mcpServers'],
   cognitive1: ['cognitive1'],

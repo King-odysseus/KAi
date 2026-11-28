@@ -1,11 +1,23 @@
+import { hydrateLeadConversation, leadChatTitle, leadResultReview, handoffResult, type LeadHandoff } from './components/lead-delivery';
+import { useLeadHandoff } from './components/use-lead-handoff';
+import { useLeadCompletion } from './components/use-lead-completion';
+import { readSelection } from './components/LeadModelControls';
+import { deliverySettings, leadProgressContext } from './components/lead-completion';
+import { WorkspaceCodePanel } from './components/WorkspaceCodePanel';
+import { leadHandoffInstructions, leadHandoffMode, runnableLeadTask } from './components/lead-handoff';
+import { useLeadEdits } from './components/use-lead-edits';
+import { leadDevelopmentPrompt, hasLeadEdit } from './components/lead-edit-prompt';
+import { isLeadRecoveryRequest, markLeadRecoveryReply, LEAD_RECOVERY_PREFIX } from './components/lead-recovery';
+import { loadLeadBuilderEvidence } from './components/lead-builder-evidence';
+import { preferredConversationId } from './workspace-conversation';
 import { AlertTriangle, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { Dialog } from './components/ui/Dialog';
 import { isCrewConversation } from './crew-conversation';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction } from 'react';
 import { startingTargets } from './model-team';
 import { LOCAL_BUILDER_ROUNDS, briefFromLaunchPrompt, describeRole, leadCoachPrompt, mergePlanProgress, stepModelChoices, type GuidedRunOverride } from './components/guided-build-engine';
-import { buildLeadModelInventory, hasLocalBuilderRun, shouldConfirmLeadDraftReplacement, stableLeadTargetIdentity, targetFromLeadStorage } from './components/lead-model-selection';
-import { buildLeadRequestText, isLeadUiRequest, LEAD_DESIGN_FILES, LEAD_SPEC_FILES } from './components/lead-project-context';
+import { buildLeadModelInventory, hasLocalBuilderRun, shouldConfirmLeadDraftReplacement } from './components/lead-model-selection';
+import { authoritativeLeadFiles, buildLeadRequestText, isLeadUiRequest, LEAD_DESIGN_FILES, LEAD_SPEC_FILES } from './components/lead-project-context';
 import { isLeadIdeaRequest, leadIdeaCoachPrompt, type LeadIdeaProposal } from './components/lead-idea-proposal';
 import { appendMarkdownEntry, leadIdeaFileChanges, leadProposalGuidedSteps, lineContentDiff } from './components/lead-idea-files';
 import { LEAD_IDEA_CODE_SCAN_MAX_BYTES, leadIdeaScanCandidates, rankRelevantLeadIdeaCode } from './components/lead-idea-code-search';
@@ -54,7 +66,6 @@ import { ProxyPanel } from './components/ProxyView';
 import { RulesView } from './components/RulesView';
 import { SettingsView } from './components/SettingsView';
 import { CodeView } from './components/CodeView';
-import { WorkspaceFilePreview } from './components/WorkspaceFilePreview';
 import { MarkdownProjectContext } from './components/Markdown';
 import { GitView } from './components/GitView';
 import { CommandsView } from './components/CommandsView';
@@ -279,6 +290,10 @@ export function App(): ReactNode {
   const [projectPreferences, setProjectPreferences] = useState<ProjectPreferences | null>(null);
   const [contextPreview, setContextPreview] = useState<ContextPreview | null>(null);
   const [workspaceFilePath, setWorkspaceFilePath] = useState<string | null>(null);
+  const [workspaceSurface, setWorkspaceSurface] = useState<'conversation' | 'code'>(() => {
+    try { return localStorage.getItem('kai.workspace.surface') === 'code' ? 'code' : 'conversation'; } catch { return 'conversation'; }
+  });
+  const [workspaceFollow, setWorkspaceFollow] = useState(true);
   const [workspaceFileLine, setWorkspaceFileLine] = useState<number | undefined>();
   const [workspaceFileDirty, setWorkspaceFileDirty] = useState(false);
   const guidedFollowCursor = useRef<{ conversationId: string; eventId: string } | null>(null);
@@ -452,25 +467,28 @@ export function App(): ReactNode {
   useEffect(() => { document.title = windowProjectName ? `${windowProjectName} - KAI` : 'KAI'; }, [windowProjectName]);
   const markdownProject = useMemo(() => (activeProject ? { projectId: activeProject.id, projectPath: activeProject.path } : null), [activeProject?.id, activeProject?.path]);
 
-  async function openWorkspaceFile(path: string, line?: number): Promise<void> {
+  async function openWorkspaceFile(path: string, line?: number, automatic = false): Promise<void> {
     if (workspaceFileDirty && workspaceFilePath && path !== workspaceFilePath && !(await confirmDialog({
       title: 'Discard unsaved changes?', detail: `${workspaceFilePath} has unsaved changes.`, confirmLabel: 'Discard', destructive: true,
     }))) return;
     if (path !== workspaceFilePath) setWorkspaceFileDirty(false);
+    if (!automatic) setWorkspaceFollow(false);
     setWorkspaceFilePath(path);
     setWorkspaceFileLine(line);
+    setWorkspaceSurface('code');
     setView('workspace');
   }
 
-  async function closeWorkspaceFile(): Promise<void> {
+  async function closeWorkspaceFile(): Promise<boolean> {
     if (workspaceFileDirty && workspaceFilePath && !(await confirmDialog({
       title: 'Discard unsaved changes?', detail: `${workspaceFilePath} has unsaved changes.`, confirmLabel: 'Discard', destructive: true,
-    }))) return;
+    }))) return false;
     setWorkspaceFileDirty(false);
     setWorkspaceFileLine(undefined);
     setWorkspaceFilePath(null);
+    return true;
   }
-  const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
+  const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId && conversation.origin?.kind !== 'lead') ?? null;
   const leadConversations = activeProject ? conversations
     .filter((conversation) => conversation.origin?.kind === 'lead' && conversation.origin.projectId === activeProject.id)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) : [];
@@ -482,6 +500,14 @@ export function App(): ReactNode {
   const leadBuilderEnabled = activeProject ? leadBuilderModes[activeProject.id] ?? (() => {
     try { return window.localStorage.getItem(`kai.lead-builder.${activeProject.id}`) !== 'false'; } catch { return true; }
   })() : true;
+  useEffect(() => {
+    if (!leadConversation || !('__summary' in leadConversation)) return;
+    let live = true;
+    void hydrateLeadConversation(leadConversation, (id) => window.kaiDesktop.getConversation(id).then(unwrap)).then((full) => {
+      if (live) setConversations((items) => items.map((item) => item.id === full.id && '__summary' in item ? full : item));
+    }).catch((caught) => { if (live) setLeadErrors((items) => ({ ...items, [leadConversation.id]: messageOf(caught) })); });
+    return () => { live = false; };
+  }, [leadConversation?.id, Boolean(leadConversation && '__summary' in leadConversation)]);
   // A side conversation is reached only from the side-question panel on the conversation it was asked from, never
   // from the ordinary thread list or history — it would otherwise read as a second, unexplained conversation.
   // A crew's work log belongs to the Crew screen, so it is left out of the thread list and history as well as the tabs.
@@ -547,6 +573,37 @@ export function App(): ReactNode {
       : { execution: 'cli', agent: selectedAgent, ...(selectedWorkspaceModel ? { model: selectedWorkspaceModel } : {}) }
     : null;
   const selectedWorkspaceStyle: ResponseStyle = activeComposerSelection?.style ?? loadDefaultResponseStyle();
+  const leadEdits = useLeadEdits({ lead: leadConversation, projectId: activeProject?.id ?? null,
+    saveLocal: (record) => setConversations((items) => [record, ...items.filter((item) => item.id !== record.id)]),
+  });
+  const leadCompletion = useLeadCompletion({
+    projectId: activeProject?.id ?? null, lead: leadConversation,
+    runningLead: Boolean(leadConversation && runningConversationIds.includes(leadConversation.id)),
+    inventory: leadModelInventory,
+    leadTarget: () => activeProject ? readSelection(activeProject.id, leadSavedCoach, leadComposerTarget).target : null,
+    saveLocal: (record) => setConversations((items) => [record, ...items.filter((item) => item.id !== record.id)]),
+    ask: (prompt, target, role, maxCostUsd) => askLead(prompt, target, undefined, { automated: true, role, maxCostUsd }),
+    dispatch: (turnId, cycle) => leadHandoff.dispatch(turnId, true, leadConversation?.id, cycle),
+    notice: (leadId, message) => setLeadErrors((items) => ({ ...items, [leadId]: message })),
+  });
+  const leadHandoff = useLeadHandoff({
+    projectId: activeProject?.id ?? null, lead: leadConversation, builder: activeConversation,
+    enabled: leadBuilderEnabled,
+    builderTarget: leadComposerTarget,
+    builderBusy: conversations.some((item) => item.projectId === activeProject?.id && item.origin?.kind !== 'lead' && runningConversationIds.includes(item.id)),
+    builderIdentity: JSON.stringify([selectedAgent, executionMode, selectedRoute, selectedAutonomy, selectedWorkspaceModel, bootstrap?.settings.directApi]),
+    saveLocal: (record) => setConversations((items) => [record, ...items.filter((item) => item.id !== record.id)]),
+    openBuilder: (id) => { setActiveConversationId(id); setView('workspace'); },
+    start: async (builder, task) => {
+      const config = leadConversation ? deliverySettings(leadConversation) : null;
+      const handoff = builder.leadHandoffs?.at(-1);
+      const maxCostUsd = config ? Math.max(0.01, config.maxUsd - (handoff?.cycle?.spentUsd ?? 0)) : undefined;
+      const result = await runConversation(builder, task, { agent: selectedAgent, execution: executionMode, route: selectedRoute, autonomy: selectedAutonomy, model: selectedWorkspaceModel, maxCostUsd });
+      if (!result) throw new Error('Builder did not complete this task. Open its conversation for errors or approvals; it has not been sent again.');
+    },
+  });
+  const notifyLeadCompletionRef = useRef(leadCompletion.notify);
+  notifyLeadCompletionRef.current = leadCompletion.notify;
   const selectedWorkspaceHelpers: HelperChoice = activeComposerSelection?.helpers ?? loadDefaultHelperChoice();
   const selectedWorkspaceReasoning = reasoningFor(selectedAgent, executionMode, selectionFits ? activeComposerSelection?.reasoning : '');
   const updateComposerDraft = useCallback((value: string) => {
@@ -557,13 +614,31 @@ export function App(): ReactNode {
     if (shouldConfirmLeadDraftReplacement(composerDrafts[activeDraftKey] ?? '', task) && !(await confirmDialog({
       title: 'Replace the Builder draft?', detail: 'The composer already has a draft. Replace it with this task from the Lead?', confirmLabel: 'Replace draft',
     }))) return;
-    updateComposerDraft(task);
+    const builderId = activeConversation?.id ?? await createEmptyConversation();
+    if (!builderId || !leadConversation) return;
+    const builder = unwrap(await window.kaiDesktop.getConversation(builderId));
+    if (!builder) throw new Error('Builder conversation no longer exists.');
+    const handoff: LeadHandoff = { id: crypto.randomUUID(), leadConversationId: leadConversation.id, task, createdAt: new Date().toISOString(), userTurnCount: builder.turns.length };
+    const linked = unwrap(await window.kaiDesktop.saveConversation({ ...builder, leadHandoffs: [...(builder.leadHandoffs ?? []), handoff] }));
+    setConversations((current) => [linked, ...current.filter((item) => item.id !== linked.id)]);
+    setComposerDrafts((current) => ({ ...current, [builderId]: task }));
     setView('workspace');
     window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Task prompt"]')?.focus(), 0);
   }
+  async function reviewBuilderResult(id: string, handoff: LeadHandoff, target: RoleTarget): Promise<void> {
+    if (!activeProject || handoff.leadConversationId !== leadConversation?.id) throw new Error('Open the Lead chat that owns this task first.');
+    const builder = unwrap(await window.kaiDesktop.getConversation(id));
+    if (!builder) throw new Error('Builder conversation no longer exists.');
+    if (builder.projectId !== activeProject.id) throw new Error('This Builder belongs to another project.');
+    const result = handoffResult(builder, handoff);
+    if (!result) throw new Error('This task has no completed Builder reply yet. Send its draft and wait for the reply first.');
+    setConversations((current) => [builder, ...current.filter((item) => item.id !== builder.id)]);
+    const review = await window.kaiDesktop.reviewCheckpoint(builder.id, result.answer.id).then(unwrap).catch(() => null);
+    await leadCompletion.review(builder.id, handoff.id, target);
+  }
   async function createLeadChat(): Promise<void> {
     if (!activeProject) return;
-    const fresh = await perform(() => window.kaiDesktop.createConversation(activeProject.id, '').then(unwrap), 'Opening a new Lead chat');
+    const fresh = await perform(() => window.kaiDesktop.createConversation(activeProject.id, '', { kind: 'lead', projectId: activeProject.id }).then(unwrap), 'Opening a new Lead chat');
     if (!fresh) return;
     const saved = await perform(() => window.kaiDesktop.saveConversation({ ...fresh, title: 'Lead', origin: { kind: 'lead', projectId: activeProject.id } }).then(unwrap));
     if (!saved) return;
@@ -907,7 +982,8 @@ export function App(): ReactNode {
     const conversation = listed && !('__summary' in listed)
       ? listed : unwrap(await window.kaiDesktop.getConversation(resume.conversationId));
     if (!conversation) throw new Error('The conversation for this run no longer exists.');
-    setActiveConversationId(conversation.id);
+    if (conversation.origin?.kind === 'lead') { selectLeadChat(conversation.id); setSelectLeadNonce(Date.now()); }
+    else setActiveConversationId(conversation.id);
     setView('workspace');
     await runConversation(conversation, resume.prompt, {
       agent: resume.agent,
@@ -1142,7 +1218,14 @@ export function App(): ReactNode {
       setStreamingTextByConversation((current) => { const next = { ...current }; delete next[conversationId]; return next; });
     }
     // On both ends: the request is saved before the run starts, the reply and its events after it ends.
-    void refreshConversationRecord(conversationId).catch(() => undefined);
+    void window.kaiDesktop.getConversation(conversationId).then(unwrap).then((record) => {
+      if (!record) return;
+      setConversations((current) => [record, ...current.filter((item) => item.id !== record.id)]);
+      if (status !== 'started' && record.origin?.kind !== 'lead' && !record.guidedBuild?.enabled && record.leadHandoffs?.length) {
+        const lifecycle = [...record.events].reverse().find((event) => event.type === 'agent.lifecycle');
+        void notifyLeadCompletionRef.current(record, lifecycle?.type === 'agent.lifecycle' && lifecycle.status === 'completed').catch(() => undefined);
+      }
+    }).catch(() => undefined);
   }), []);
 
   // Auto parking on a person is not visible in the run's own state — the session stays alive across turns — so the
@@ -1301,8 +1384,9 @@ export function App(): ReactNode {
     const next = await perform(() => window.kaiDesktop.bootstrap().then(unwrap), 'Refreshing workspace');
     if (next) {
       setBootstrap(next);
-      setActiveConversationId(next.activeConversationId);
-      restoreProjectTabs(next.activeProjectId, next.activeConversationId);
+      const builderId = preferredConversationId(next, conversations);
+      setActiveConversationId(builderId);
+      restoreProjectTabs(next.activeProjectId, builderId);
       setView('workspace');
     }
   }
@@ -1412,20 +1496,20 @@ export function App(): ReactNode {
     const coachSide = mode === 'coach' || mode === 'plan' || mode === 'review';
     const team = bootstrap ? startingTargets(bootstrap.settings) : { coach: null, builder: null };
     const savedBuilder = build.builderTarget ?? team.builder ?? fallback;
-    const sharedLeadTarget = coachSide ? storedLeadTarget(activeProject.id) : null;
-    const saved = coachSide ? sharedLeadTarget ?? build.coachTarget ?? team.coach ?? fallback : savedBuilder;
+    const saved = coachSide ? build.coachTarget ?? team.coach ?? fallback : savedBuilder;
     // A one-run choice (the "With..." menu, or a retry on the stronger model) is used for this run and never saved.
     const target = override?.target ?? saved;
-    const state = { ...build, enabled: true, builderTarget: savedBuilder, coachTarget: sharedLeadTarget ?? build.coachTarget ?? team.coach ?? fallback };
+    const state = { ...build, enabled: true, builderTarget: savedBuilder, coachTarget: build.coachTarget ?? team.coach ?? fallback };
     const prepared = { ...conversation, guidedBuild: state, updatedAt: new Date().toISOString() };
     await saveConversationRecord(prepared);
     const displayText = (mode === 'review' ? 'Coach: check my edit' : mode === 'show-code' ? `Builder: show code${userMessage ? ` for ${userMessage}` : ''}` : mode === 'write-code' ? `Builder: implement ${userMessage || 'this step'}` : `Coach: ${userMessage || (mode === 'plan' ? 'make my coding plan' : 'answer my question')}`).slice(0, 500);
     await runConversation(prepared, prompt, {
+      learningRun: true,
       agent: target.agent ?? selectedAgent,
       execution: target.execution,
       route: 'direct',
       autonomy: mode === 'show-code' || mode === 'plan' || mode === 'review' || mode === 'coach' ? 'plan' : selectedAutonomy,
-      ...(mode === 'write-code' && (override ? override.local : describeRole(target).local) ? { toolRoundLimit: LOCAL_BUILDER_ROUNDS } : {}),
+      ...(mode === 'write-code' && (override ? override.local : describeRole(target, {}, bootstrap.settings).local) ? { toolRoundLimit: LOCAL_BUILDER_ROUNDS } : {}),
       ...(target.execution === 'api' && target.api ? { apiConnection: target.api, ...(target.api.model ? { model: target.api.model } : {}) } : {}),
       ...(target.execution === 'cli' && target.model ? { model: target.model } : {}),
       displayText,
@@ -1677,6 +1761,7 @@ export function App(): ReactNode {
       if (!opened) return;
     }
     setConversations((current) => [conversation, ...current.filter((item) => item.id !== id)]);
+    if (conversation.origin?.kind === 'lead') { selectLeadChat(id); setSelectLeadNonce(Date.now()); setView('workspace'); return; }
     setActiveConversationId(id);
     adoptConversationSettings(conversation);
     setAgentNotice(null);
@@ -1752,9 +1837,10 @@ export function App(): ReactNode {
   async function runConversation(
     conversation: ConversationRecord,
     prompt: string,
-    options: WorkspaceSendOptions & { agent?: AgentId; execution?: ExecutionMode; route?: RouteMode; autonomy?: AutonomyMode; model?: string; clientMessageId?: string } = {},
-  ): Promise<void> {
+    options: WorkspaceSendOptions & { agent?: AgentId; execution?: ExecutionMode; route?: RouteMode; autonomy?: AutonomyMode; model?: string; clientMessageId?: string; learningRun?: boolean; maxCostUsd?: number } = {},
+  ): Promise<ConversationRecord | undefined> {
     if (!bootstrap) return;
+    if (conversation.origin?.kind !== 'lead' && !options.learningRun && !leadBuilderEnabled) { setAgentNotice('Builder is off. Enable Lead & Builder to start work.'); return; }
     const reportRunError = (message: string): void => {
       if (conversation.origin?.kind === 'lead') setLeadErrors((current) => ({ ...current, [conversation.id]: message }));
       else setError(message);
@@ -1821,11 +1907,14 @@ export function App(): ReactNode {
     setPausedConversationIds((current) => current.filter((id) => id !== conversation.id));
     setFailedConversationIds((current) => current.filter((id) => id !== conversation.id));
     localRunsInFlight.current.add(conversation.id);
+    let builderResult: ConversationRecord | undefined;
+    let builderSucceeded = false;
     try {
       const result = unwrap(await window.kaiDesktop.runAgent({
           conversationId: conversation.id,
           prompt,
           ...(options.clientMessageId ? { clientMessageId: options.clientMessageId } : {}),
+          ...(options.maxCostUsd ? { maxCostUsd: options.maxCostUsd } : {}),
           ...(options.displayText ? { displayText: options.displayText } : {}),
           ...(options.toolRoundLimit ? { toolRoundLimit: options.toolRoundLimit } : {}),
           agent: runAgentId,
@@ -1867,6 +1956,10 @@ export function App(): ReactNode {
           setView('code');
         }
       }
+      if (conversation.origin?.kind !== 'lead' && !options.learningRun && !conversation.guidedBuild?.enabled && result.conversation.leadHandoffs?.length) {
+        builderResult = result.conversation;
+        builderSucceeded = result.status === 'completed' && !result.cancelled && !result.error;
+      }
       if (result.signInRequired && capability) {
         markSignedOut(capability);
       } else if (result.error) {
@@ -1879,6 +1972,7 @@ export function App(): ReactNode {
           else if (conversation.id === activeConversationIdRef.current) setError(result.error);
         }
       }
+      if (result.status === 'completed' && !result.cancelled && !result.error && !result.signInRequired && runGeneration.current.get(conversation.id) === generation) return result.conversation;
     } catch (caught) {
       setFailedConversationIds((current) => current.includes(conversation.id) ? current : [...current, conversation.id]);
       if (conversation.origin?.kind === 'lead') reportRunError(messageOf(caught));
@@ -1892,6 +1986,10 @@ export function App(): ReactNode {
         setPausedConversationIds((current) => current.filter((id) => id !== conversation.id));
         setStreamingTextByConversation((current) => { const next = { ...current }; delete next[conversation.id]; return next; });
         setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== conversation.id));
+        if (builderResult) {
+          const completed = builderResult;
+          window.setTimeout(() => { void leadCompletion.notify(completed, builderSucceeded); }, 0);
+        }
       }
     }
   }
@@ -2499,11 +2597,12 @@ export function App(): ReactNode {
     });
   }
 
-  async function askLead(question: string, target: RoleTarget, openFileContext?: { path: string; content: string }): Promise<void> {
+  async function askLead(question: string, target: RoleTarget, openFileContext?: { path: string; content: string }, internal?: { automated: boolean; role: 'lead' | 'reviewer'; maxCostUsd: number }): Promise<ConversationRecord | undefined> {
     if (!bootstrap || !activeProject || !question.trim()) return;
     const builderRunActive = hasLocalBuilderRun({
       conversations,
       runningConversationIds,
+      inventory: leadModelInventory,
       targetForConversation: (id) => {
         const conversation = conversations.find((item) => item.id === id);
         if (conversation?.guidedBuild?.builderTarget) return conversation.guidedBuild.builderTarget;
@@ -2523,8 +2622,19 @@ export function App(): ReactNode {
     }))) return;
 
     let lead = leadConversation?.projectId === activeProject.id ? leadConversation : null;
+    if (lead) {
+      try {
+        lead = unwrap(await window.kaiDesktop.getConversation(lead.id)) ?? lead;
+        lead = await hydrateLeadConversation(lead, (id) => window.kaiDesktop.getConversation(id).then(unwrap));
+        const fullLead = lead;
+        setConversations((current) => current.map((item) => item.id === fullLead.id ? fullLead : item));
+      } catch (caught) {
+        setLeadErrors((current) => ({ ...current, [lead!.id]: messageOf(caught) }));
+        return;
+      }
+    }
     if (!lead) {
-      const fresh = await perform(() => window.kaiDesktop.createConversation(activeProject.id, '').then(unwrap), 'Opening the Lead chat');
+      const fresh = await perform(() => window.kaiDesktop.createConversation(activeProject.id, '', { kind: 'lead', projectId: activeProject.id }).then(unwrap), 'Opening the Lead chat');
       if (!fresh) return;
       const saved = await perform(() => window.kaiDesktop.saveConversation({ ...fresh, title: 'Lead', origin: { kind: 'lead', projectId: activeProject.id } }).then(unwrap));
       if (!saved) return;
@@ -2533,18 +2643,24 @@ export function App(): ReactNode {
       selectLeadChat(saved.id);
     }
     const guided = activeConversation?.guidedBuild;
+    const leadChatId = lead.id;
+    if (!internal) setLeadErrors((current) => { const next = { ...current }; delete next[leadChatId]; return next; });
     const isStudioHandoff = leadStudioHandoffProjectId === activeProject.id;
     const includeProjectOrientation = isStudioHandoff || !lead.turns.length;
-    const ideaFlow = isLeadIdeaRequest(question);
+    const recoveryFlow = question.startsWith(LEAD_RECOVERY_PREFIX) || !internal && isLeadRecoveryRequest(question);
+    const ideaFlow = !internal && !recoveryFlow && isLeadIdeaRequest(question);
     const pathsToRead = isLeadUiRequest(question) ? [...LEAD_SPEC_FILES, ...LEAD_DESIGN_FILES] : [...LEAD_SPEC_FILES];
-    const handoffReads = await Promise.allSettled(pathsToRead.map((path) => window.kaiDesktop.readProjectFile(activeProject.id, path).then(unwrap)));
+    const [handoffReads, builderEvidence] = await Promise.all([
+      Promise.allSettled(pathsToRead.map((path) => window.kaiDesktop.readProjectFile(activeProject.id, path).then(unwrap))),
+      loadLeadBuilderEvidence(conversations, lead.id, activeProject.id, (id) => window.kaiDesktop.getConversation(id).then(unwrap)),
+    ]);
     const readFiles = [...new Map(handoffReads.flatMap((result) => result.status === 'fulfilled' ? [[result.value.path.toLowerCase(), result.value] as const] : [])).values()];
     const hasStudioBoard = readFiles.some((file) => file.path === '.kai/spec/board.json');
-    const specFiles = readFiles
-      .filter((file) => hasStudioBoard || file.path !== '.kai/spec/plan.md')
+    const specFiles = authoritativeLeadFiles(readFiles)
       .map(({ path, content }) => ({ path, content }));
     const codeFiles: Array<{ path: string; content: string }> = [];
     const codeSearchNotes: string[] = [];
+    if (hasStudioBoard) codeSearchNotes.push('The Studio board is the authoritative plan. Any separate plan.md is omitted to avoid conflicting plans.');
     if (openFileContext && !ideaFlow) codeFiles.push({ path: openFileContext.path, content: openFileContext.content });
     if (ideaFlow) {
       const tree = await window.kaiDesktop.projectFileTree(activeProject.id).then(unwrap).catch(() => null);
@@ -2584,11 +2700,12 @@ export function App(): ReactNode {
       question,
       specFiles,
       openFiles: codeFiles,
-      contextNotes: codeSearchNotes,
+      builderEvidence: builderEvidence.sections,
+      contextNotes: [...builderEvidence.notes, ...codeSearchNotes, ...leadProgressContext(builderEvidence.records, lead.id)],
       includeProjectOrientation,
-      style: guided?.style ?? 'tutor',
-      detail: guided?.detail ?? 'step-by-step',
-      questions: guided?.questions ?? 'blocked',
+      style: 'senior-dev',
+      detail: 'brief',
+      questions: 'decisions',
       leadCoachPrompt: ideaFlow
         ? (message, style, detail, questions) => leadIdeaCoachPrompt({
           idea: message,
@@ -2598,10 +2715,15 @@ export function App(): ReactNode {
           detail,
           questions,
         })
-        : leadCoachPrompt,
+        : (message, style, detail, questions) => leadDevelopmentPrompt(message, style, detail, questions, internal ? 'read-only' : lead?.leadAccess ?? 'read-only') + leadHandoffInstructions(leadHandoffMode(lead)),
     });
+    const contextualLead = { ...lead, leadReplyRole: { role: internal?.role ?? 'lead' as const, target }, ...(!lead.turns.length ? { title: leadChatTitle(question) } : {}), leadContext: { included: requestText.included, omitted: [...requestText.omitted, ...(hasStudioBoard && readFiles.some((file) => file.path === '.kai/spec/plan.md') ? ['.kai/spec/plan.md — Studio board is authoritative'] : [])], unavailable: pathsToRead.filter((_, index) => handoffReads[index]?.status === 'rejected'), suppliedAt: new Date().toISOString() } };
+    try {
+      lead = unwrap(await window.kaiDesktop.saveConversation(contextualLead));
+      setConversations((current) => [lead!, ...current.filter((item) => item.id !== lead!.id)]);
+    } catch (caught) { setLeadErrors((current) => ({ ...current, [lead!.id]: messageOf(caught) })); return; }
     if (isStudioHandoff) setLeadStudioHandoffProjectId(null);
-    await runConversation(lead, requestText.prompt, {
+    let result = await runConversation(lead, requestText.prompt, {
       agent: target.execution === 'cli' ? target.agent ?? selectedAgent : selectedAgent,
       execution: target.execution,
       route: 'direct',
@@ -2609,7 +2731,30 @@ export function App(): ReactNode {
       ...(target.execution === 'api' && target.api ? { apiConnection: target.api } : {}),
       ...(target.execution === 'api' ? target.api?.model ? { model: target.api.model } : {} : target.model ? { model: target.model } : {}),
       displayText: requestText.displayText,
+      ...(internal ? { maxCostUsd: internal.maxCostUsd } : {}),
     });
+    // Only this newly completed request can auto-dispatch; loading history never starts work.
+    const last = result?.turns.at(-1);
+    if (result && last?.role === 'assistant' && (internal || recoveryFlow)) {
+      const generated = result.turns.find((turn, index) => index >= lead!.turns.length && turn.role === 'user');
+      const latest = unwrap(await window.kaiDesktop.getConversation(result.id)) ?? result;
+      const label = recoveryFlow ? 'Plan ways forward from the blocker' : question.startsWith('Builder result reviewed.') ? 'Prepare the next step from recorded evidence' : internal?.role === 'reviewer' ? 'Independent review of the Builder result' : 'Review the Builder result';
+      const tagged = unwrap(await window.kaiDesktop.saveConversation({ ...(recoveryFlow ? markLeadRecoveryReply(latest) : latest),
+        ...(generated && (internal || question.startsWith(LEAD_RECOVERY_PREFIX)) ? { leadGeneratedTurns: [...(latest.leadGeneratedTurns ?? []), { id: generated.id, label }] } : {}),
+        ...(internal?.role === 'reviewer' ? { leadReviewTurnIds: [...(latest.leadReviewTurnIds ?? []), last.id] } : {}),
+      }));
+      setConversations((items) => [tagged, ...items.filter((item) => item.id !== tagged.id)]);
+      result = tagged;
+    }
+    if (!internal && !ideaFlow && result && last?.role === 'assistant' && hasLeadEdit(last.text)) {
+      try { result = await leadEdits.prepare(result, last.id); }
+      catch (caught) { setLeadErrors((current) => ({ ...current, [lead!.id]: messageOf(caught) })); }
+    }
+    if (!internal?.automated && !recoveryFlow && result && last?.role === 'assistant' && !hasLeadEdit(last.text) && leadHandoffMode(lead) === 'auto' && runnableLeadTask(result, last.id)) {
+      try { await leadHandoff.dispatch(last.id, true, lead.id); }
+      catch (caught) { setLeadErrors((current) => ({ ...current, [lead!.id]: messageOf(caught) })); }
+    }
+    return result;
   }
 
   async function reviewLeadIdea(proposal: LeadIdeaProposal, choice: 'approve' | 'park'): Promise<void> {
@@ -2699,28 +2844,6 @@ export function App(): ReactNode {
       if (leadId) setLeadErrors((existing) => ({ ...existing, [leadId]: message }));
       else setError(message);
     }
-  }
-
-  function storedLeadTarget(projectId: string): RoleTarget | null {
-    let target: RoleTarget | null = null;
-    try {
-      const raw = window.localStorage.getItem(`kai.lead.selection.${projectId}`);
-      const saved = raw ? JSON.parse(raw) as { identity?: unknown; target?: unknown } : null;
-      const storedTarget = saved?.target ? targetFromLeadStorage(JSON.stringify(saved.target)) : null;
-      if (storedTarget && saved?.identity === stableLeadTargetIdentity(storedTarget)) target = storedTarget;
-    } catch { /* A damaged saved choice falls back to the saved Coach. */ }
-    return target;
-  }
-
-  function askLeadWithSavedChoice(question: string, openFileContext?: { path: string; content: string }): void {
-    if (!activeProject) return;
-    const target = storedLeadTarget(activeProject.id) ?? leadSavedCoach;
-    if (!target) {
-      setError('Choose a Lead model in the Lead panel before asking a teaching question.');
-      setView('code');
-      return;
-    }
-    void askLead(question, target, openFileContext);
   }
 
   async function importBrain(): Promise<void> {
@@ -3031,9 +3154,13 @@ export function App(): ReactNode {
         return (
           <MarkdownProjectContext.Provider value={markdownProject}>
             <WorkspaceView
+              surface={workspaceSurface}
+              onSurfaceChange={(surface) => { setWorkspaceSurface(surface); try { localStorage.setItem('kai.workspace.surface', surface); } catch { /* Keep the view in memory. */ } }}
+              codeContent={<WorkspaceCodePanel project={activeProject} conversation={activeConversation} path={workspaceFilePath} line={workspaceFileLine} visible={workspaceSurface === 'code'} dirty={workspaceFileDirty} follow={workspaceFollow} onFollow={setWorkspaceFollow} onSelect={(path) => { void openWorkspaceFile(path, undefined, true); }} onDirty={setWorkspaceFileDirty} onClose={() => { void closeWorkspaceFile().then((closed) => { if (closed) setWorkspaceSurface('conversation'); }); }} formatOnSave={bootstrap.settings.editor.formatOnSave} editorView={bootstrap.settings.editor} />}
               activeProject={activeProject}
               leadBuilderEnabled={leadBuilderEnabled}
               onLeadBuilderEnabledChange={setLeadBuilderEnabled}
+              onOpenResultLead={(id) => { selectLeadChat(id); setSelectLeadNonce(Date.now()); }}
               activeConversation={activeConversation}
               settings={bootstrap.settings}
               projectPreferences={projectPreferences}
@@ -3346,11 +3473,8 @@ export function App(): ReactNode {
           </>
         )}
         <div className="main-column">
-          <main className={`app-main view-${view}${view === 'workspace' && workspaceFilePath && activeProject ? ' file-preview-open' : ''}`}>
+          <main className={`app-main view-${view}`}>
             {view !== 'code' && renderCurrentView()}
-            {workspaceFilePath && activeProject && (
-              <WorkspaceFilePreview key={`${activeProject.id}:${workspaceFilePath}`} projectId={activeProject.id} path={workspaceFilePath} line={workspaceFileLine} formatOnSave={bootstrap.settings.editor.formatOnSave} editorView={bootstrap.settings.editor} onDirtyChange={setWorkspaceFileDirty} onClose={() => void closeWorkspaceFile()} />
-            )}
             {(studioKept || view === 'studio') && (
               <div className={`persistent-studio-view ${view === 'studio' ? 'active' : ''}`} aria-hidden={view !== 'studio'}>
                 <StudioView
@@ -3385,32 +3509,11 @@ export function App(): ReactNode {
                 editorView={bootstrap.settings.editor}
                 onOpenSettings={() => setView('settings')}
                 onCreateReviewFollowup={(prompt) => { updateComposerDraft(prompt); setView('workspace'); }}
-                onLeadMessage={(question, fileContext) => askLeadWithSavedChoice(question, fileContext)}
                 learnRequest={codeLearnRequest}
                 openRequest={codeOpenRequest}
                 guidedBuild={activeConversation?.guidedBuild ?? null}
                 conversation={activeConversation?.projectId === activeProject?.id ? activeConversation : null}
-                leadPanelProps={{
-                  projectId: activeProject?.id ?? null,
-                  conversation: leadConversation,
-                  conversations: leadConversations,
-                  builderEnabled: leadBuilderEnabled,
-                  onSelectConversation: selectLeadChat,
-                  onNewConversation: () => { void createLeadChat(); },
-                  streamingText: leadConversation ? streamingTextByConversation[leadConversation.id] ?? '' : '',
-                  running: Boolean(leadConversation && runningConversationIds.includes(leadConversation.id)),
-                  error: leadConversation ? leadErrors[leadConversation.id] ?? null : null,
-                  approvals: pendingApprovals.filter((item) => item.conversationId === leadConversation?.id),
-                  inventory: leadModelInventory,
-                  savedCoach: leadSavedCoach,
-                  composerTarget: leadComposerTarget,
-                  onAsk: (question, target, fileContext) => { void askLead(question, target, fileContext); },
-                  onStop: () => { if (leadConversation) void cancelConversation(leadConversation.id); },
-                  onClearError: () => { if (leadConversation) setLeadErrors((current) => { const next = { ...current }; delete next[leadConversation.id]; return next; }); },
-                  onRespondApproval: (requestId, approved, answer) => { void respondToApproval(approved, false, answer, requestId); },
-                  onSendToBuilder: (task) => { void sendLeadTaskToBuilder(task); },
-                  onReviewIdea: (proposal, choice) => { void reviewLeadIdea(proposal, choice); },
-                }}
+
                 agentCapabilities={agentCapabilities}
                 selectedAgent={selectedAgent}
                 onUpdateGuidedBuild={(build) => { void updateGuidedBuildFromCode(build); }}
@@ -3474,10 +3577,18 @@ export function App(): ReactNode {
                 contextPreview={contextPreview}
                 contextPreviewLoading={contextPreviewLoading}
                 selectLeadNonce={selectLeadNonce}
+                builderConversations={conversations.filter((item) => item.projectId === activeProject?.id && item.origin?.kind !== 'lead')}
+                onOpenBuilder={(id) => { void openConversation(id); }}
+                onReviewBuilder={reviewBuilderResult}
                 leadConversation={leadConversation}
                 leadConversations={leadConversations}
                 leadBuilderEnabled={leadBuilderEnabled}
                 onSelectLeadChat={selectLeadChat}
+                onChangeLeadHandoffMode={leadHandoff.changeMode}
+                onChangeLeadAccess={leadEdits.changeAccess}
+                onDecideLeadEdit={leadEdits.decide}
+                onSaveLeadReviewSettings={leadCompletion.saveSettings}
+                onStartLeadBuilder={(turnId) => leadHandoff.dispatch(turnId)}
                 onNewLeadChat={() => { void createLeadChat(); }}
                 leadStreamingText={leadConversation ? streamingTextByConversation[leadConversation.id] ?? '' : ''}
                 leadRunning={Boolean(leadConversation && runningConversationIds.includes(leadConversation.id))}
@@ -3490,7 +3601,7 @@ export function App(): ReactNode {
                 onStopLead={() => { if (leadConversation) void cancelConversation(leadConversation.id); }}
                 onClearLeadError={() => { if (leadConversation) setLeadErrors((current) => { const next = { ...current }; delete next[leadConversation.id]; return next; }); }}
                 onRespondLeadApproval={(requestId, approved, answer) => { void respondToApproval(approved, false, answer, requestId); }}
-                onSendToBuilder={(task) => { void sendLeadTaskToBuilder(task); }}
+                onSendToBuilder={(task) => { void sendLeadTaskToBuilder(task).catch((caught) => { if (leadConversation) setLeadErrors((current) => ({ ...current, [leadConversation.id]: messageOf(caught) })); }); }}
                 onReviewLeadIdea={(proposal, choice) => { void reviewLeadIdea(proposal, choice); }}
               />
             </div>
@@ -3649,17 +3760,6 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : 'KAI encountered an unexpected error.';
 }
 
-function preferredConversationId(
-  bootstrap: BootstrapPayload,
-  conversations: readonly ConversationRecord[],
-): string | null {
-  if (bootstrap.activeConversationId && conversations.some((conversation) => conversation.id === bootstrap.activeConversationId)) {
-    return bootstrap.activeConversationId;
-  }
-  return conversations
-    .filter((conversation) => conversation.projectId === bootstrap.activeProjectId && !conversation.archived)
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]?.id ?? null;
-}
 
 function serviceNeedsPolling(status: string): boolean {
   return status === 'starting' || status === 'stopped';

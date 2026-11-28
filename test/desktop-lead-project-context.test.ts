@@ -1,4 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { authoritativeLeadFiles } from '../apps/desktop/src/renderer/src/components/lead-project-context';
+
+it('keeps the project plan without Studio, and sends only the board plan when Studio owns it', () => {
+  const plan = { path: '.kai/spec/plan.md', content: 'The next agreed step.' };
+  const decisions = { path: '.kai/spec/decisions.md', content: 'Keep finished work.' };
+  const board = { path: '.kai/spec/board.json', content: '{"cards":[]}' };
+  expect(authoritativeLeadFiles([plan, decisions])).toEqual([plan, decisions]);
+  expect(authoritativeLeadFiles([plan, decisions, board])).toEqual([decisions, board]);
+});
 import { buildLeadSpecContext, isLeadUiRequest } from '../apps/desktop/src/renderer/src/components/lead-project-context';
 
 describe('Lead Project Studio context', () => {

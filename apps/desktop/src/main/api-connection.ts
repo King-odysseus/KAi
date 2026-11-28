@@ -22,6 +22,30 @@ export function resolveApiConnection(
   };
 }
 
+/**
+ * A role that uses the person's own gateway without naming everything about it gets the saved gateway's address and key.
+ * Without this, a role naming only the provider would be given the preset's placeholder address whenever the default
+ * provider is something else, and would stop counting as the person's own hardware. When the default is itself an
+ * OpenAI-compatible service, a role naming no address still means that default, as it always has.
+ */
+export function withGatewayProfile(
+  settings: Pick<AppSettings, 'directApi' | 'gatewayOwnHardware' | 'gatewayAwayUrl' | 'gatewayHomeUrl' | 'gatewayCredentialId'>,
+  connection: ApiConnection,
+): ApiConnection {
+  const { gatewayAwayUrl: away, gatewayHomeUrl: home, gatewayCredentialId: credentialId } = settings;
+  if (connection.provider !== 'openai-compatible' || !settings.gatewayOwnHardware || !away) return connection;
+  const bare = (url: string): string => url.replace(/\/+$/, '').toLowerCase();
+  const meansGateway = connection.baseUrl
+    ? [away, home].some((url) => url && bare(url) === bare(connection.baseUrl!))
+    : settings.directApi.provider !== 'openai-compatible';
+  if (!meansGateway) return connection;
+  return {
+    ...connection,
+    baseUrl: connection.baseUrl ?? away,
+    ...(connection.credentialId || !credentialId ? {} : { credentialId }),
+  };
+}
+
 /** What to do when a local server is not answering, in that server's own words. */
 export function localServerHint(provider: ProviderId): string {
   switch (provider) {

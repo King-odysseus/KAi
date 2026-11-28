@@ -194,6 +194,15 @@ interface Live {
 
 let storageDirectory: string | null = null;
 const live = new Map<string, Live>();
+const fileListeners = new Map<string, Set<(relative: string) => void>>();
+
+/** Reuse the open project's watcher for live views; observing does not write any extra project data. */
+export function onProjectFileChanged(root: string, listener: (relative: string) => void): () => void {
+  const key = path.resolve(root);
+  const listeners = fileListeners.get(key) ?? new Set();
+  listeners.add(listener); fileListeners.set(key, listeners);
+  return () => { listeners.delete(listener); if (!listeners.size) fileListeners.delete(key); };
+}
 
 /** Tells the service where to keep its files. Until it is called nothing is read, written or watched. */
 export function configureProjectKnowledge(directory: string): void {
@@ -259,6 +268,9 @@ export async function startWatchingProject(root: string): Promise<void> {
     entry.watcher = watch(resolved, { recursive: true, persistent: false }, (_event, name) => {
       const relative = typeof name === 'string' ? name.replace(/\\/g, '/') : '';
       if (shouldIgnore(relative)) return;
+      for (const listener of fileListeners.get(resolved) ?? []) {
+        try { listener(relative); } catch { /* A live view cannot stop project knowledge collection. */ }
+      }
       entry.pending.add(relative);
       if (entry.flushTimer) return;
       entry.flushTimer = setTimeout(() => {

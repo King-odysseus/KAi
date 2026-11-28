@@ -21,6 +21,17 @@ function request(question: string, specFiles: LeadSpecFile[] = [], openFile?: Le
 }
 
 describe('real Lead requests fit the agent run contract', () => {
+  it('budgets durable task notes without rejecting or truncating a long question or cutting a note', () => {
+    const question = 'Explain the current task. ' + 'Keep this question whole. '.repeat(250);
+    const oversizedNote = '```ts\n' + 'const fullSection = 1;\n'.repeat(1000) + '```';
+    const text = buildLeadRequestText({ question, specFiles: [], contextNotes: [oversizedNote, 'A required check failed.'], includeProjectOrientation: false, ...styles, leadCoachPrompt });
+    expect(text.displayText).toBe(question);
+    expect(text.prompt).toContain(question);
+    expect(text.prompt).not.toContain('const fullSection');
+    expect(text.prompt).toContain('A required check failed.');
+    expect(text.omitted).toContain('KAI context note 1 (size budget)');
+    expect(agentRunRequestSchema.safeParse({ conversationId: 'lead-a', prompt: text.prompt, displayText: question, agent: 'codex', execution: 'api', route: 'direct', autonomy: 'plan', maxCostUsd: 0.5 }).success).toBe(true);
+  });
   it('keeps a question longer than the former displayText limit whole', () => {
     const question = `Please explain this design decision. ${'The saved question must stay complete. '.repeat(35)}`;
     const { text, parsed } = request(question);

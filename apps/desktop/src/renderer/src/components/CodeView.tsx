@@ -1,3 +1,4 @@
+import { CodeLearningTabs, restoredCodeLearningTab, type CodeLearningTab } from './CodeLearningTabs';
 import {
   Braces,
   ChevronDown,
@@ -72,7 +73,6 @@ import { UiButton } from './UiButton';
 import { existingCodeTabs, readCodeTabs, writeCodeTabs } from '../persistent-choice';
 import { UiTextInput } from './UiTextInput';
 import { PageHeader } from './ui/PageHeader';
-import { LeadConversationPanel } from './RightPane';
 
 interface TreeNode {
   name: string;
@@ -262,8 +262,6 @@ export function CodeView({
   onUpdateGuidedBuild,
   onRunGuidedBuild,
   modelSettings,
-  leadPanelProps,
-  onLeadMessage,
 }: {
   /** A file another part of the app wants shown; a new `nonce` asks again even for the same path. */
   openRequest?: { path: string; paths?: string[]; nonce: number } | null;
@@ -275,9 +273,7 @@ export function CodeView({
   selectedAgent: AgentId;
   onUpdateGuidedBuild: (build: GuidedBuild) => void;
   /** The saved model choices, so a plan's Builder shows the model that will really run. */
-  modelSettings?: Pick<import('@kai/contracts').AppSettings, 'directApi' | 'savedLocalModels'>;
-  leadPanelProps?: Omit<Parameters<typeof LeadConversationPanel>[0], 'projectName'>;
-  onLeadMessage?: (message: string, fileContext?: { path: string; content: string }) => void;
+  modelSettings?: Pick<import('@kai/contracts').AppSettings, 'directApi' | 'savedLocalModels' | 'gatewayOwnHardware' | 'gatewayAwayUrl' | 'gatewayHomeUrl'>;
   onRunGuidedBuild: (prompt: string, build: GuidedBuild, mode: 'coach' | 'plan' | 'review' | 'show-code' | 'write-code', userMessage?: string, override?: GuidedRunOverride) => void | Promise<void>;
   activeProject: ProjectRecord | null;
   editorState: EditorWindowSnapshot | null;
@@ -326,9 +322,8 @@ export function CodeView({
       return true;
     }
   });
-  const [sidePanel, setSidePanel] = useState<'lead' | 'learn' | 'review' | 'guide'>(() => {
-    const saved = window.localStorage.getItem('kai.codeSidePanel');
-    return saved === 'review' || saved === 'guide' || saved === 'learn' ? saved : 'lead';
+  const [sidePanel, setSidePanel] = useState<CodeLearningTab>(() => {
+    try { return restoredCodeLearningTab(window.localStorage.getItem('kai.codeSidePanel')); } catch { return 'learn'; }
   });
   const [learningScope, setLearningScope] = useState<LearningTutorScope>(() => {
     try {
@@ -475,7 +470,7 @@ export function CodeView({
   }
 
   /** Opens one of the side panels, remembering the choice the way the tab buttons already do. */
-  function openSidePanel(panel: 'lead' | 'learn' | 'review' | 'guide'): void {
+  function openSidePanel(panel: CodeLearningTab): void {
     setSidePanel(panel);
     window.localStorage.setItem('kai.codeSidePanel', panel);
   }
@@ -2325,20 +2320,8 @@ export function CodeView({
           />
           {/* One grid cell holds the tabs and whichever panel is showing; separate children would each take a cell. */}
           <div className="code-side-panel">
-          <div className="code-side-panel-tabs" role="tablist" aria-label="Code assistance">
-            <UiButton type="button" role="tab" aria-selected={sidePanel === 'lead'} className={sidePanel === 'lead' ? 'active' : ''} onClick={() => openSidePanel('lead')}>Lead</UiButton>
-            <UiButton type="button" role="tab" aria-selected={sidePanel === 'learn'} className={sidePanel === 'learn' ? 'active' : ''} onClick={() => openSidePanel('learn')}>Learning record</UiButton>
-            <UiButton type="button" role="tab" aria-selected={sidePanel === 'review'} className={sidePanel === 'review' ? 'active' : ''} onClick={() => openSidePanel('review')}>Review</UiButton>
-            <UiButton type="button" role="tab" aria-selected={sidePanel === 'guide'} className={sidePanel === 'guide' ? 'active' : ''} onClick={() => openSidePanel('guide')}>Guided Build</UiButton>
-          </div>
-          {sidePanel === 'lead' ? (leadPanelProps ? <LeadConversationPanel
-            {...leadPanelProps}
-            projectName={activeProject?.name ?? 'No project'}
-            onAsk={(question, target) => {
-              const document = activePath ? documents.current.get(activePath) : null;
-              leadPanelProps.onAsk(question, target, document && activePath ? { path: activePath, content: document.model.getValue() } : undefined);
-            }}
-          /> : <div className="lead-empty">Open a project to ask its Lead.</div>) : sidePanel === 'guide' ? <CodeGuidePanel
+          <CodeLearningTabs value={sidePanel} onChange={openSidePanel} />
+          {sidePanel === 'guide' ? <CodeGuidePanel
             view={codeGuide}
             explaining={guideExplaining}
             busy={guideBusy}
@@ -2356,10 +2339,6 @@ export function CodeView({
             projectId={activeProject.id}
             {...(modelSettings ? { modelSettings } : {})}
             onOpenFile={(path) => { void openFile(path); }}
-            onLeadMessage={(message) => {
-              const document = activePath ? documents.current.get(activePath) : null;
-              onLeadMessage?.(message, document && activePath ? { path: activePath, content: document.model.getValue() } : undefined);
-            }}
           /> : sidePanel === 'review' ? <GuidedReviewPanel
             projectId={activeProject.id}
             changes={reviewChanges}
@@ -2371,7 +2350,6 @@ export function CodeView({
             onOpenAt={(filePath, line) => void openLearningReference(filePath, line, line)}
             onOpenSettings={onOpenSettings}
           /> : <LearningPanel
-            recordOnly
             key={projectId}
             projectFiles={files.map((file) => file.path)}
             onReference={(filePath, startLine, endLine) => void openLearningReference(filePath, startLine, endLine)}

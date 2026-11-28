@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { roleTargetSchema } from './architect';
+import { leadCompletionSchema, leadCycleSchema, leadDeliverySettingsSchema } from './lead';
+import { leadAccessSchema, leadEditProposalSchema } from './lead-edits';
 import { architectSplitSchema } from './architect';
 import { persistedEventV1Schema } from './events';
 import { experienceLevelSchema } from './experience';
@@ -399,6 +401,12 @@ export const appSettingsV1Schema = z
     /** Optional per-model window that wins over what the server reports. */
     modelContextOverride: z.record(z.string().min(1).max(300), z.number().int().positive().max(10_000_000)).default({}),
     localModelContext: z.record(z.string().min(1).max(300), z.number().int().positive().max(10_000_000)).default({}),
+    // Marks the saved OpenAI-compatible gateway profile as the person's own hardware, independent of Direct API.
+    gatewayOwnHardware: z.boolean().default(false),
+    // Gateway Home and Away profile. Away URL and credential survive changes to Direct API.
+    gatewayAwayUrl: z.string().url().max(500).refine((url) => !/:1234(?:\/|$)/.test(url), 'LM Studio port 1234 is not a gateway address.').nullable().default(null),
+    gatewayCredentialId: z.string().min(1).max(200).nullable().default(null),
+    gatewayHomeUrl: z.string().url().max(500).refine((url) => !/:1234(?:\/|$)/.test(url), 'LM Studio port 1234 is not a gateway address.').nullable().default(null),
     directApi: directApiSettingsSchema,
     // Web search and URL fetching are separate from the model connection: any model can use an external source.
     webSearch: webSearchSettingsSchema.default({}),
@@ -480,6 +488,7 @@ export const conversationTurnSchema = z
     clientMessageId: z.string().min(1).max(128).optional(),
     checkpoint: checkpointRecordSchema.nullable().optional(),
     fileChanges: z.array(turnFileChangeSchema).optional(),
+    fileSnapshot: z.array(z.object({ path: z.string(), hash: z.string().nullable() }).strict()).optional(),
     /**
      * A short, factual account of what this turn's tool calls did — files touched, commands run and their
      * outcome — built from its events (see `main/turn-digest.ts`). Carried into later turns' Direct API history so
@@ -607,6 +616,17 @@ export const conversationRecordV1Schema = z
     workflow: workflowSchema.nullable().optional(),
     guidedBuild: guidedBuildSchema.optional(),
     origin: conversationOriginSchema.optional(),
+    leadContext: z.object({ included: z.array(z.string()), omitted: z.array(z.string()), unavailable: z.array(z.string()), suppliedAt: z.string() }).strict().optional(),
+    leadHandoffMode: z.enum(['discuss', 'ask', 'auto']).optional(),
+    leadAccess: leadAccessSchema.optional(),
+    leadEditProposals: z.array(leadEditProposalSchema).optional(),
+    leadDeliverySettings: leadDeliverySettingsSchema.optional(),
+    leadReplyRole: z.object({ role: z.enum(['lead', 'reviewer']), target: roleTargetSchema }).strict().optional(),
+    leadReviewTurnIds: z.array(z.string()).optional(),
+    leadRecoveryTurnIds: z.array(z.string()).optional(),
+    leadGeneratedTurns: z.array(z.object({ id: z.string(), label: z.string() }).strict()).optional(),
+    leadDispatchedTurnIds: z.array(z.string()).optional(),
+    leadHandoffs: z.array(z.object({ id: z.string(), leadConversationId: z.string(), task: z.string(), createdAt: z.string(), userTurnCount: z.number().int().nonnegative(), sourceTurnId: z.string().optional(), delivery: z.enum(['draft', 'run']).optional(), cycle: leadCycleSchema.optional(), completion: leadCompletionSchema.optional(), builderTarget: roleTargetSchema.optional() }).strict()).optional(),
     compaction: conversationCompactionSchema.optional(),
     /**
      * The conversation this is a side question off of, when it is one — a quick question asked without derailing

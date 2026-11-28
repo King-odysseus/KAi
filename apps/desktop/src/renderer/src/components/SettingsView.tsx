@@ -298,16 +298,17 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
     setProviderModels((current) => ({ ...current, [scope]: null }));
     setModelFeedback((current) => ({ ...current, [scope]: null }));
     setDraft((current) => {
-      // The gateway is one server for every feature: reuse the address and key already set up on the Direct API card.
+      // Helper providers are independent, but can opt into the saved gateway profile.
       const gateway = provider === 'openai-compatible' && current.directApi.provider === 'openai-compatible';
+      const ownedGateway = provider === 'openai-compatible' && current.gatewayOwnHardware && Boolean(current.gatewayAwayUrl);
       return {
         ...current,
         [key]: {
           ...current[key],
           provider,
-          baseUrl: gateway ? current.directApi.baseUrl : preset.defaultBaseUrl,
-          model: gateway && preset.models.includes('gateway/general') ? 'gateway/general' : preset.defaultModel,
-          credentialId: gateway ? current.directApi.credentialId : preset.credentialId,
+          baseUrl: ownedGateway ? current.gatewayAwayUrl! : gateway ? current.directApi.baseUrl : preset.defaultBaseUrl,
+          model: (ownedGateway || gateway) && preset.models.includes('gateway/general') ? 'gateway/general' : preset.defaultModel,
+          credentialId: ownedGateway ? current.gatewayCredentialId ?? preset.credentialId : gateway ? current.directApi.credentialId : preset.credentialId,
         },
       };
     });
@@ -1031,6 +1032,38 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           onClearKey={() => void clearProviderCredential('direct')}
           vaultAvailable={credentialStatus.available}
         />
+
+        <section className="settings-section span-two">
+            <div className="section-title"><Cpu size={17} /><span>Gateway hardware</span></div>
+            <NotificationToggle
+              label="This gateway is my own hardware"
+              hint="Treat the saved gateway profile as Local, independent of the Direct API provider."
+              checked={draft.gatewayOwnHardware}
+              onChange={(gatewayOwnHardware) => setDraft({
+                ...draft,
+                gatewayOwnHardware,
+                ...(gatewayOwnHardware && draft.directApi.provider === 'openai-compatible' && !draft.gatewayAwayUrl
+                  ? { gatewayAwayUrl: draft.directApi.baseUrl, gatewayCredentialId: draft.directApi.credentialId }
+                  : {}),
+              })}
+            />
+            {draft.gatewayOwnHardware && <>
+              <label className="settings-field">
+                <span>Away gateway address</span>
+                <UiTextInput aria-label="Away gateway address" value={draft.gatewayAwayUrl ?? ''} placeholder="https://your-existing-relay.example/v1" onChange={(event) => setDraft({ ...draft, gatewayAwayUrl: event.currentTarget.value.trim() || null })} />
+              </label>
+              <label className="settings-field">
+                <span>Gateway credential ID</span>
+                <UiTextInput aria-label="Gateway credential ID" value={draft.gatewayCredentialId ?? ''} onChange={(event) => setDraft({ ...draft, gatewayCredentialId: event.currentTarget.value.trim() || null })} />
+              </label>
+              <label className="settings-field">
+                <span>Home gateway address</span>
+                <UiTextInput aria-label="Home gateway address" value={draft.gatewayHomeUrl ?? ''} placeholder="http://192.168.68.52:8000/v1" onChange={(event) => setDraft({ ...draft, gatewayHomeUrl: event.currentTarget.value.trim() || null })} />
+              </label>
+              <p className="settings-note span-two">Learning Tutor and Prompt Guide keep their own provider settings. To move a helper to this hardware, select OpenAI-compatible and gateway/general in that helper’s settings. Its cloud provider remains available to select again.</p>
+            </>}
+            {cardSave('directApi', 'Save gateway settings', ['directApi'])}
+        </section>
 
         <section className="settings-section span-two">
           <div className="section-title"><Search size={17} /><span>Web search</span></div>

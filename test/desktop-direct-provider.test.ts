@@ -440,7 +440,7 @@ data: {"type":"message_stop"}
     expect(requests.at(-1)?.tools ?? []).toHaveLength(0);
   });
 
-  it('asks before a per-run spend limit ends the run, once, and carries on when told to', async () => {
+  it.each(['runtime', 'request'] as const)('asks before a %s spend limit ends the run, once, and carries on when told to', async (limitSource) => {
     const questions: DirectApiApprovalRequest[] = [];
     const projectRoot = await mkdtemp(path.join(tmpdir(), 'kai-spend-'));
     temporaryDirectories.push(projectRoot);
@@ -472,11 +472,11 @@ data: {"type":"message_stop"}
       credentialPort('provider.anthropic', 'anthropic-secret'),
       undefined,
       // A limit small enough that the first usage report passes it, so the question is reached quickly.
-      { maxRunCostUsd: 0.000001 },
+      limitSource === 'runtime' ? { maxRunCostUsd: 0.000001 } : {},
     );
 
     const result = await runtime.run(
-      { ...runRequest(), autonomy: 'full' },
+      { ...runRequest(), autonomy: 'full', ...(limitSource === 'request' ? { maxCostUsd: 0.000001 } : {}) },
       projectRoot,
       undefined,
       undefined,

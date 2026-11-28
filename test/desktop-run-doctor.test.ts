@@ -45,6 +45,27 @@ describe('diagnosing a failed run', () => {
     expect(failed('429 rate limit reached for this model')?.cause).toBe('provider-limit');
   });
 
+  it('names a queued Mac request', () => {
+    expect(failed('The Mac did not answer within 240 minutes. The request was not sent again.')?.cause).toBe('gateway-queued');
+  });
+
+  it('names a Mac gateway memory shortage', () => {
+    expect(failed('The Mac cannot take this request yet (503: insufficient memory). It was tried 4 times. Send "continue" to try again.')?.cause).toBe('gateway-memory');
+  });
+
+  it('names a full Mac model queue separately from a provider rate limit', () => {
+    expect(failed('The Mac\'s queue is still full (model_queue_full) after 3 hours. Send "continue" to try again.')?.cause).toBe('gateway-queue-full');
+  });
+
+  it('does not diagnose gateway causes from tool output when another failure ended the run', () => {
+    const diagnosis = diagnoseRun({
+      status: 'failed',
+      error: 'The run failed because the build assertion did not match.',
+      events: [{ type: 'tool.call', name: 'run_command', status: 'completed', output: { stdout: 'Fixture line 503: request queued for later.' } }],
+    });
+    expect(diagnosis).toBeNull();
+  });
+
   it('falls back to the exit code when that is all there is', () => {
     const diagnosis = failed('Codex exited with code 7.');
     expect(diagnosis?.cause).toBe('cli-exit');

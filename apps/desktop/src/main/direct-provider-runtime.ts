@@ -1,9 +1,14 @@
+import { isLeadRun, toolsForLead, leadToolAllowed } from './lead-run-policy';
+import { LEAD_FINAL_ANSWER, leadToolProgress, leadToolRoundLimit } from './lead-tool-progress';
 import { randomUUID } from 'node:crypto';
 import { trimAnthropicToolResults, trimChatToolResults, trimGeminiToolResults } from './context-trimming';
 import { withBrainTools, type BrainAccess } from './brain-tools';
 import { withHistoryTools, type HistoryAccess } from './history-tools';
-import { compactThresholdFor, modelContextFor, directProviderPreset, helperLimitOf, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, openPlanReminder, pickLocalModel, planIsUnfinished, type ApiConnection, type ProviderId } from '@kai/contracts';
-import { localServerHint, resolveApiConnection } from './api-connection';
+import { compactThresholdFor, modelContextFor, directProviderPreset, helperLimitOf, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, openPlanReminder, pickLocalModel, planIsUnfinished, modelHostOf, type ApiConnection, type ModelHost, type ProviderId } from '@kai/contracts';
+import { localServerHint, resolveApiConnection, withGatewayProfile } from './api-connection';
+import { resolveGatewayAddress } from './gateway-address';
+import { fetchWithHeaderTimeout, modelFetch, ModelHostError, type ModelTiming, type ModelWaitStatus } from './model-transport';
+import { capToolOutput, toolOutputLimit } from './tool-output-cap';
 import type {
   AppSettings,
   AgentRunRequest,
@@ -112,9 +117,9 @@ const SUBAGENT_WRITER_TOOLS: ReadonlySet<string> = new Set([
 const SUBAGENT_FULL_WRITER_TOOLS: ReadonlySet<string> = new Set([...SUBAGENT_WRITER_TOOLS, 'run_command']);
 
 /** What the provider's prompt cache did for a run, for the usage line. Nothing when it served nothing from cache. */
-function cacheFields(provider: string, model: string, inputTokens: number | undefined, cachedInputTokens: number | undefined): { cachedInputTokens?: number; cacheSavedUsd?: number } {
+function cacheFields(provider: string, model: string, inputTokens: number | undefined, cachedInputTokens: number | undefined, host?: ModelHost): { cachedInputTokens?: number; cacheSavedUsd?: number } {
   if (!cachedInputTokens || cachedInputTokens <= 0) return {};
-  const saved = isLocalProvider(provider as ProviderId) || !model ? null : cacheSavingsUsd(model, inputTokens ?? 0, cachedInputTokens);
+  const saved = isLocalProvider(provider as ProviderId) || (host && host !== 'cloud') || !model ? null : cacheSavingsUsd(model, inputTokens ?? 0, cachedInputTokens);
   return { cachedInputTokens, ...(saved ? { cacheSavedUsd: saved } : {}) };
 }
 
@@ -124,10 +129,13 @@ function costFields(
   inputTokens: number | undefined,
   outputTokens: number | undefined,
   cachedInputTokens?: number,
+  host?: ModelHost,
 ): { provider: string; model?: string; amountUsd?: number } {
   // A model on the user's own machine costs nothing, whatever its name looks like: without this a local
   // "gpt-oss" would be priced as a paid GPT and count against the budget.
-  const amountUsd = isLocalProvider(provider as ProviderId) ? 0 : model ? estimateCostUsd(model, inputTokens, outputTokens, cachedInputTokens) : null;
+  // The same holds for a gateway the person has said is their own hardware.
+  const free = isLocalProvider(provider as ProviderId) || host === 'own-hardware';
+  const amountUsd = free ? 0 : model ? estimateCostUsd(model, inputTokens, outputTokens, cachedInputTokens) : null;
   return {
     provider,
     ...(model ? { model } : {}),
@@ -162,8 +170,6 @@ interface ChatToolCall {
  * number: a limit of a hundred cut productive runs off mid-task, which is not something the CLIs do.
  */
 const MAX_TOTAL_TOOL_ROUNDS = 1_000;
-/** Local models benefit from a shorter leash; an Architect split can review and continue the work afterward. */
-const LOCAL_PROVIDER_MAX_TOOL_ROUNDS = 30;
 /** A helper's own loop is bounded much tighter than the main run's: it answers one question, not a whole task. */
 const EXPLORE_MAX_ROUNDS = 6;
 const EXPLORE_OUTPUT_TOKEN_BUDGET = 4_096;
@@ -556,7 +562,8 @@ async function foldPlanNote(projectRoot: string, conversationId: string): Promis
   return planNote + stepNote;
 }
 
-function continuationMessage(summary: string): string {
+function continuationMessage(summary: string, request: AgentRunRequest): string {
+  if (isLeadRun(request)) return `${summary}\nContinue the read-only Lead discussion. Finish the explanation or Builder handoff; do not execute implementation steps or claim they passed.`;
   return `${summary}\n\nContinue the task from where you left off. Do not repeat steps that already succeeded. Run any remaining commands and edits yourself with your tools instead of listing them for the user, and give the final answer only when the task is done.`;
 }
 
@@ -646,6 +653,27 @@ export interface DirectApiProxyRoute {
   apiKey: string;
 }
 
+/** Where a run's model lives, worked out once per run. Absent means a cloud provider. */
+interface ModelRoute {
+  host?: ModelHost;
+  statusRoot?: string;
+  /** The characters one tool result may take. Absent for a cloud model, whose results are sent whole. */
+  outputLimit?: number;
+}
+
+function hostOf(capability: DirectApiCapability): ModelHost | undefined {
+  return (capability as DirectApiCapability & ModelRoute).host;
+}
+
+function waitMessage(capability: DirectApiCapability, status: ModelWaitStatus): string {
+  if (status.state === 'running') return `${capability.model} has started on this request.`;
+  if (status.state === 'queued') {
+    const place = status.position !== undefined ? `queue position ${status.position}` : 'no reply yet';
+    return `Waiting for your hardware: ${place}.${status.detail ? ` ${status.detail}` : ''}`;
+  }
+  return status.detail ?? 'Your hardware is busy. Waiting before trying again.';
+}
+
 interface DirectApiSettingsPort {
   load(): Promise<AppSettings>;
 }
@@ -663,6 +691,10 @@ export interface DirectProviderRuntimeOptions {
   waitIfPaused?: (conversationId: string, signal: AbortSignal) => Promise<void>;
   /** Asks a local server (LM Studio) which models it offers; replaced in tests. */
   probeLocalServer?: (baseUrl: string, apiKey?: string) => Promise<LocalServerProbe>;
+  /** Chooses between the home and away addresses of the person's own gateway; replaced in tests. */
+  resolveGatewayAddress?: typeof resolveGatewayAddress;
+  /** Shortens the transport's waits in tests. */
+  modelTiming?: Partial<ModelTiming>;
   /** Spaces requests out; Autopilot sets it so a long job stays under the provider's limit. Off by default. */
   pacer?: RequestPacer;
   /** Stop a run whose estimated cost passes this many USD. Zero disables it; defaults to KAI_MAX_RUN_COST_USD, then the Usage setting. */
@@ -698,17 +730,60 @@ export class DesktopDirectProviderRuntime {
   }
 
   /** Spaces requests out before the provider has to ask, and tells the pacer how each one went. */
-  private async pacedFetch(url: string, init: RequestInit & { signal: AbortSignal }): Promise<Response> {
-    const pacer = this.pacer;
-    if (!pacer) return fetchWithHeaderTimeout(url, init);
+  private async pacedFetch(
+    url: string,
+    init: RequestInit & { signal: AbortSignal },
+    capability: DirectApiCapability & ModelRoute,
+    request: AgentRunRequest,
+    apiKey: string,
+    emit: (event: PersistedEvent) => void,
+  ): Promise<Response> {
+    const host = capability.host ?? 'cloud';
+    const send = (): Promise<Response> => modelFetch(url, init, {
+      host,
+      apiKey,
+      ...(capability.statusRoot ? { statusRoot: capability.statusRoot } : {}),
+      ...(this.options.modelTiming ? { timing: this.options.modelTiming } : {}),
+      onStatus: (status) => emit(lifecycleEvent(request, 'starting', waitMessage(capability, status))),
+    });
+    // The person's own hardware queues requests itself, and one can wait hours: it must not hold a pacing slot that a
+    // cloud run is waiting for.
+    const pacer = host === 'own-hardware' ? undefined : this.pacer;
+    if (!pacer) return send();
     await pacer.acquire(init.signal);
     try {
-      const response = await fetchWithHeaderTimeout(url, init);
+      const response = await send();
       pacer.report(response.status);
       return response;
     } finally {
       pacer.release();
     }
+  }
+
+  /**
+   * Where this run's model lives. For the person's own gateway that also settles which address is used, home or away,
+   * and says so in the conversation.
+   */
+  private async routeModel(
+    request: AgentRunRequest,
+    capability: DirectApiCapability,
+    apiKey: string,
+  ): Promise<{ capability: DirectApiCapability & ModelRoute; notice?: PersistedEvent }> {
+    const settings = await this.settings.load();
+    const connection = { provider: capability.provider, baseUrl: capability.baseUrl };
+    const classified = modelHostOf(connection, settings);
+    // A paid provider reached through an address on this computer is a relay to the cloud, not a model running here:
+    // it keeps its cost, its limits and its full context.
+    const host = classified === 'this-computer' && !isLocalProvider(capability.provider) ? 'cloud' : classified;
+    if (host === 'cloud') return { capability: { ...capability, host } };
+    const outputLimit = toolOutputLimit(modelContextFor(settings, capability.model));
+    if (host !== 'own-hardware') return { capability: { ...capability, host, outputLimit } };
+    const address = await (this.options.resolveGatewayAddress ?? resolveGatewayAddress)(connection, settings, apiKey);
+    const where = address.label === 'home' ? 'at its home address' : address.label === 'away' ? 'through its away address' : 'at its configured address';
+    return {
+      capability: { ...capability, host, outputLimit, baseUrl: address.baseUrl, ...(address.statusRoot ? { statusRoot: address.statusRoot } : {}) },
+      notice: lifecycleEvent(request, 'starting', `Using your own hardware ${where}: ${address.baseUrl}`),
+    };
   }
 
   /** Autopilot turns pacing on for the length of a job and off again after. */
@@ -733,7 +808,7 @@ export class DesktopDirectProviderRuntime {
     const limitUsd = toolRuntime.guard.maxCostLimitUsd;
     if (limitUsd <= 0) return;
     // Helper agents report their own spend, so the parent's limit covers the whole tree of work.
-    const costUsd = (costFields(capability.provider, capability.model, inputTokens, outputTokens, cachedInputTokens).amountUsd ?? 0)
+    const costUsd = (costFields(capability.provider, capability.model, inputTokens, outputTokens, cachedInputTokens, hostOf(capability)).amountUsd ?? 0)
       + toolRuntime.guard.externalCostUsd;
     if (costUsd < limitUsd) return;
     toolRuntime.guard.setMaxCost(0);
@@ -741,7 +816,7 @@ export class DesktopDirectProviderRuntime {
     if (answer === 'wrap-up') toolRuntime.guard.requestWrapUp();
   }
 
-  private async newToolRuntime(projectRoot: string, customPermissions: Partial<Record<PermissionKey, boolean>> | undefined, conversationId: string): Promise<DesktopProjectToolRuntime> {
+  private async newToolRuntime(projectRoot: string, customPermissions: Partial<Record<PermissionKey, boolean>> | undefined, conversationId: string, requestRules?: AgentRunRequest['permissionRules'], requestMaxCost?: number): Promise<DesktopProjectToolRuntime> {
     const loaded = await this.settings.load().catch(() => undefined);
     const web = loaded
       ? new WebToolRuntime({
@@ -758,11 +833,12 @@ export class DesktopDirectProviderRuntime {
     const permissionRules = this.options.loadPermissionRules
       ? await this.options.loadPermissionRules(projectRoot).catch(() => [])
       : [];
-    runtime.setPolicy({ permissionRules, toolHook: this.options.runToolHook });
+    runtime.setPolicy({ permissionRules: [...permissionRules, ...(requestRules ?? [])], toolHook: this.options.runToolHook });
     runtime.toolFilter = this.options.allowedToolNames;
     // The environment variable wins so a script can loosen or tighten the limit without touching settings.
     const fromSettings = loaded?.usageBudget.perRunUsd;
-    runtime.guard.setMaxCost(this.options.maxRunCostUsd ?? maxRunCostFromEnvironment() ?? fromSettings ?? DEFAULT_MAX_RUN_COST_USD);
+    const configured = this.options.maxRunCostUsd ?? maxRunCostFromEnvironment() ?? fromSettings ?? DEFAULT_MAX_RUN_COST_USD;
+    runtime.guard.setMaxCost(requestMaxCost ? Math.min(requestMaxCost, configured && configured > 0 ? configured : Infinity) : configured);
     return runtime;
   }
 
@@ -823,7 +899,7 @@ export class DesktopDirectProviderRuntime {
         readOnlyTools,
       );
       if (!response.body) return 'Explore could not run: the provider returned no response.';
-      for await (const streamEvent of readSseEvents(response.body)) {
+      for await (const streamEvent of readSseEvents(response.body, streamIdleTimeout(capability))) {
         let value: Record<string, unknown>;
         try {
           value = asRecord(JSON.parse(streamEvent.data)) ?? {};
@@ -894,6 +970,8 @@ export class DesktopDirectProviderRuntime {
    * to run builds and edit files in the project itself, under the other agents' feet and outside the merge.
    */
   private externalFor(projectRoot: string, request?: AgentRunRequest, smallModel = false): ExternalToolPort | undefined {
+    // Lead reads with the bounded project tools; external tools can expose writes beyond the project.
+    if (request?.permissionRules?.some((rule) => rule.id === 'lead-read-only')) return undefined;
     const reachable = this.externalTools && isParallelCopy(projectRoot) ? withoutTerminalTools(this.externalTools) : this.externalTools;
     // A local model is offered the outside (MCP) tools through tool_search, whatever their number. The brain and history
     // tools are added after this, so they stay in view.
@@ -995,7 +1073,7 @@ export class DesktopDirectProviderRuntime {
    */
   async capability(connection?: ApiConnection): Promise<DirectApiCapability> {
     const settings = await this.settings.load();
-    const directApi = connection ? resolveApiConnection(settings.directApi, connection) : settings.directApi;
+    const directApi = connection ? resolveApiConnection(settings.directApi, withGatewayProfile(settings, connection)) : settings.directApi;
     const preset = directProviderPreset(directApi.provider);
     const displayName = preset.displayName;
     const local = isLocalProvider(directApi.provider);
@@ -1098,6 +1176,7 @@ export class DesktopDirectProviderRuntime {
     // A model chosen in the composer applies to this run only. A role's own connection already carries its model.
     if (request.model && !request.apiConnection?.model) capability = { ...capability, model: request.model };
     let apiKey: string;
+    let routeNotice: PersistedEvent | undefined;
     if (request.route === 'proxy') {
       const preset = directProviderPreset(capability.provider);
       if (!capability.enabled) {
@@ -1136,6 +1215,15 @@ export class DesktopDirectProviderRuntime {
       apiKey = directApiKey ?? LOCAL_PROVIDER_PLACEHOLDER_KEY;
       const cancelledDuringCredentialLookup = checkCancelledEarly();
       if (cancelledDuringCredentialLookup) return cancelledDuringCredentialLookup;
+      const routed = await this.routeModel(request, capability, apiKey);
+      capability = routed.capability;
+      routeNotice = routed.notice;
+      if (routeNotice) onEvent?.(routeNotice);
+      if (capability.model.trim().toLowerCase() === 'gateway/auto' && routed.capability.host === 'own-hardware') {
+        return bailEarly('gateway/auto is not used on your own gateway, because it refuses a request that matches more than one kind of task. Choose gateway/coding, gateway/general, gateway/research or gateway/vision.');
+      }
+      const cancelledDuringRouting = checkCancelledEarly();
+      if (cancelledDuringRouting) return cancelledDuringRouting;
     }
 
     const protocol = directProviderPreset(capability.provider).protocol;
@@ -1184,7 +1272,7 @@ export class DesktopDirectProviderRuntime {
       onEvent?.(lifecycleEvent(request, 'starting', 'DeepSeek\'s Anthropic-style endpoint was not accepted; using its chat endpoint instead.'));
     }
     if (protocol === 'chat-completions') {
-      return this.runChatCompletions(
+      const result = await this.runChatCompletions(
         request,
         projectRoot,
         capability,
@@ -1196,6 +1284,7 @@ export class DesktopDirectProviderRuntime {
         history,
         customPermissions,
       );
+      return routeNotice ? { ...result, events: [routeNotice, ...result.events] } : result;
     }
     if (protocol === 'anthropic-messages') {
       return this.runAnthropicMessages(
@@ -1226,7 +1315,8 @@ export class DesktopDirectProviderRuntime {
       );
     }
 
-    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId);
+    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId, request.permissionRules, request.maxCostUsd);
+    toolRuntime.outputLimit = (capability as DirectApiCapability & ModelRoute).outputLimit;
     const cancelledDuringToolRuntime = checkCancelledEarly();
     if (cancelledDuringToolRuntime) return cancelledDuringToolRuntime;
     // One outside-tool view per run: large tool sets are offered through tool_search instead of all at once.
@@ -1256,7 +1346,7 @@ export class DesktopDirectProviderRuntime {
     let nudges = 0;
     let forceFinalAnswer = false;
     let resumeAfterSteer = false;
-    const toolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? (isLocalProvider(capability.provider) ? LOCAL_PROVIDER_MAX_TOOL_ROUNDS : MAX_TOTAL_TOOL_ROUNDS);
+    const toolRoundLimit = leadToolRoundLimit(request, request.toolRoundLimit ?? this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS);
     const firstInputText = contextText?.trim()
       ? `${contextText.trim()}\n\nUser request:\n${request.prompt}`
       : request.prompt;
@@ -1283,7 +1373,7 @@ export class DesktopDirectProviderRuntime {
         }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
-          providerInput = appendUserInput(providerInput, WRAP_UP_MESSAGE);
+          providerInput = appendUserInput(providerInput, isLeadRun(request) ? LEAD_FINAL_ANSWER : WRAP_UP_MESSAGE);
           emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached a run limit; asking it to sum up what it has done.`));
         }
         const pendingToolCalls = new Map<string, PendingToolCall>();
@@ -1305,7 +1395,7 @@ export class DesktopDirectProviderRuntime {
         );
         if (!response.body) throw new Error('The provider returned no streaming response body.');
 
-        for await (const streamEvent of readSseEvents(response.body)) {
+        for await (const streamEvent of readSseEvents(response.body, streamIdleTimeout(capability))) {
           if (streamEvent.data === '[DONE]') break;
           let value: Record<string, unknown>;
           try {
@@ -1377,21 +1467,25 @@ export class DesktopDirectProviderRuntime {
         }
 
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
+        if (forceFinalAnswer && isLeadRun(request) && toolCalls.length) {
+          errors.push('Lead ignored the request to finish and called tools after inspection ended. No further tools were run; choose another model or ask for one specific next action.');
+          break;
+        }
         if (toolCalls.length === 0) {
-          if (resumeAfterSteer && !forceFinalAnswer) {
+          if (!isLeadRun(request) && resumeAfterSteer && !forceFinalAnswer) {
             resumeAfterSteer = false;
             providerInput = 'Now resume the original task from where you paused. Keep working through its unfinished steps; do not stop after only addressing the interruption.';
             continue;
           }
           // The plan is consulted first, because it answers the question the prose can only guess at: open items mean
           // the work is not done, whatever the wording of the reply looked like.
-          const planned = await planContinuation(projectRoot, request.conversationId, roundText, nudges);
+          const planned = isLeadRun(request) ? null : await planContinuation(projectRoot, request.conversationId, roundText, nudges);
           if (planned) {
             nudges += 1;
             providerInput = planned;
             continue;
           }
-          if (announcesUnfinishedWork(roundText)) {
+          if (!isLeadRun(request) && announcesUnfinishedWork(roundText)) {
             // Out of nudges: ask rather than end the run. Continue buys another stretch of the same nudging.
             if (nudges >= MAX_UNFINISHED_NUDGES && (await askToContinue(approvals, TALK_ONLY_QUESTION)) === 'continue') {
               nudges = 0;
@@ -1430,6 +1524,11 @@ export class DesktopDirectProviderRuntime {
           (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal, contextText),
           this.taskRunner(request, projectRoot, contextText),
         );
+        if (isLeadRun(request) && !forceFinalAnswer && (toolRuntime.guard.wrapUpRequested || toolRounds >= toolRoundLimit)) {
+          forceFinalAnswer = true;
+          providerInput = appendUserInput(providerInput, LEAD_FINAL_ANSWER);
+          emit(noticeEvent(request, 'Lead inspection finished; preparing a next step from the evidence already read.'));
+        }
       }
     } catch (error) {
       aborted = controller.signal.aborted;
@@ -1461,7 +1560,7 @@ export class DesktopDirectProviderRuntime {
         outputTokens,
         sessionId: previousResponseId,
         estimateProvenance: 'measured',
-        ...costFields(capability.provider, capability.model, inputTokens, outputTokens),
+        ...costFields(capability.provider, capability.model, inputTokens, outputTokens, undefined, hostOf(capability)),
       });
     }
     if (error) {
@@ -1510,7 +1609,8 @@ export class DesktopDirectProviderRuntime {
     history?: readonly DirectApiHistoryTurn[],
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
   ): Promise<AgentExecutionResult> {
-    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId);
+    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId, request.permissionRules, request.maxCostUsd);
+    toolRuntime.outputLimit = (capability as DirectApiCapability & ModelRoute).outputLimit;
     if (controller.signal.aborted) return cancelledEarly(request);
     // One outside-tool view per run: large tool sets are offered through tool_search instead of all at once.
     const externalPort = deferExternalTools(this.externalFor(projectRoot, request, isLocalProvider(capability.provider)));
@@ -1542,7 +1642,7 @@ export class DesktopDirectProviderRuntime {
     // after each block the history is compacted and the run carries on in a fresh request.
     const deepSeek = isDeepSeekCapability(capability);
     const segmentLimit = deepSeek ? DEEPSEEK_MAX_TOOL_ROUNDS : Number.POSITIVE_INFINITY;
-    const totalToolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? (isLocalProvider(capability.provider) ? LOCAL_PROVIDER_MAX_TOOL_ROUNDS : deepSeek ? DEEPSEEK_MAX_TOTAL_TOOL_ROUNDS : MAX_TOTAL_TOOL_ROUNDS);
+    const totalToolRoundLimit = leadToolRoundLimit(request, request.toolRoundLimit ?? this.options.maxToolRounds ?? (deepSeek ? DEEPSEEK_MAX_TOTAL_TOOL_ROUNDS : MAX_TOTAL_TOOL_ROUNDS));
     const providerRoundLimit = totalToolRoundLimit + PROVIDER_ROUND_HEADROOM;
     let segmentRounds = 0;
     let segmentStart = messages.length;
@@ -1572,7 +1672,7 @@ export class DesktopDirectProviderRuntime {
         }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
-          messages.push({ role: 'user', content: WRAP_UP_MESSAGE });
+          messages.push({ role: 'user', content: isLeadRun(request) ? LEAD_FINAL_ANSWER : WRAP_UP_MESSAGE });
           emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached a run limit; asking it to sum up what it has done.`));
         }
         const trimmedResults = trimChatToolResults(messages);
@@ -1598,7 +1698,7 @@ export class DesktopDirectProviderRuntime {
         );
         if (!response.body) throw new Error('The provider returned no streaming response body.');
 
-        for await (const streamEvent of readSseEvents(response.body)) {
+        for await (const streamEvent of readSseEvents(response.body, streamIdleTimeout(capability))) {
           if (streamEvent.data === '[DONE]') break;
           let value: Record<string, unknown>;
           try {
@@ -1648,6 +1748,10 @@ export class DesktopDirectProviderRuntime {
         const toolCalls = [...pendingToolCalls.values()]
           .sort((left, right) => left.index - right.index)
           .filter((call) => call.name);
+        if (forceFinalAnswer && isLeadRun(request) && toolCalls.length) {
+          errors.push('Lead ignored the request to finish and called tools after inspection ended. No further tools were run; choose another model or ask for one specific next action.');
+          break;
+        }
         if (toolCalls.length === 0) {
           // Cut off mid-thought: the model spent the whole output budget working and never reached a word or a tool
           // call. That is an unfinished turn, so it is resumed rather than ended — ending it is what made a long,
@@ -1656,24 +1760,24 @@ export class DesktopDirectProviderRuntime {
             continuations += 1;
             if (roundThinking && !roundText) reasoningOnly = true;
             messages.push({ role: 'assistant', content: roundText || '(reasoning only)' });
-            messages.push({ role: 'user', content: TRUNCATED_TURN_CONTINUATION });
+            messages.push({ role: 'user', content: isLeadRun(request) ? 'Finish the read-only Lead reply concisely. Do not execute the Builder task or retry blocked tools.' : TRUNCATED_TURN_CONTINUATION });
             continue;
           }
           if (truncated && roundThinking && !roundText) reasoningOnly = true;
-          if (resumeAfterSteer && !forceFinalAnswer) {
+          if (!isLeadRun(request) && resumeAfterSteer && !forceFinalAnswer) {
             resumeAfterSteer = false;
             messages.push({ role: 'assistant', content: roundText });
             messages.push({ role: 'user', content: 'Resume the original task from where you paused. Continue its unfinished steps before you finish this run.' });
             continue;
           }
-          const planned = await planContinuation(projectRoot, request.conversationId, roundText, nudges);
+          const planned = isLeadRun(request) ? null : await planContinuation(projectRoot, request.conversationId, roundText, nudges);
           if (!forceFinalAnswer && planned) {
             nudges += 1;
             messages.push({ role: 'assistant', content: roundText });
             messages.push({ role: 'user', content: planned });
             continue;
           }
-          if (!forceFinalAnswer && announcesUnfinishedWork(roundText)) {
+          if (!isLeadRun(request) && !forceFinalAnswer && announcesUnfinishedWork(roundText)) {
             // Out of nudges: ask rather than end the run. Continue buys another stretch of the same nudging.
             if (nudges >= MAX_UNFINISHED_NUDGES && (await askToContinue(approvals, TALK_ONLY_QUESTION)) === 'continue') {
               nudges = 0;
@@ -1736,13 +1840,19 @@ export class DesktopDirectProviderRuntime {
         }
         if (visualParts.length) messages.push({ role: 'user', content: visualParts });
         segmentRounds += 1;
-        if (!forceFinalAnswer && segmentRounds >= segmentLimit) {
+        const leadNeedsAnswer = isLeadRun(request) && (toolRuntime.guard.wrapUpRequested || toolRounds >= totalToolRoundLimit || segmentRounds >= segmentLimit || shouldCompactRun(messages, segmentStart, compactAt, lastContextTokens, fixedTokens()));
+        if (!forceFinalAnswer && leadNeedsAnswer) {
+          // Keep the actual evidence for the answer. A 200-character tool summary caused Lead to reread it all.
+          forceFinalAnswer = true;
+          messages.push({ role: 'user', content: LEAD_FINAL_ANSWER });
+          emit(noticeEvent(request, 'Lead inspection finished; preparing a next step from the evidence already read.'));
+        } else if (!forceFinalAnswer && segmentRounds >= segmentLimit) {
           if (toolRounds < totalToolRoundLimit) {
             // DeepSeek stops accepting tools past its per-request cap. Fold this block of tool activity into a
             // summary and carry on in a fresh request, so the task is finished rather than handed back half-done.
             const summary = compactChatToolHistory(messages.slice(segmentStart));
             messages.length = segmentStart;
-            messages.push({ role: 'user', content: continuationMessage(summary) });
+            messages.push({ role: 'user', content: continuationMessage(summary, request) });
             segmentStart = messages.length;
             segmentRounds = 0;
             emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached its per-request tool limit; continuing in a fresh request.`));
@@ -1754,7 +1864,7 @@ export class DesktopDirectProviderRuntime {
           // The history reached the size chosen for auto-compact: the same fold as above, triggered by size.
           const summary = compactChatToolHistory(messages.slice(segmentStart)) + await foldPlanNote(projectRoot, request.conversationId);
           messages.length = segmentStart;
-          messages.push({ role: 'user', content: continuationMessage(summary) });
+          messages.push({ role: 'user', content: continuationMessage(summary, request) });
           segmentStart = messages.length;
           segmentRounds = 0;
           emit(noticeEvent(request, `Compacted this run: its conversation reached the ${compactAt.toLocaleString()} tokens you set, so its earlier steps became a summary and it carried on.`));
@@ -1793,7 +1903,7 @@ export class DesktopDirectProviderRuntime {
         inputTokens,
         outputTokens,
         estimateProvenance: 'measured',
-        ...costFields(capability.provider, capability.model, inputTokens, outputTokens),
+        ...costFields(capability.provider, capability.model, inputTokens, outputTokens, undefined, hostOf(capability)),
       });
     }
     if (error) {
@@ -1839,7 +1949,8 @@ export class DesktopDirectProviderRuntime {
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
     maxTokens: number = OUTPUT_TOKEN_BUDGET,
   ): Promise<AgentExecutionResult> {
-    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId);
+    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId, request.permissionRules, request.maxCostUsd);
+    toolRuntime.outputLimit = (capability as DirectApiCapability & ModelRoute).outputLimit;
     if (controller.signal.aborted) return cancelledEarly(request);
     // One outside-tool view per run: large tool sets are offered through tool_search instead of all at once.
     const externalPort = deferExternalTools(this.externalFor(projectRoot, request, isLocalProvider(capability.provider)));
@@ -1872,7 +1983,7 @@ export class DesktopDirectProviderRuntime {
     let reasoningOnly = false;
     let forceFinalAnswer = false;
     let resumeAfterSteer = false;
-    const toolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? (isLocalProvider(capability.provider) ? LOCAL_PROVIDER_MAX_TOOL_ROUNDS : MAX_TOTAL_TOOL_ROUNDS);
+    const toolRoundLimit = leadToolRoundLimit(request, request.toolRoundLimit ?? this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS);
     // The size chosen for auto-compact (zero leaves the history alone), and where the part of this run that can be
     // folded into a summary begins.
     const loadedSettings = await this.settings.load().catch(() => undefined);
@@ -1895,7 +2006,7 @@ export class DesktopDirectProviderRuntime {
         }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
-          messages.push({ role: 'user', content: WRAP_UP_MESSAGE });
+          messages.push({ role: 'user', content: isLeadRun(request) ? LEAD_FINAL_ANSWER : WRAP_UP_MESSAGE });
           emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached a run limit; asking it to sum up what it has done.`));
         }
         const trimmedResults = trimAnthropicToolResults(messages);
@@ -1920,7 +2031,7 @@ export class DesktopDirectProviderRuntime {
         );
         if (!response.body) throw new Error('The provider returned no streaming response body.');
 
-        for await (const streamEvent of readSseEvents(response.body)) {
+        for await (const streamEvent of readSseEvents(response.body, streamIdleTimeout(capability))) {
           let value: Record<string, unknown>;
           try {
             value = asRecord(JSON.parse(streamEvent.data)) ?? {};
@@ -1991,6 +2102,10 @@ export class DesktopDirectProviderRuntime {
         }
 
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
+        if (forceFinalAnswer && isLeadRun(request) && toolCalls.length) {
+          errors.push('Lead ignored the request to finish and called tools after inspection ended. No further tools were run; choose another model or ask for one specific next action.');
+          break;
+        }
         if (toolCalls.length === 0) {
           // Cut off mid-thought. A reasoning model can spend the entire output budget working and stop before it
           // writes a word or calls a tool; that is an unfinished turn, so it is resumed rather than ended. Ending it
@@ -2002,24 +2117,24 @@ export class DesktopDirectProviderRuntime {
               ? [{ type: 'text', text: roundText }]
               : [{ type: 'text', text: '(reasoning only)' }];
             messages.push({ role: 'assistant', content: assistant });
-            messages.push({ role: 'user', content: TRUNCATED_TURN_CONTINUATION });
+            messages.push({ role: 'user', content: isLeadRun(request) ? 'Finish the read-only Lead reply concisely. Do not execute the Builder task or retry blocked tools.' : TRUNCATED_TURN_CONTINUATION });
             continue;
           }
           if (truncated && roundThinking && !roundText) reasoningOnly = true;
-          if (resumeAfterSteer && !forceFinalAnswer) {
+          if (!isLeadRun(request) && resumeAfterSteer && !forceFinalAnswer) {
             resumeAfterSteer = false;
             messages.push({ role: 'assistant', content: [{ type: 'text', text: roundText || '(reasoning only)' }] });
             messages.push({ role: 'user', content: [{ type: 'text', text: 'Resume the original task from where you paused. Continue its unfinished steps before you finish this run.' }] });
             continue;
           }
-          const planned = await planContinuation(projectRoot, request.conversationId, roundText, nudges);
+          const planned = isLeadRun(request) ? null : await planContinuation(projectRoot, request.conversationId, roundText, nudges);
           if (planned) {
             nudges += 1;
             messages.push({ role: 'assistant', content: [{ type: 'text', text: roundText }] });
             messages.push({ role: 'user', content: planned });
             continue;
           }
-          if (announcesUnfinishedWork(roundText)) {
+          if (!isLeadRun(request) && announcesUnfinishedWork(roundText)) {
             // Out of nudges: ask rather than end the run. Continue buys another stretch of the same nudging.
             if (nudges >= MAX_UNFINISHED_NUDGES && (await askToContinue(approvals, TALK_ONLY_QUESTION)) === 'continue') {
               nudges = 0;
@@ -2071,11 +2186,15 @@ export class DesktopDirectProviderRuntime {
           anthropicToolOutput,
         );
         messages.push({ role: 'user', content: toolResults as Array<Record<string, unknown>> });
-        if (!forceFinalAnswer && toolRounds < toolRoundLimit && shouldCompactAnthropicRun(messages, segmentStart, compactAt, lastContextTokens, fixedTokens())) {
+        if (!forceFinalAnswer && isLeadRun(request) && (toolRuntime.guard.wrapUpRequested || toolRounds >= toolRoundLimit || shouldCompactAnthropicRun(messages, segmentStart, compactAt, lastContextTokens, fixedTokens()))) {
+          forceFinalAnswer = true;
+          pushUserText(messages, LEAD_FINAL_ANSWER);
+          emit(noticeEvent(request, 'Lead inspection finished; preparing a next step from the evidence already read.'));
+        } else if (!forceFinalAnswer && toolRounds < toolRoundLimit && shouldCompactAnthropicRun(messages, segmentStart, compactAt, lastContextTokens, fixedTokens())) {
           // The history reached the size chosen for auto-compact: fold this block of tool activity into a summary.
           const summary = compactAnthropicToolHistory(messages.slice(segmentStart)) + await foldPlanNote(projectRoot, request.conversationId);
           messages.length = segmentStart;
-          pushUserText(messages, continuationMessage(summary));
+          pushUserText(messages, continuationMessage(summary, request));
           segmentStart = messages.length;
           emit(noticeEvent(request, `Compacted this run: its conversation reached the ${compactAt.toLocaleString()} tokens you set, so its earlier steps became a summary and it carried on.`));
         }
@@ -2120,7 +2239,8 @@ export class DesktopDirectProviderRuntime {
     history?: readonly DirectApiHistoryTurn[],
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
   ): Promise<AgentExecutionResult> {
-    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId);
+    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId, request.permissionRules, request.maxCostUsd);
+    toolRuntime.outputLimit = (capability as DirectApiCapability & ModelRoute).outputLimit;
     if (controller.signal.aborted) return cancelledEarly(request);
     // One outside-tool view per run: large tool sets are offered through tool_search instead of all at once.
     const externalPort = deferExternalTools(this.externalFor(projectRoot, request, isLocalProvider(capability.provider)));
@@ -2148,7 +2268,7 @@ export class DesktopDirectProviderRuntime {
     let nudges = 0;
     let forceFinalAnswer = false;
     let resumeAfterSteer = false;
-    const toolRoundLimit = request.toolRoundLimit ?? this.options.maxToolRounds ?? (isLocalProvider(capability.provider) ? LOCAL_PROVIDER_MAX_TOOL_ROUNDS : MAX_TOTAL_TOOL_ROUNDS);
+    const toolRoundLimit = leadToolRoundLimit(request, request.toolRoundLimit ?? this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS);
 
     try {
       for (let providerRound = 0; providerRound < toolRoundLimit + PROVIDER_ROUND_HEADROOM; providerRound += 1) {
@@ -2165,7 +2285,7 @@ export class DesktopDirectProviderRuntime {
         }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
-          contents.push({ role: 'user', parts: [{ text: WRAP_UP_MESSAGE }] });
+          contents.push({ role: 'user', parts: [{ text: isLeadRun(request) ? LEAD_FINAL_ANSWER : WRAP_UP_MESSAGE }] });
           emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached a run limit; asking it to sum up what it has done.`));
         }
         const trimmedResults = trimGeminiToolResults(contents);
@@ -2187,7 +2307,7 @@ export class DesktopDirectProviderRuntime {
         );
         if (!response.body) throw new Error('The provider returned no streaming response body.');
 
-        for await (const streamEvent of readSseEvents(response.body)) {
+        for await (const streamEvent of readSseEvents(response.body, streamIdleTimeout(capability))) {
           let value: Record<string, unknown>;
           try {
             value = asRecord(JSON.parse(streamEvent.data)) ?? {};
@@ -2228,21 +2348,25 @@ export class DesktopDirectProviderRuntime {
         }
 
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
+        if (forceFinalAnswer && isLeadRun(request) && toolCalls.length) {
+          errors.push('Lead ignored the request to finish and called tools after inspection ended. No further tools were run; choose another model or ask for one specific next action.');
+          break;
+        }
         if (toolCalls.length === 0) {
-          if (resumeAfterSteer && !forceFinalAnswer) {
+          if (!isLeadRun(request) && resumeAfterSteer && !forceFinalAnswer) {
             resumeAfterSteer = false;
             contents.push({ role: 'model', parts: [{ text: roundText || '(no text)' }] });
             contents.push({ role: 'user', parts: [{ text: 'Resume the original task from where you paused. Continue its unfinished steps before you finish this run.' }] });
             continue;
           }
-          const planned = await planContinuation(projectRoot, request.conversationId, roundText, nudges);
+          const planned = isLeadRun(request) ? null : await planContinuation(projectRoot, request.conversationId, roundText, nudges);
           if (planned) {
             nudges += 1;
             contents.push({ role: 'model', parts: [{ text: roundText }] });
             contents.push({ role: 'user', parts: [{ text: planned }] });
             continue;
           }
-          if (announcesUnfinishedWork(roundText)) {
+          if (!isLeadRun(request) && announcesUnfinishedWork(roundText)) {
             // Out of nudges: ask rather than end the run. Continue buys another stretch of the same nudging.
             if (nudges >= MAX_UNFINISHED_NUDGES && (await askToContinue(approvals, TALK_ONLY_QUESTION)) === 'continue') {
               nudges = 0;
@@ -2296,6 +2420,11 @@ export class DesktopDirectProviderRuntime {
           ), ...toolOutputImages(output).images.map(geminiImagePart)],
         );
         contents.push({ role: 'user', parts: toolResults.flat() as Array<Record<string, unknown>> });
+        if (isLeadRun(request) && !forceFinalAnswer && (toolRuntime.guard.wrapUpRequested || toolRounds >= toolRoundLimit)) {
+          forceFinalAnswer = true;
+          contents.push({ role: 'user', parts: [{ text: LEAD_FINAL_ANSWER }] });
+          emit(noticeEvent(request, 'Lead inspection finished; preparing a next step from the evidence already read.'));
+        }
       }
     } catch (error) {
       aborted = controller.signal.aborted;
@@ -2363,12 +2492,14 @@ export class DesktopDirectProviderRuntime {
             stream: true,
             stream_options: { include_usage: true },
             ...(includeTools
-              ? { tools: chatToolDefinitions([...builtinToolDefinitions, ...externalToolDefinitions]), tool_choice: 'auto' }
+              ? { tools: chatToolDefinitions(toolsForLead(request, [...builtinToolDefinitions, ...externalToolDefinitions])), tool_choice: 'auto' }
               : {}),
           }),
           signal,
-        });
+        }, capability, request, apiKey, emit);
       } catch (error) {
+        // The transport has already waited or resent as far as is safe; another send could queue a second copy.
+        if (error instanceof ModelHostError) throw error;
         if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
         if (attempt >= maxAttempts) throw error;
         const delayMs = retryDelayMs(baseDelayMs, attempt, undefined);
@@ -2430,7 +2561,7 @@ export class DesktopDirectProviderRuntime {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response: Response;
       try {
-        const tools = toolsEnabled ? anthropicToolDefinitions([...baseToolDefinitions, ...externalToolDefinitions]) : [];
+        const tools = toolsEnabled ? anthropicToolDefinitions(toolsForLead(request, [...baseToolDefinitions, ...externalToolDefinitions])) : [];
         response = await this.pacedFetch(anthropicMessagesUrl(capability.baseUrl), {
           method: 'POST',
           headers: {
@@ -2447,8 +2578,10 @@ export class DesktopDirectProviderRuntime {
             ...(tools.length > 0 ? { tool_choice: { type: 'auto' } } : {}),
           }),
           signal,
-        });
+        }, capability, request, apiKey, emit);
       } catch (error) {
+        // The transport has already waited or resent as far as is safe; another send could queue a second copy.
+        if (error instanceof ModelHostError) throw error;
         if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
         if (attempt >= maxAttempts) throw error;
         const delayMs = retryDelayMs(baseDelayMs, attempt, undefined);
@@ -2504,7 +2637,7 @@ export class DesktopDirectProviderRuntime {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response: Response;
       try {
-        const functionDeclarations = toolsEnabled ? geminiToolDefinitions([...builtinToolDefinitions, ...externalToolDefinitions]) : [];
+        const functionDeclarations = toolsEnabled ? geminiToolDefinitions(toolsForLead(request, [...builtinToolDefinitions, ...externalToolDefinitions])) : [];
         response = await this.pacedFetch(geminiGenerateUrl(capability.baseUrl, capability.model), {
           method: 'POST',
           headers: {
@@ -2521,8 +2654,10 @@ export class DesktopDirectProviderRuntime {
               : {}),
           }),
           signal,
-        });
+        }, capability, request, apiKey, emit);
       } catch (error) {
+        // The transport has already waited or resent as far as is safe; another send could queue a second copy.
+        if (error instanceof ModelHostError) throw error;
         if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
         if (attempt >= maxAttempts) throw error;
         const delayMs = retryDelayMs(baseDelayMs, attempt, undefined);
@@ -2586,16 +2721,17 @@ export class DesktopDirectProviderRuntime {
             input: outgoing,
             stream: true,
             ...(toolsEnabled ? { tools: [
-              ...builtinToolDefinitions,
-              ...externalToolDefinitions,
-              ...(supportsImageGenerationTool(capability.provider, capability.model)
+              ...toolsForLead(request, [...builtinToolDefinitions, ...externalToolDefinitions]),
+              ...(!isLeadRun(request) && supportsImageGenerationTool(capability.provider, capability.model)
                 ? [{ type: 'image_generation', model: 'gpt-image-2.5-flare', output_format: 'png' }] : []),
             ], tool_choice: 'auto' } : {}),
             ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
           }),
           signal,
-        });
+        }, capability, request, apiKey, emit);
       } catch (error) {
+        // The transport has already waited or resent as far as is safe; another send could queue a second copy.
+        if (error instanceof ModelHostError) throw error;
         if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
         if (attempt >= maxAttempts) throw error;
         const delayMs = retryDelayMs(baseDelayMs, attempt, undefined);
@@ -2754,8 +2890,8 @@ function finishProviderRun(input: {
       inputTokens,
       outputTokens,
       estimateProvenance: 'measured',
-      ...costFields(capability.provider, capability.model, inputTokens, outputTokens, cachedInputTokens),
-      ...cacheFields(capability.provider, capability.model, inputTokens, cachedInputTokens),
+      ...costFields(capability.provider, capability.model, inputTokens, outputTokens, cachedInputTokens, hostOf(capability)),
+      ...cacheFields(capability.provider, capability.model, inputTokens, cachedInputTokens, hostOf(capability)),
     });
   }
   if (error) {
@@ -3214,7 +3350,7 @@ async function executeToolCalls(
 ): Promise<unknown[]> {
   // Helper tasks are independent, so a round made only of them runs concurrently. Mixed rounds stay sequential:
   // a read or edit later in the same round may depend on what came before it.
-  if (calls.length > 1 && calls.every((call) => call.name === 'task')) {
+  if (!isLeadRun(request) && calls.length > 1 && calls.every((call) => call.name === 'task')) {
     return executeTaskBatch(request, toolRuntime, calls, signal, emit, taskRun, formatOutput);
   }
   const results: unknown[] = [];
@@ -3233,6 +3369,13 @@ async function executeToolCalls(
       continue;
     }
 
+    if (isLeadRun(request) && !leadToolAllowed(name)) {
+      const error = 'Lead is read-only. Stop trying to execute this task. Explain the limitation once and prepare a Builder handoff scoped to the user’s selected option; do not broaden it or retry.';
+      toolRuntime.guard.requestWrapUp();
+      emit(toolCallEvent(request, name, 'failed', argumentsValue, { error, blocked: true }, callId));
+      results.push(formatOutput(callId, { error }));
+      continue;
+    }
     emit(toolCallEvent(request, name, 'started', argumentsValue, undefined, callId));
 
     // Handled here rather than through the normal policy/execute path: `ask_user` needs the approval port to put
@@ -3427,7 +3570,15 @@ async function executeToolCalls(
       }
     }
     toolRuntime.guard.noteToolOutcome(execution.ok);
-    const repeat = toolRuntime.guard.recordToolCall(name, argumentsValue, execution.output);
+    if (isLeadRun(request)) {
+      const progress = leadToolProgress(toolRuntime).observe(name, argumentsValue, execution.output);
+      if (progress.notice) execution.output = { ...(asRecord(execution.output) ?? { result: execution.output }), kaiNotice: progress.notice };
+      if (progress.finish) {
+        toolRuntime.guard.requestWrapUp();
+        emit(noticeEvent(request, 'Lead was rereading unchanged evidence; preparing the answer instead of repeating inspection.'));
+      }
+    }
+    const repeat = isLeadRun(request) ? 'ok' : toolRuntime.guard.recordToolCall(name, argumentsValue, execution.output);
     if (repeat === 'stop') {
       // In an Architect / Implementer run, repeating the same tool result is a build turn going in circles. Hand that
       // turn back to the Architect instead of opening a Continue / Finish question while the Implementer stays active.
@@ -3485,51 +3636,27 @@ async function executeToolCalls(
           filePath: execution.changedFile.path,
           summary: execution.changedFile.summary,
           diff: execution.changedFile.diff,
+          applied: true,
         });
       }
     }
-    results.push(formatOutput(callId, execution.output));
+    // The person sees the whole result; the model gets what its window can hold.
+    results.push(formatOutput(callId, toolRuntime.outputLimit
+      ? await capToolOutput(toolRuntime.rootPath, callId, name, execution.output, toolRuntime.outputLimit)
+      : execution.output));
   }
   return results;
 }
 
-/** A provider that accepts the request but never answers would leave the run waiting forever. A large local model on a
- *  big prompt can take minutes before its first byte, so this is long (500 s) rather than a tight 90 s. */
-const RESPONSE_HEADERS_TIMEOUT_MS = 500_000;
+export { fetchWithHeaderTimeout };
+
 /** A provider that goes quiet in the middle of a reply, for longer than any real pause between chunks. */
 const STREAM_IDLE_TIMEOUT_MS = 500_000;
+/** A model on the person's own hardware can go quiet far longer: it may still be reading a very large prompt. */
+export const OWN_MODEL_STREAM_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
-export async function fetchWithHeaderTimeout(
-  url: string,
-  init: RequestInit & { signal: AbortSignal },
-  timeoutMs: number = RESPONSE_HEADERS_TIMEOUT_MS,
-): Promise<Response> {
-  // A dropped connection ("fetch failed": reset, DNS, an idle socket the provider closed) rejects before any headers
-  // arrive, so the model never saw the request and sending it again is safe. One such drop used to end a whole run.
-  for (let attempt = 0; ; attempt += 1) {
-    // Only the wait for the response headers is timed. The body streams for as long as the model needs, and the
-    // combined signal stays attached to it, so the caller's own abort still stops the stream.
-    const slow = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      slow.abort();
-    }, timeoutMs);
-    try {
-      return await fetch(url, { ...init, signal: AbortSignal.any([init.signal, slow.signal]) });
-    } catch (error) {
-      if (timedOut && !init.signal.aborted) throw new Error(`The provider did not respond within ${Math.round(timeoutMs / 1000)} seconds.`);
-      const dropped = error instanceof TypeError && /fetch failed/i.test(error.message);
-      if (!dropped || init.signal.aborted || attempt >= 2) throw error;
-    } finally {
-      clearTimeout(timer);
-    }
-    await new Promise<void>((resolve) => {
-      const wait = setTimeout(resolve, 1_500 * (attempt + 1));
-      init.signal.addEventListener('abort', () => { clearTimeout(wait); resolve(); }, { once: true });
-    });
-    if (init.signal.aborted) throw init.signal.reason ?? new Error('Cancelled.');
-  }
+export function streamIdleTimeout(capability: { model?: string; host?: ModelHost }): number {
+  return capability.host && capability.host !== 'cloud' ? OWN_MODEL_STREAM_IDLE_TIMEOUT_MS : STREAM_IDLE_TIMEOUT_MS;
 }
 
 function readWithIdleTimeout(reader: ReadableStreamDefaultReader<Uint8Array>, timeoutMs: number): Promise<ReadableStreamReadResult<Uint8Array>> {

@@ -173,6 +173,10 @@ describe('desktop contracts', () => {
       credentialId: 'provider.openrouter',
     })).toMatchObject({ provider: 'openrouter' });
     expect(parseIpcInput('settings:update', { theme: 'light' })).toEqual({ theme: 'light' });
+    expect(parseIpcInput('settings:update', { gatewayOwnHardware: true })).toEqual({ gatewayOwnHardware: true });
+    expect(parseIpcInput('settings:update', { gatewayAwayUrl: 'https://relay.example/v1', gatewayCredentialId: 'provider.gateway' })).toEqual({ gatewayAwayUrl: 'https://relay.example/v1', gatewayCredentialId: 'provider.gateway' });
+    expect(parseIpcInput('settings:update', { gatewayHomeUrl: 'http://192.168.68.52:8000/v1' })).toEqual({ gatewayHomeUrl: 'http://192.168.68.52:8000/v1' });
+    expect(() => parseIpcInput('settings:update', { gatewayHomeUrl: 'http://192.168.68.52:1234/v1' })).toThrow(/port 1234/i);
     expect(parseIpcInput('settings:update', { editor: { autoSave: false, autoSaveDelayMs: 1_500 } })).toEqual({
       editor: { autoSave: false, autoSaveDelayMs: 1_500 },
     });

@@ -117,5 +117,12 @@ export function modelContextFor(
   model: string | null | undefined,
 ): number | undefined {
   if (!model) return undefined;
-  return settings.modelContextOverride?.[model] ?? settings.localModelContext?.[model];
+  return settings.modelContextOverride?.[model] ?? settings.localModelContext?.[model] ?? gatewayContextFor(model);
+}
+
+/** Gateway aliases omit context lengths from /v1/models, so use the gateway's configured loaded windows. */
+export function gatewayContextFor(model: string): number | undefined {
+  if (/^gateway\/(?:general|vision|research)$/i.test(model)) return 65_536;
+  if (/^gateway\/coding$/i.test(model)) return 65_536;
+  return undefined;
 }

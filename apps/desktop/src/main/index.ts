@@ -644,6 +644,10 @@ async function startApplication(): Promise<void> {
       return project.path;
     },
     teachingLibrary,
+    120_000,
+    (status) => logger.info('internal', status.state === 'queued'
+      ? `Learning helper is waiting for the Mac: ${status.position === undefined ? 'queued' : `queue position ${status.position}`}.`
+      : status.detail ?? `Learning helper gateway status: ${status.state}.`),
   );
   const preview = new PreviewRuntime(pathToFileURL(path.join(__dirname, '../preload/preview.cjs')).toString());
   // The studio writes `.kai/spec` inside the project; the interview's own working state stays app-owned.

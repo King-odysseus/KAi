@@ -71,6 +71,7 @@ export const diffProposalEventSchema = eventBaseSchema.extend({
   filePath: z.string().min(1),
   summary: z.string(),
   diff: z.string().optional(),
+    applied: z.boolean().optional(),
 });
 
 export const fileEditAppliedEventSchema = eventBaseSchema.extend({

@@ -1,28 +1,31 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowLeft, Cloud, Cpu, History, LoaderCircle, Plus, SendHorizontal, ShieldCheck, Sparkles, X } from 'lucide-react';
+import { LeadModelControls, useLeadModelSelection } from './LeadModelControls';
+import { LeadReviewSettings } from './LeadReviewSettings';
+import { LeadAccessControl, LeadEditCard, leadAccessLabel } from './LeadEditControls';
+import { stripLeadEdit, hasLeadEdit } from './lead-edit-prompt';
+import { leadRecoveryPrompt } from './lead-recovery';
+import { LeadTaskCard } from './LeadTaskCard';
+import { LeadHandoffControl } from './LeadHandoffControl';
+import { leadHandoffMode, runnableLeadTask, type LeadHandoffMode } from './lead-handoff';
+import { LeadRunLinks } from './LeadRunLinks';
+import type { LeadHandoff } from './lead-delivery';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { AlertTriangle, ArrowLeft, History, LoaderCircle, Plus, ShieldCheck, X } from 'lucide-react';
 import { Textarea } from 'flowbite-react';
 import { describeRole } from './guided-build-engine';
-import { promptDialog } from './AppDialog';
 import { ContextPanel } from './Workspace';
 import { BuildProgressPanel } from './BuildProgressPanel';
 import { TabBar } from './ui/TabBar';
 import { UiButton } from './UiButton';
 import { Markdown } from './Markdown';
 import { Composer, ComposerInput, ComposerSend, ComposerStop, ComposerToolbar } from './ui/Composer';
-import { OptionMenu, type OptionMenuOption } from './ui/OptionMenu';
 import { parseLeadIdeaProposal, type LeadIdeaProposal } from './lead-idea-proposal';
-import type { ConversationRecord, RoleTarget } from '@kai/contracts';
+import type { ConversationRecord, RoleTarget, LeadDeliverySettings, LeadAccess } from '@kai/contracts';
 import {
   leadExplanationFromReply,
   leadModelTier,
   leadQuestionText,
-  leadTargetUnavailableReason,
   leadTaskFromReply,
   sameLeadTarget,
-  selectLeadDefault,
-  stableLeadTargetIdentity,
-  targetFromLeadStorage,
-  withDefaultLeadModel,
   type LeadModelInventory,
 } from './lead-model-selection';
 
@@ -42,6 +45,9 @@ export interface LeadApprovalItem {
 type ContextProps = Parameters<typeof ContextPanel>[0];
 type RightPaneProps = ContextProps & {
   selectLeadNonce?: number;
+  builderConversations?: ConversationRecord[];
+  onOpenBuilder?: (id: string) => void;
+  onReviewBuilder?: (id: string, handoff: LeadHandoff, target: RoleTarget) => Promise<void>;
   leadConversation: ConversationRecord | null;
   leadConversations: ConversationRecord[];
   leadBuilderEnabled: boolean;
@@ -59,6 +65,11 @@ type RightPaneProps = ContextProps & {
   onClearLeadError: () => void;
   onRespondLeadApproval: (requestId: string, approved: boolean, answer?: string) => void;
   onSendToBuilder: (task: string) => void;
+  onChangeLeadHandoffMode?: (mode: LeadHandoffMode) => Promise<void>;
+  onChangeLeadAccess?: (mode: LeadAccess) => Promise<void>;
+  onDecideLeadEdit?: (id: string, action: 'approve' | 'reject' | 'refresh') => Promise<void>;
+  onStartLeadBuilder?: (turnId: string) => Promise<void>;
+  onSaveLeadReviewSettings?: (settings: LeadDeliverySettings) => Promise<void>;
   onReviewLeadIdea: (proposal: LeadIdeaProposal, choice: 'approve' | 'park') => void;
 };
 
@@ -89,10 +100,16 @@ function useRightPaneTab(): [Tab, (next: Tab) => void] {
 export function RightPane(props: RightPaneProps): ReactNode {
   const [tab, setTab] = useRightPaneTab();
   const [building, setBuilding] = useState(false);
-  useEffect(() => { if (props.selectLeadNonce) setTab('lead'); }, [props.selectLeadNonce, setTab]);
+  const paneRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!props.selectLeadNonce) return;
+    setTab('lead');
+    const frame = requestAnimationFrame(() => paneRef.current?.querySelector('.lead-run-links')?.scrollIntoView({ block: 'end' }));
+    return () => cancelAnimationFrame(frame);
+  }, [props.selectLeadNonce, setTab]);
 
   return (
-    <aside className="context-panel">
+    <aside className="context-panel" ref={paneRef}>
       <TabBar
         label="Right pane"
         value={tab}
@@ -117,6 +134,9 @@ export function RightPane(props: RightPaneProps): ReactNode {
         </div>
         <div className="context-pane lead-context-pane" hidden={tab !== 'lead'}>
           <LeadConversationPanel
+            builderConversations={props.builderConversations}
+            onOpenBuilder={props.onOpenBuilder}
+            onReviewBuilder={props.onReviewBuilder}
             projectName={props.activeProject?.name ?? 'No project'}
             projectId={props.activeProject?.id ?? null}
             conversation={props.leadConversation}
@@ -136,6 +156,11 @@ export function RightPane(props: RightPaneProps): ReactNode {
             onClearError={props.onClearLeadError}
             onRespondApproval={props.onRespondLeadApproval}
             onSendToBuilder={props.onSendToBuilder}
+            onChangeHandoffMode={props.onChangeLeadHandoffMode}
+            onChangeAccess={props.onChangeLeadAccess}
+            onDecideEdit={props.onDecideLeadEdit}
+            onStartBuilder={props.onStartLeadBuilder}
+            onSaveReviewSettings={props.onSaveLeadReviewSettings}
             onReviewIdea={props.onReviewLeadIdea}
           />
         </div>
@@ -144,43 +169,10 @@ export function RightPane(props: RightPaneProps): ReactNode {
   );
 }
 
-interface LeadSelection {
-  execution: 'api' | 'cli' | '';
-  providerOrAgent: string;
-  model: string;
-  target: RoleTarget | null;
-}
-
-function selectionForTarget(target: RoleTarget | null): LeadSelection {
-  if (!target) return { execution: '', providerOrAgent: '', model: '', target: null };
-  if (target.execution === 'cli') return {
-    execution: 'cli', providerOrAgent: target.agent ?? '', model: target.model ?? '', target,
-  };
-  const credential = target.api?.credentialId ?? '';
-  return {
-    execution: 'api',
-    providerOrAgent: `${target.api?.provider ?? ''}:${credential}`,
-    model: target.api?.model ?? '',
-    target,
-  };
-}
-
-function readSelection(projectId: string, savedCoach: RoleTarget | null, composerTarget: RoleTarget | null): LeadSelection {
-  try {
-    const raw = window.localStorage.getItem(`kai.lead.selection.${projectId}`);
-    if (raw) {
-      const stored = JSON.parse(raw) as { identity?: unknown; target?: unknown; execution?: unknown };
-      const target = targetFromLeadStorage(stored.target ? JSON.stringify(stored.target) : null);
-      if (target && stored.identity === stableLeadTargetIdentity(target)) return selectionForTarget(target);
-      if ((stored.execution === 'api' || stored.execution === 'cli') && !target) {
-        return { execution: stored.execution, providerOrAgent: '', model: '', target: null };
-      }
-    }
-  } catch { /* Fall back to the saved Coach, then the visible composer model. */ }
-  return selectionForTarget(selectLeadDefault(null, savedCoach ?? composerTarget));
-}
-
-export function LeadConversationPanel({ projectName, projectId, conversation, conversations = [], builderEnabled = true, onSelectConversation, onNewConversation, streamingText, running, error, approvals, inventory, savedCoach, composerTarget = null, onAsk, onStop, onClearError, onRespondApproval, onSendToBuilder, onReviewIdea }: {
+export function LeadConversationPanel({ projectName, projectId, conversation, conversations = [], builderEnabled = true, onSelectConversation, onNewConversation, streamingText, running, error, approvals, inventory, savedCoach, composerTarget = null, builderConversations = [], onOpenBuilder, onReviewBuilder, onAsk, onStop, onClearError, onRespondApproval, onSendToBuilder, onChangeHandoffMode, onChangeAccess, onDecideEdit, onStartBuilder, onSaveReviewSettings, onReviewIdea }: {
+  builderConversations?: ConversationRecord[];
+  onOpenBuilder?: (id: string) => void;
+  onReviewBuilder?: (id: string, handoff: LeadHandoff, target: RoleTarget) => Promise<void>;
   projectName: string;
   projectId: string | null;
   conversation: ConversationRecord | null;
@@ -200,10 +192,16 @@ export function LeadConversationPanel({ projectName, projectId, conversation, co
   onClearError: () => void;
   onRespondApproval: (requestId: string, approved: boolean, answer?: string) => void;
   onSendToBuilder: (task: string) => void;
+  onChangeHandoffMode?: (mode: LeadHandoffMode) => Promise<void>;
+  onChangeAccess?: (mode: LeadAccess) => Promise<void>;
+  onDecideEdit?: (id: string, action: 'approve' | 'reject' | 'refresh') => Promise<void>;
+  onStartBuilder?: (turnId: string) => Promise<void>;
+  onSaveReviewSettings?: (settings: LeadDeliverySettings) => Promise<void>;
   onReviewIdea: (proposal: LeadIdeaProposal, choice: 'approve' | 'park') => void;
 }): ReactNode {
   const [message, setMessage] = useState('');
-  const [selection, setSelection] = useState<LeadSelection>({ execution: '', providerOrAgent: '', model: '', target: null });
+  const picker = useLeadModelSelection({ projectId, inventory, savedCoach, composerTarget });
+  const { selection, unavailableReason, modelTierLabel } = picker;
   const [answerDrafts, setAnswerDrafts] = useState<Record<string, string>>({});
   const [historyOpen, setHistoryOpen] = useState(false);
 
@@ -216,130 +214,14 @@ export function LeadConversationPanel({ projectName, projectId, conversation, co
   }, [conversation?.id]);
 
 
-  useEffect(() => {
-    if (!projectId) { setSelection({ execution: '', providerOrAgent: '', model: '', target: null }); return; }
-    setSelection(readSelection(projectId, savedCoach, composerTarget));
-  }, [projectId, savedCoach ? stableLeadTargetIdentity(savedCoach) : '', composerTarget ? stableLeadTargetIdentity(composerTarget) : '']);
-
-  useEffect(() => {
-    if (!projectId) return;
-    const refresh = (): void => setSelection(readSelection(projectId, savedCoach, composerTarget));
-    window.addEventListener('kai:lead-selection-change', refresh);
-    window.addEventListener('storage', refresh);
-    return () => {
-      window.removeEventListener('kai:lead-selection-change', refresh);
-      window.removeEventListener('storage', refresh);
-    };
-  }, [projectId, savedCoach ? stableLeadTargetIdentity(savedCoach) : '', composerTarget ? stableLeadTargetIdentity(composerTarget) : '']);
-
-  const saveSelection = (next: LeadSelection): void => {
-    setSelection(next);
-    if (!projectId) return;
-    try {
-      window.localStorage.setItem(`kai.lead.selection.${projectId}`, JSON.stringify({
-        identity: next.target ? stableLeadTargetIdentity(next.target) : null,
-        target: next.target,
-        execution: next.execution,
-      }));
-      window.dispatchEvent(new Event('kai:lead-selection-change'));
-    } catch { /* Keep the choice in memory if storage is locked down. */ }
-  };
-
-  const apiProviders = useMemo(() => {
-    const providers = [...inventory.apiProviders];
-    const selectedApi = selection.target?.execution === 'api' ? selection.target.api : undefined;
-    if (selectedApi && !providers.some((item) => item.provider === selectedApi.provider
-      && (!selectedApi.credentialId || item.credentialId === selectedApi.credentialId))) {
-      providers.push({
-        provider: selectedApi.provider,
-        credentialId: selectedApi.credentialId ?? '',
-        label: selectedApi.provider,
-        tier: leadModelTier({ execution: 'api', api: selectedApi }) === 'Local' ? 'Local' : 'Paid API',
-        available: false,
-        unavailableReason: 'This saved provider is no longer configured. Reconfigure it in Settings.',
-        models: selectedApi.model ? [selectedApi.model] : [],
-        defaultModel: selectedApi.model ?? '',
-        ...(selectedApi.baseUrl ? { baseUrl: selectedApi.baseUrl } : {}),
-      });
-    }
-    return providers;
-  }, [inventory.apiProviders, selection.target]);
-  const cliAgents = useMemo(() => {
-    const agents = [...inventory.cliAgents];
-    if (selection.target?.execution === 'cli' && !agents.some((item) => item.agent === selection.target?.agent)) {
-      agents.push({
-        agent: selection.target.agent!, label: selection.target.agent!, tier: 'Subscription', available: false,
-        unavailableReason: 'This saved agent is no longer installed or signed in.',
-        models: selection.target.model ? [selection.target.model] : [],
-      });
-    }
-    return agents;
-  }, [inventory.cliAgents, selection.target]);
-  const provider = selection.execution === 'api'
-    ? apiProviders.find((item) => `${item.provider}:${item.credentialId}` === selection.providerOrAgent) : undefined;
-  const agent = selection.execution === 'cli'
-    ? cliAgents.find((item) => item.agent === selection.providerOrAgent) : undefined;
-  const modelOptions = selection.execution === 'api' ? provider?.models ?? [] : agent?.models ?? [];
-  const modelInventoryKey = JSON.stringify([
-    inventory.apiProviders.map((item) => [item.provider, item.credentialId, item.defaultModel, item.models]),
-    inventory.cliAgents.map((item) => [item.agent, item.models]),
-  ]);
-  useEffect(() => {
-    if (!projectId || !selection.target) return;
-    const resolved = withDefaultLeadModel(selection.target, inventory);
-    if (!resolved || stableLeadTargetIdentity(resolved) === stableLeadTargetIdentity(selection.target)) return;
-    const next = selectionForTarget(resolved);
-    setSelection(next);
-    try {
-      window.localStorage.setItem(`kai.lead.selection.${projectId}`, JSON.stringify({ identity: stableLeadTargetIdentity(resolved), target: resolved, execution: resolved.execution }));
-    } catch { /* The visible model remains selected in memory. */ }
-  }, [projectId, selection.target ? stableLeadTargetIdentity(selection.target) : '', modelInventoryKey]);
-  const unavailableReason = selection.target ? leadTargetUnavailableReason(selection.target, inventory)
-    : selection.execution === 'api' ? provider?.unavailableReason ?? null
-      : selection.execution === 'cli' ? agent?.unavailableReason ?? null : null;
   const lastAssistant = [...(conversation?.turns ?? [])].reverse().find((turn) => turn.role === 'assistant');
   const questionText = lastAssistant ? leadQuestionText(lastAssistant.text, lastAssistant.awaitingAnswer === true) : null;
-
-  const changeExecution = (execution: 'api' | 'cli' | ''): void => {
-    saveSelection({ execution, providerOrAgent: '', model: '', target: null });
-  };
-  const runsOnOptions: OptionMenuOption<LeadSelection['execution']>[] = [
-    { value: '', label: 'Choose API or CLI', disabled: true },
-    { value: 'api', label: 'API', description: 'Paid API or local endpoint' },
-    { value: 'cli', label: 'CLI', description: 'Subscription agent' },
-  ];
-  const changeProvider = (value: string): void => {
-    const choice = apiProviders.find((item) => `${item.provider}:${item.credentialId}` === value);
-    if (!choice) return;
-    const target: RoleTarget = { execution: 'api', api: {
-      provider: choice.provider,
-      ...(choice.credentialId ? { credentialId: choice.credentialId } : {}),
-      ...(choice.baseUrl ? { baseUrl: choice.baseUrl } : {}),
-      ...(choice.defaultModel ? { model: choice.defaultModel } : {}),
-    } };
-    saveSelection({ execution: 'api', providerOrAgent: value, model: choice.defaultModel, target });
-  };
-  const changeAgent = (agentId: string): void => {
-    const choice = cliAgents.find((item) => item.agent === agentId);
-    if (!choice) return;
-    const target: RoleTarget = { execution: 'cli', agent: choice.agent };
-    saveSelection({ execution: 'cli', providerOrAgent: agentId, model: '', target });
-  };
-  const changeModel = (model: string): void => {
-    if (selection.execution === 'api' && provider) {
-      const target: RoleTarget = { execution: 'api', api: {
-        provider: provider.provider,
-        credentialId: provider.credentialId,
-        ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
-        ...(model ? { model } : {}),
-      } };
-      saveSelection({ ...selection, model, target });
-    } else if (selection.execution === 'cli' && agent) {
-      const selectedModel = model === '__agent_default__' ? '' : model;
-      const target: RoleTarget = { execution: 'cli', agent: agent.agent, ...(selectedModel ? { model: selectedModel } : {}) };
-      saveSelection({ ...selection, model: selectedModel, target });
-    }
-  };
+  const latestQuestion = [...(conversation?.turns ?? [])].reverse().find((turn) => turn.role === 'user');
+  const recordedReads = [...new Set((conversation?.events ?? []).flatMap((event) => {
+    if (event.type !== 'tool.call' || event.name !== 'read_file' || event.status !== 'completed' || (latestQuestion && event.timestamp < latestQuestion.createdAt)) return [];
+    const path = event.input && typeof event.input === 'object' ? (event.input as { path?: unknown }).path : null;
+    return typeof path === 'string' ? [path] : [];
+  }))];
 
   const send = (): void => {
     const question = message;
@@ -355,7 +237,7 @@ export function LeadConversationPanel({ projectName, projectId, conversation, co
   };
 
   const selectedLabel = selection.target
-    ? `${leadModelTier(selection.target)} · ${describeRole(selection.target).label}`
+    ? `${leadModelTier(selection.target, inventory)} · ${describeRole(selection.target, {}, inventory).label}`
     : 'choose a model';
   const savedCoachChoice = selection.target && savedCoach && sameLeadTarget(selection.target, savedCoach);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -370,30 +252,6 @@ export function LeadConversationPanel({ projectName, projectId, conversation, co
     if (textarea.scrollHeight <= maxHeight) textarea.scrollTop = 0;
   }, [message]);
 
-  const executionValue = selection.execution || '';
-  const providerOptions: OptionMenuOption<string>[] = selection.execution === 'api'
-    ? apiProviders.map((item) => ({
-      value: `${item.provider}:${item.credentialId}`,
-      label: item.label,
-      description: `${item.tier}${item.available ? '' : ` · unavailable: ${item.unavailableReason ?? 'not configured'}`}`,
-      disabled: !item.available,
-    }))
-    : cliAgents.map((item) => ({
-      value: item.agent,
-      label: item.label,
-      description: `Subscription${item.available ? '' : ` · unavailable: ${item.unavailableReason ?? 'not installed'}`}`,
-      disabled: !item.available,
-    }));
-  if (selection.execution) providerOptions.unshift({ value: '', label: selection.execution === 'api' ? 'Choose provider' : 'Choose agent', disabled: true });
-  const modelMenuOptions: OptionMenuOption<string>[] = [
-    { value: '', label: selection.execution ? 'Choose a model' : 'Choose where it runs', disabled: true },
-    ...(selection.execution === 'cli' && agent ? [{ value: '__agent_default__', label: 'Agent default', description: `Use the default model configured for ${agent.label}` }] : []),
-    ...(selection.model && !modelOptions.includes(selection.model) ? [{ value: selection.model, label: selection.model }] : []),
-    ...modelOptions.map((model) => ({ value: model, label: model })),
-    { value: '__custom__', label: 'Custom model…' },
-  ];
-  const modelTierLabel = selection.target && selection.model ? leadModelTier(selection.target) : null;
-
   if (historyOpen) return <section className="lead-panel" aria-label="Lead chat history page">
     <header className="lead-head lead-history-head">
       <UiButton type="button" className="icon-button compact" aria-label="Back to Lead chat" onClick={() => setHistoryOpen(false)}><ArrowLeft size={15} /></UiButton>
@@ -403,7 +261,7 @@ export function LeadConversationPanel({ projectName, projectId, conversation, co
     <div className="lead-history-list">
       {conversations.length === 0 ? <p className="lead-empty">No saved Lead chats yet.</p> : conversations.map((item, index) => <UiButton key={item.id} type="button" className="lead-history-item" aria-current={item.id === conversation?.id ? 'true' : undefined} onClick={() => { onSelectConversation?.(item.id); setHistoryOpen(false); }}>
         <strong>{item.title && item.title !== 'Lead' ? item.title : `Lead chat ${conversations.length - index}`}</strong>
-        <span>{new Date(item.updatedAt).toLocaleString()}{item.id === conversation?.id ? ' · Current' : ''}</span>
+        <span>{new Date(item.updatedAt).toLocaleString()}{item.id === conversation?.id ? ' · Current' : ''}</span><span>{[...item.turns].reverse().find((turn) => turn.role === 'user')?.text.split('\n')[0]?.slice(0, 140)}</span>
       </UiButton>)}
     </div>
   </section>;
@@ -411,14 +269,21 @@ export function LeadConversationPanel({ projectName, projectId, conversation, co
   return (
     <section className="lead-panel" aria-label="Lead chat">
       <header className="lead-head">
-        <div className="lead-title-line"><strong>Lead · {projectName}</strong><span className="lead-readonly-label">Read-only</span>{modelTierLabel && <span className="lead-tier-label" title={selectedLabel}>{modelTierLabel}{savedCoachChoice ? ' · Coach' : ''}</span>}
+        <div className="lead-title-line"><strong>Lead · Discuss and plan · {projectName}</strong><span className="lead-readonly-label">{leadAccessLabel(conversation?.leadAccess ?? 'read-only')}</span>{modelTierLabel && <span className="lead-tier-label" title={selectedLabel}>{modelTierLabel}{savedCoachChoice ? ' · Coach' : ''}</span>}
           <div className="lead-chat-actions">
             <UiButton type="button" className="icon-button compact" aria-label="Lead chat history" title="Open Lead chat history" disabled={!projectId} onClick={() => setHistoryOpen(true)}><History size={15} /></UiButton>
             <UiButton type="button" className="icon-button compact" aria-label="New Lead chat" title="New Lead chat" disabled={!projectId} onClick={onNewConversation}><Plus size={15} /></UiButton>
           </div>
         </div>
       </header>
+      <div className="lead-handoff-controls" role="group" aria-label="Lead controls">
+        <LeadHandoffControl key={conversation?.id ?? 'new'} mode={leadHandoffMode(conversation)} disabled={!conversation || !projectId} onChange={onChangeHandoffMode} />
+        <LeadAccessControl key={`access-${conversation?.id ?? 'new'}`} access={conversation?.leadAccess ?? 'read-only'} disabled={!conversation || !projectId || running} onChange={onChangeAccess} />
+      </div>
       <div className="lead-transcript" aria-live="polite">
+        {conversation && <LeadReviewSettings key={conversation.id} conversation={conversation} inventory={inventory} disabled={running} onSave={onSaveReviewSettings} />}
+        {conversation?.leadContext && <details className="lead-context-used"><summary>Latest request context supplied</summary><small>{new Date(conversation.leadContext.suppliedAt).toLocaleString()}. Additional tool reads may appear in the reply.</small><strong>Included context</strong><ul>{conversation.leadContext.included.map((path) => <li key={path}>{path}</li>)}</ul>{conversation.leadContext.omitted.length > 0 && <><strong>Omitted sections</strong><ul>{conversation.leadContext.omitted.map((path) => <li key={path}>{path}</li>)}</ul></>}{conversation.leadContext.unavailable.length > 0 && <><strong>Unavailable files</strong><ul>{conversation.leadContext.unavailable.map((path) => <li key={path}>{path}</li>)}</ul></>}</details>}
+        {recordedReads.length > 0 && <details className="lead-context-used"><summary>Recorded file reads ({recordedReads.length})</summary><ul>{recordedReads.map((path) => <li key={path}>{path}</li>)}</ul></details>}
         {error && <div className="lead-error" role="alert"><AlertTriangle size={15} /><span>{error}</span><UiButton type="button" className="icon-button compact" aria-label="Dismiss Lead error" onClick={onClearError}><X size={13} /></UiButton></div>}
         {questionText && <div className="lead-question" role="status"><strong>Lead has a question for you</strong><p>{questionText}</p><small>Reply below to continue this conversation.</small></div>}
         {approvals.map((approval) => (
@@ -435,14 +300,16 @@ export function LeadConversationPanel({ projectName, projectId, conversation, co
         {!conversation?.turns.length && !running && <p className="lead-empty">Ask about this project's code, why it works this way, or a small change you are considering.</p>}
         {(conversation?.turns ?? []).map((turn) => (
           <article className={`lead-turn ${turn.role}`} key={turn.id}>
-            <span className="lead-turn-label">{turn.role === 'assistant' ? 'Lead' : 'You'}</span>
+            <span className="lead-turn-label">{turn.role === 'assistant' ? conversation?.leadReviewTurnIds?.includes(turn.id) ? 'Reviewer' : 'Lead' : conversation?.leadGeneratedTurns?.some((item) => item.id === turn.id) ? 'KAI' : 'You'}</span>
             {turn.role === 'assistant' ? parseLeadIdeaProposal(turn.text)
               ? <LeadIdeaProposalCard proposal={parseLeadIdeaProposal(turn.text)!} onReview={onReviewIdea} onChange={(message) => setMessage(message)} />
-              : <Markdown text={leadExplanationFromReply(turn.text)} /> : <p>{turn.text}</p>}
-            {turn.role === 'assistant' && leadTaskFromReply(turn.text) && <div className="lead-builder-task"><strong>Builder task</strong><p>{leadTaskFromReply(turn.text)}</p><UiButton type="button" className="secondary-button lead-send-builder" disabled={!builderEnabled} title={builderEnabled ? 'Put this task in the Builder composer' : 'Enable Lead & Builder in the main composer options first'} onClick={() => onSendToBuilder(leadTaskFromReply(turn.text)!)}><SendHorizontal size={13} /><span>{builderEnabled ? 'Send task to Builder' : 'Builder is off'}</span></UiButton></div>}
+              : <Markdown text={stripLeadEdit(leadExplanationFromReply(turn.text).replace(/LEAD_RESULT_REVIEW\s*\n[\s\S]*?\nEND_LEAD_RESULT_REVIEW/g, ''))} /> : conversation?.leadGeneratedTurns?.some((item) => item.id === turn.id) ? <details><summary>{conversation.leadGeneratedTurns.find((item) => item.id === turn.id)!.label}</summary><Markdown text={turn.text} /></details> : <p>{turn.text}</p>}
+            {conversation?.leadEditProposals?.filter((proposal) => proposal.turnId === turn.id).map((proposal) => <LeadEditCard key={proposal.id} proposal={proposal} disabled={running || (conversation.leadAccess ?? 'read-only') === 'read-only'} onDecide={onDecideEdit} />)}
+            {turn.role === 'assistant' && !hasLeadEdit(turn.text) && !parseLeadIdeaProposal(turn.text) && leadTaskFromReply(turn.text) && <LeadTaskCard task={leadTaskFromReply(turn.text)!} builderEnabled={builderEnabled} onSend={onSendToBuilder} onChange={setMessage} mode={conversation?.leadRecoveryTurnIds?.includes(turn.id) ? leadHandoffMode(conversation) === 'discuss' ? 'discuss' : 'ask' : leadHandoffMode(conversation)} canStart={!running && Boolean(runnableLeadTask(conversation!, turn.id))} sent={conversation?.leadDispatchedTurnIds?.includes(turn.id)} onStart={onStartBuilder ? () => onStartBuilder(turn.id) : undefined} />}
           </article>
         ))}
-        {streamingText && <article className="lead-turn assistant streaming"><span className="lead-turn-label">Lead · {selectedLabel}</span><Markdown text={streamingText} /></article>}
+        {streamingText && <article className="lead-turn assistant streaming"><span className="lead-turn-label">{conversation?.leadReplyRole?.role === 'reviewer' ? 'Reviewer' : 'Lead'} · {conversation?.leadReplyRole ? describeRole(conversation.leadReplyRole.target, {}, inventory).label : selectedLabel}</span><Markdown text={streamingText} /></article>}
+        {conversation && <LeadRunLinks leadId={conversation.id} conversations={builderConversations} target={selection.target} reviewerTarget={conversation.leadDeliverySettings?.reviewer ?? null} inventory={inventory} running={running} onOpen={onOpenBuilder} onReview={onReviewBuilder} onRecovery={unavailableReason ? undefined : (builder, handoff, target) => onAsk(leadRecoveryPrompt(builder, handoff), target)} />}
         {running && !streamingText && <div className="lead-thinking"><LoaderCircle size={14} className="animate-spin" /> Thinking…</div>}
       </div>
       <form className="lead-compose" onSubmit={(event) => { event.preventDefault(); send(); }}>
@@ -456,12 +323,7 @@ export function LeadConversationPanel({ projectName, projectId, conversation, co
             } catch { /* Keep draft in memory if storage is unavailable. */ }
           }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); } }} />
           <ComposerToolbar leading={<>
-            <OptionMenu ariaLabel="Lead runs on" disabled={!projectId || running} icon={executionValue === 'api' ? <Cloud size={13} /> : <Cpu size={13} />} labelPrefix={selection.execution ? undefined : 'Runs on'} onChange={(value) => changeExecution(value)} options={runsOnOptions} title="Choose API or CLI for the Lead" value={executionValue} />
-            <OptionMenu ariaLabel={`Lead ${selection.execution === 'api' ? 'provider' : 'agent'}`} disabled={!projectId || running || !selection.execution} icon={<Cpu size={13} />} labelPrefix={selection.execution === 'api' ? 'Provider' : 'Agent'} onChange={(value) => selection.execution === 'api' ? changeProvider(value) : changeAgent(value)} options={providerOptions.length ? providerOptions : [{ value: '', label: selection.execution ? 'None configured' : 'Choose API or CLI', disabled: true }]} title={unavailableReason ?? `Choose a Lead ${selection.execution === 'api' ? 'provider' : 'agent'}`} value={selection.providerOrAgent} />
-            <OptionMenu ariaLabel="Lead model" disabled={!projectId || running || !selection.execution || !selection.providerOrAgent} icon={<Sparkles size={13} />} labelPrefix="Model" onChange={(value) => {
-              if (value !== '__custom__') { changeModel(value); return; }
-              void promptDialog({ title: 'Use a custom Lead model', label: 'Model name', initialValue: selection.model, placeholder: 'provider/model-name' }).then((typed) => { if (typed?.trim()) changeModel(typed.trim()); });
-            }} options={modelMenuOptions} title={unavailableReason ?? 'Choose a model for the Lead'} value={selection.execution === 'cli' && selection.target?.execution === 'cli' && !selection.target.model ? '__agent_default__' : selection.model} />
+            <LeadModelControls picker={picker} disabled={!projectId || running} />
           </>} actions={running ? <ComposerStop onClick={onStop} label="Stop Lead reply" /> : <ComposerSend label="Ask Lead" title="Ask the Lead" submit disabled={!projectId || !message.trim() || !selection.target || Boolean(unavailableReason)} />} />
           {unavailableReason && <small className="lead-model-hint" role="status">{unavailableReason}</small>}
           {!selection.target && !unavailableReason && <small className="lead-model-hint" role="status">Choose a provider or agent and model to ask the Lead.</small>}

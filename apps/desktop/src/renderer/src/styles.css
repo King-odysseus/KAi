@@ -1233,7 +1233,7 @@ button:disabled {
    past the bottom of a panel that is `overflow: hidden`, so everything below the fold — the steps, and the history —
    was clipped and could not be reached by any amount of scrolling. */
 .code-side-panel > .studio-card { min-width: 0; min-height: 0; flex: 1; overflow-y: auto; border-left: 0; }
-.code-side-panel-tabs { display: flex; gap: 4px; padding: 7px 9px 0; border-bottom: 1px solid var(--border); background: var(--surface-raised); }
+.code-side-panel-tabs { display: flex; flex: 0 0 auto; overflow-x: auto; gap: 4px; padding: 7px 9px 0; border-bottom: 1px solid var(--border); background: var(--surface-raised); }
 .code-side-panel-tabs button { padding: 6px 9px; border: 0; border-bottom: 2px solid transparent; color: var(--text-dim); background: transparent; cursor: pointer; font-size: 11px; }
 .code-side-panel-tabs button.active { border-bottom-color: var(--mint); color: var(--text); }
 /* Guided Review: one column that scrolls as a whole, on the same spacing and controls as the rest of the app. */
@@ -1767,10 +1767,33 @@ button:disabled {
 .lead-turn.assistant { align-self: stretch; }
 .lead-turn-label { display: block; margin-bottom: 5px; color: var(--text-dim); font-size: 10px; font-weight: 600; }
 .lead-turn p { margin: 0 0 7px; }
+.lead-turn summary { white-space: normal; overflow-wrap: anywhere; }
 .lead-turn :is(pre, code) { white-space: pre-wrap; overflow-wrap: anywhere; }
 .lead-send-builder { min-height: 26px !important; margin-top: 5px; font-size: 11px !important; }
 .lead-builder-task { margin-top: 7px; border-left: 3px solid var(--accent); padding: 7px 8px; background: var(--bg-hover); }
 .lead-builder-task > strong { display: block; margin-bottom: 3px; font-size: 11px; }
+.lead-handoff-controls { display: flex; flex: 0 0 auto; align-items: flex-start; gap: 6px; min-width: 0; padding: 8px; border-bottom: 1px solid var(--border); }
+.lead-handoff-control { display: flex; flex: 0 1 auto; flex-direction: column; gap: 6px; min-width: 0; max-width: calc(50% - 3px); }
+.lead-handoff-control .kai-option-menu, .lead-handoff-control .kai-option-menu > button { min-width: 0; max-width: 100%; }
+.lead-handoff-control p { margin: 0; overflow-wrap: anywhere; }
+.lead-review-settings { border: 1px solid var(--border-soft); border-radius: 8px; padding: 8px; font-size: 12px; }
+.lead-review-settings summary { cursor: pointer; color: var(--text-muted); }
+.lead-review-settings small { display: block; color: var(--text-muted); margin: 6px 0; }
+.lead-review-settings .kai-switch.with-label { max-width: 100%; white-space: normal; }
+.lead-model-row, .lead-continuation-limits, .workspace-code-toolbar, .workspace-code-files { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.lead-continuation-limits label { display: flex; flex: 1 1 140px; flex-direction: column; gap: 4px; }
+.lead-continuation-limits input { width: 100%; min-width: 0; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px; }
+.workspace-code-slot, .workspace-code-panel { display: flex; flex: 1 1 0; min-height: 0; min-width: 0; overflow: hidden; flex-direction: column; }
+.workspace-code-toolbar, .workspace-code-files { flex: 0 0 auto; padding: 6px 10px; border-bottom: 1px solid var(--border-soft); }
+.workspace-code-toolbar small { flex: 1; color: var(--text-muted); }
+.workspace-code-files { flex-wrap: nowrap; overflow-x: auto; }
+.workspace-code-files button { flex: 0 0 auto; }
+.workspace-code-panel .workspace-file-preview { position: relative; inset: auto; width: 100%; height: auto; flex: 1 1 0; }
+.workspace-code-diff { max-height: 35%; overflow: auto; padding: 8px; }
+.workspace-code-diff pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.workspace-code-changed-line { background: var(--accent-soft); }
+.workspace-outcome { display: flex; flex: 0 0 auto; flex-direction: column; gap: 3px; padding: 8px 12px; border-bottom: 1px solid var(--border-soft); background: var(--bg-panel); font-size: 12px; }
+.workspace-outcome small { color: var(--text-muted); }
 .lead-idea-proposal { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
 .lead-idea-proposal > strong { font-size: 13px; }
 .lead-idea-proposal > div { min-width: 0; }
@@ -1786,6 +1809,10 @@ button:disabled {
 .lead-idea-exact-changes pre { max-height: 220px; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 6px; padding: 6px; background: var(--bg-hover); font-size: 10px; }
 .lead-idea-actions { display: flex; flex-wrap: wrap; gap: 6px; border-top: 1px solid var(--border-soft); padding-top: 7px; }
 .lead-idea-actions > button { min-height: 28px; padding: 0 8px; font-size: 11px; }
+.lead-task-actions { align-items: center; }
+.lead-task-actions > button { height: 32px; min-height: 32px !important; margin-top: 0; font-size: 11px !important; }
+.lead-edit-card pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.lead-edit-card summary { white-space: normal; }
 .lead-idea-conflicts { border-left: 2px solid var(--waiting); padding-left: 8px; }
 .lead-idea-questions { border-left: 2px solid var(--accent); padding-left: 8px; }
 .lead-error,
@@ -14259,3 +14286,8 @@ button.tool-call-head:hover strong { color: var(--mint); }
 /* Import wizard: one finding per row, tinted on hover. */
 .import-finding { border-radius: var(--radius-control, 8px); padding: 8px; }
 .import-finding:hover { background: var(--bg-hover); }
+
+.lead-context-used, .lead-run-links { flex: 0 0 auto; min-width: 0; border: 1px solid var(--border-soft); border-radius: 8px; padding: 8px; font-size: 11px; overflow-wrap: anywhere; }
+.lead-context-used summary, .lead-run-links summary { cursor: pointer; color: var(--text-muted); white-space: normal; overflow-wrap: anywhere; }
+.lead-context-used strong, .lead-context-used small, .lead-builder-task small { display: block; margin-top: 5px; }
+.lead-run-links pre { max-height: 180px; overflow: auto; white-space: pre-wrap; }

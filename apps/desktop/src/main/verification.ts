@@ -4,6 +4,8 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import {
   isVerificationCommand,
+  verificationCaveat,
+  checkEvidenceFromEvents,
   parseTestCounts,
   verificationRunSchema,
   verificationStatuses,
@@ -180,7 +182,8 @@ export async function recordVerification(store: VerificationStore, projectId: st
     command: check.command.slice(0, 2_000),
     source: check.source,
     exitCode: check.exitCode,
-    passed: check.exitCode === 0,
+    passed: check.exitCode === 0 && !verificationCaveat(check.command, check.output),
+    ...(verificationCaveat(check.command, check.output) ? { unverifiedReason: verificationCaveat(check.command, check.output) } : {}),
     startedAt: check.startedAt.toISOString(),
     durationMs: Math.round(check.durationMs),
     head: await headCommit(projectPath),
@@ -222,18 +225,5 @@ export function runCheckCommand(projectPath: string, command: string, signal?: A
 
 /** Checks an agent ran during a turn, found in its tool events, so they can be recorded too. */
 export function agentChecksFromEvents(events: ReadonlyArray<{ type: string } & Record<string, unknown>>): RecordedCheck[] {
-  const checks: RecordedCheck[] = [];
-  for (const event of events) {
-    // A failing check ends as a 'failed' tool call, and is exactly the result worth recording.
-    if (event.type !== 'tool.call' || (event.status !== 'completed' && event.status !== 'failed')) continue;
-    const input = event.input && typeof event.input === 'object' ? (event.input as Record<string, unknown>) : {};
-    const command = typeof input.command === 'string' ? input.command : typeof input.cmd === 'string' ? input.cmd : '';
-    if (!command || !isVerificationCommand(command)) continue;
-    const output = event.output && typeof event.output === 'object' ? (event.output as Record<string, unknown>) : {};
-    const exitCode = typeof output.exitCode === 'number' ? output.exitCode : typeof output.exit_code === 'number' ? output.exit_code : null;
-    if (exitCode === null) continue;
-    const text = [output.stdout, output.stderr, output.output].filter((part): part is string => typeof part === 'string').join('\n');
-    checks.push({ command, source: 'agent', exitCode, startedAt: new Date(String(event.timestamp ?? Date.now())), durationMs: 0, output: text });
-  }
-  return checks;
+  return checkEvidenceFromEvents(events).map((check) => ({ ...check, source: 'agent', startedAt: new Date(check.timestamp || Date.now()), durationMs: 0 }));
 }

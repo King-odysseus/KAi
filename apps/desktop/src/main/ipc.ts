@@ -1,3 +1,5 @@
+import { isWorkspaceConversation, scopeConversationRequest } from './conversation-scope';
+import { prepareLeadEdit, decideLeadEdit, type LeadEditStore } from './lead-edits';
 import * as crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
@@ -92,7 +94,8 @@ import { buildHistoryNote } from './run-history';
 import { canInterject, clearInterjections, interject, setInterjectionActive, takeDeliveredInterjections, type InterjectionAttachment, type InterjectionExtras } from './interjections';
 import { parseImageDataUrl } from './image-attachments';
 import { attachmentText } from './attachment-text';
-import { buildProjectContext } from './context-builder';
+import { buildProjectContext, namedPaths } from './context-builder';
+import { resolveApiConnection, withGatewayProfile } from './api-connection';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort, DirectApiApprovalRequest } from './direct-provider-runtime';
 import { awaitsTheUser } from './direct-provider-runtime';
 import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, injectRulesIntoProjects, plainDashes, RULES_MARKER, shouldCarryRules, withAutopilotException, withCrewException, withCrewReadOnlyException } from './execution-rules';
@@ -123,12 +126,13 @@ import { BRAIN_TOOLS_GUIDANCE, type BrainAccess } from './brain-tools';
 import { windowedHistory } from './history-tools';
 import { renderConversationHandoff } from './conversation-handoff';
 import { brainMemoryReviewPrompt, type BrainMemoryReviewInput, type BrainMemoryReviewResult } from '@kai/contracts';
-import { compactThresholdFor, modelContextFor, estimateConversationTokens, isLocalProvider } from '@kai/contracts';
+import { compactThresholdFor, modelContextFor, modelHostOf, estimateConversationTokens, isLocalProvider } from '@kai/contracts';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
 import { gitCheckout, gitCloneTeamRepository, gitCommit, gitCreateBranch, gitCreatePullRequest, gitCreateRepository, gitBlameFile, gitChangedHunks, gitDiffAgainstHead, scanTodos, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitPullTeamBranch, gitStage, gitSync } from './git-tools';
 import { importCardId, scanForImport } from './import-scan';
 import { agentChecksFromEvents, recordVerification, runCheckCommand, suggestTestCommand, verificationOverview, type RecordedCheck, type VerificationStore } from './verification';
+import { captureTurnFileEvidence } from './turn-file-evidence';
 import { publishInlineMockup, publishProjectMockup } from './mockup-server';
 import { FileConflictError, createProjectFolder, deleteProjectPath, fileChangedOnDisk, listProjectFiles, readProjectFile, readProjectImage, renameProjectPath, writeProjectFile } from './project-files';
 import { buildRecap, buildResume, describeEvent, type RecoveryStore } from './recovery-store';
@@ -154,6 +158,7 @@ import { connectorServer, listConnectorCatalog } from './connector-catalog';
 import { autoCliModel } from './auto-model';
 import { invalidateRepoMap } from './repo-map';
 import { knowledgeBriefing, recordRunKnowledge, startWatchingProject } from './project-knowledge';
+import { followRunFiles } from './run-file-follow';
 import { runWithAutomation, type AutomationPorts } from './automation';
 import type { DesktopChangeReviewer } from './change-review';
 import type { DesktopEvals } from './evals';
@@ -502,7 +507,9 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     if (Object.entries(windows).some(([model, size]) => settings.localModelContext[model] !== size)) {
       await context.settings.update((current) => ({ ...current, localModelContext: { ...current.localModelContext, ...windows } }));
     }
-    return merged.catalog;
+    return modelHostOf({ provider: request.provider, baseUrl: request.baseUrl }, settings) === 'own-hardware'
+      ? { ...merged.catalog, models: merged.catalog.models.filter((model) => model.toLowerCase() !== 'gateway/auto') }
+      : merged.catalog;
   });
   handle(context, 'catalog:list', async () => listConnectorCatalog());
   handle(context, 'catalog:install', async ({ id }) => {
@@ -526,6 +533,38 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   });
   handle(context, 'settings:update', async (update) => {
     const snapshot: { previous: AppSettings | null } = { previous: null };
+    const currentSettings = await context.settings.load();
+    const nextDirectApi = { ...currentSettings.directApi, ...update.directApi };
+    const gatewayOwnHardware = update.gatewayOwnHardware ?? currentSettings.gatewayOwnHardware;
+    let gatewayAwayUrl = update.gatewayAwayUrl !== undefined ? update.gatewayAwayUrl : currentSettings.gatewayAwayUrl;
+    let gatewayCredentialId = update.gatewayCredentialId !== undefined ? update.gatewayCredentialId : currentSettings.gatewayCredentialId;
+    // Migrate an older opted-in profile before Direct API changes from its gateway to a cloud provider.
+    if (gatewayOwnHardware && !gatewayAwayUrl && currentSettings.directApi.provider === 'openai-compatible') {
+      gatewayAwayUrl = currentSettings.directApi.baseUrl;
+      gatewayCredentialId = currentSettings.directApi.credentialId;
+    }
+    // Only an empty profile is filled from the default connection. Once saved, choosing another service as the default
+    // must not mark that service as the person's own hardware, or forget where the gateway is.
+    if (gatewayOwnHardware && !gatewayAwayUrl && nextDirectApi.provider === 'openai-compatible') {
+      gatewayAwayUrl = nextDirectApi.baseUrl;
+      gatewayCredentialId = nextDirectApi.credentialId;
+    }
+    const candidateSettings = {
+      ...currentSettings,
+      gatewayOwnHardware,
+      gatewayAwayUrl,
+      gatewayCredentialId,
+      gatewayHomeUrl: update.gatewayHomeUrl !== undefined ? update.gatewayHomeUrl : currentSettings.gatewayHomeUrl,
+      directApi: nextDirectApi,
+    };
+    const invalidOwnRoute = [
+      { connection: candidateSettings.directApi, model: update.directApi?.model },
+      { connection: { ...currentSettings.learningTutor, ...update.learningTutor }, model: update.learningTutor?.model },
+      { connection: { ...currentSettings.promptGuide, ...update.promptGuide }, model: update.promptGuide?.model },
+    ].some(({ connection, model }) => model?.toLowerCase() === 'gateway/auto' && modelHostOf(connection, candidateSettings) === 'own-hardware');
+    if (invalidOwnRoute) {
+      throw new Error('gateway/auto cannot be selected for your own hardware. Choose gateway/coding, gateway/general, gateway/research, or gateway/vision.');
+    }
     // Before anything is written: a brain path inside a repository is the one setting here that can reach outside
     // KAI and change somebody else's history. See `brainPathInsideRepository`.
     if (update.cognitive1?.dataPath) {
@@ -538,9 +577,10 @@ export function registerIpc(context: IpcContext): IpcRegistry {
         );
       }
     }
+    const persistedUpdate = { ...update, gatewayAwayUrl, gatewayCredentialId };
     const merged = await context.settings.update((settings) => {
       snapshot.previous = settings;
-      return mergeSettingsUpdate(settings, update);
+      return mergeSettingsUpdate(settings, persistedUpdate);
     });
     if (!snapshot.previous) throw new Error('Settings could not be read.');
     const proxyChanged = update.proxy !== undefined && JSON.stringify(merged.proxy) !== JSON.stringify(snapshot.previous.proxy);
@@ -1031,12 +1071,14 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'prompt-presets:save', async ({ slot, label, text }) => context.promptPresets.save({ slot, label, text }));
   handle(context, 'prompt-presets:delete', async ({ slot }) => context.promptPresets.delete(slot));
   handle(context, 'conversations:get', async ({ id }) => context.conversations.get(id));
-  handle(context, 'conversations:create', async ({ projectId, firstPrompt }, request) => {
+  handle(context, 'conversations:create', async ({ projectId, firstPrompt, origin }, request) => {
     if (request.session && request.session.projectId !== projectId) {
       throw new Error('This window can create conversations only for its open project. Open the project in this window first.');
     }
+    if (origin && origin.projectId !== projectId) throw new Error('Lead chat must belong to its project.');
     const now = new Date().toISOString();
     const conversation: ConversationRecord = {
+      ...(origin ? { origin } : {}),
       schemaVersion: 1,
       id: `conv_${crypto.randomUUID()}`,
       projectId,
@@ -1052,7 +1094,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       events: [],
     };
     await context.conversations.save(conversation);
-    if (request.session) request.session.conversationId = conversation.id;
+    if (request.session && isWorkspaceConversation(conversation)) request.session.conversationId = conversation.id;
     return conversation;
   });
   handle(context, 'conversations:compact', async ({ conversationId, beforeNextRun }) => {
@@ -1068,7 +1110,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       throw new Error('This window can save conversations only for its open project. Open the project in this window first.');
     }
     await context.conversations.save(conversation);
-    if (request.session) request.session.conversationId = conversation.id;
+    if (request.session && isWorkspaceConversation(conversation)) request.session.conversationId = conversation.id;
     return conversation;
   });
   handle(context, 'conversations:fork', async (input) => {
@@ -1167,14 +1209,28 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'ui:report-view', async ({ view, conversationId }, request) => {
     const owner = request.ownerWindowId;
     const session = context.windows.get(owner);
+    const viewedConversation = conversationId ? await context.conversations.get(conversationId) : null;
     if (session) {
       session.view = view;
-      session.conversationId = conversationId;
+      if (!viewedConversation || isWorkspaceConversation(viewedConversation)) session.conversationId = conversationId;
     }
     context.notifications.setViewing(owner, view, conversationId);
     return true;
   });
   handle(context, 'files:tree', async ({ projectId }) => listProjectFiles((await resolveProject(context, projectId, true)).path));
+  const leadEditsStore = (request: IpcRequestContext): LeadEditStore => ({
+    get: async (id) => {
+      const record = await context.conversations.get(id);
+      if (record && request.session && request.session.projectId !== record.projectId) throw new Error('Open the owning project in this window before editing.');
+      return record;
+    },
+    save: async (record) => { await context.conversations.save(record); context.windows.broadcast('app:conversation-changed', { conversationId: record.id }); },
+    list: () => context.conversations.list(),
+    runs: (id) => context.verification.list(id),
+    root: async (id) => { if (request.session && request.session.projectId !== id) throw new Error('The open project changed. Review this edit in its owning project.'); return (await resolveProject(context, id, true)).path; },
+  });
+  handle(context, 'lead:prepare-edit', async ({ conversationId, turnId }, request) => prepareLeadEdit(leadEditsStore(request), conversationId, turnId));
+  handle(context, 'lead:decide-edit', async ({ conversationId, proposalId, action }, request) => decideLeadEdit(leadEditsStore(request), conversationId, proposalId, action));
   handle(context, 'files:read', async ({ projectId, path: filePath }) => readProjectFile((await resolveProject(context, projectId, true)).path, filePath));
   handle(context, 'files:image', async ({ projectId, path: filePath }) => readProjectImage((await resolveProject(context, projectId, true)).path, filePath));
   handle(context, 'mockup:inline', async ({ html }) => publishInlineMockup(html));
@@ -1668,10 +1724,12 @@ export async function runInteractiveAgent(
 ): Promise<AgentRunResult> {
   const conversation = await context.conversations.get(request.conversationId);
   if (!conversation) throw new NotFoundError('Conversation not found.');
+  request = scopeConversationRequest(conversation, request);
   const ownerSession = ownerWindowId === null ? null : context.windows.get(ownerWindowId);
   if (ownerSession && ownerSession.projectId !== conversation.projectId) {
     throw new Error('This conversation belongs to a different project. Open that project in this window before running it.');
   }
+  if (conversation.origin?.kind === 'lead') return runConversationAgent(context, { ...request, autonomy: 'plan' }, ownerWindowId);
   if (ownerSession) ownerSession.conversationId = conversation.id;
   const settings = await context.settings.load();
   const projectId = conversation.projectId ?? (ownerSession ? null : settings.activeProjectId);
@@ -1989,6 +2047,7 @@ export async function runConversationAgent(
 ): Promise<AgentRunResult> {
   const conversation = await context.conversations.get(request.conversationId);
   if (!conversation) throw new NotFoundError('Conversation not found.');
+  request = scopeConversationRequest(conversation, request);
 
   // Stop has to reach a run before the agent starts, so the signal is taken here, at the top, and every slow step
   // below checks it. `ownsStop` is what keeps this run from clearing a controller that an enclosing automation
@@ -2023,6 +2082,12 @@ export async function runConversationAgent(
   // The connection this run actually uses: a role's own, or the one in Settings.
   const runProvider = request.execution === 'api' ? request.apiConnection?.provider ?? settings.directApi.provider : null;
   const runModel = request.apiConnection?.model || request.model || settings.directApi.model;
+  // Whether that model is on the person's own hardware: such a run costs nothing and is sent less to read.
+  const runConnection = request.apiConnection
+    ? resolveApiConnection(settings.directApi, withGatewayProfile(settings, request.apiConnection))
+    : settings.directApi;
+  const ownModelRun = request.execution === 'api' && request.route !== 'proxy'
+    && (isLocalProvider(runConnection.provider) || modelHostOf(runConnection, settings) === 'own-hardware');
   const compactAt = compactThresholdFor(settings.usageBudget, runProvider, modelContextFor(settings, runModel));
   const askedToCompact = compactBeforeNextRun.delete(conversation.id);
   const leadConversationRun = conversation.origin?.kind === 'lead';
@@ -2064,7 +2129,7 @@ export async function runConversationAgent(
   const rulesBriefing = buildExecutionRulesBriefing(authoritativeRules);
 
   const executionMode = request.execution ?? 'cli';
-  if (executionMode === 'api') {
+  if (executionMode === 'api' && !ownModelRun) {
     // Block mode refuses before anything is saved or sent, so the run never reaches the provider.
     // From the usage ledger, not from the conversations: loading every saved conversation for each run, with eight runs
     // starting together, is what ran KAI's main process out of memory.
@@ -2186,6 +2251,7 @@ export async function runConversationAgent(
   const liveDiffTasks = new Map<string, Promise<void>>();
   const liveDiffRefreshes = new Set<Promise<void>>();
   const providerDiffAt = new Map<string, number>();
+  const lastLiveDiffText = new Map<string, string>();
   const generatedDiffIds = new Set<string>();
   const emit = (original: AgentRunEvent['event']): void => {
     let event = original;
@@ -2212,6 +2278,7 @@ export async function runConversationAgent(
       context.windows.broadcast('agents:event', payload);
     }
     if (event.type === 'diff.proposal' && !generatedDiffIds.has(event.id)) providerDiffAt.set(event.filePath, Date.now());
+    if (event.type === 'diff.proposal' && event.applied && event.diff) lastLiveDiffText.set(event.filePath, event.diff);
     // Providers vary in how they report edits: some send a file-change event, while others only complete an edit or
     // shell tool call. Refresh the checkpoint's changed paths after each such event so every composer execution mode
     // gets the same live diff. Native proposals take precedence when the provider supplies one.
@@ -2233,7 +2300,8 @@ export async function runConversationAgent(
           const task = previous.then(async () => {
             if (Date.now() - (providerDiffAt.get(filePath) ?? 0) < 1_500) return;
             const diff = await textDiffFileFromCheckpoint(workRoot, checkpoint, filePath);
-            if (!diff || Date.now() - (providerDiffAt.get(filePath) ?? 0) < 1_500) return;
+            if (!diff || diff === lastLiveDiffText.get(filePath) || Date.now() - (providerDiffAt.get(filePath) ?? 0) < 1_500) return;
+            lastLiveDiffText.set(filePath, diff);
             const proposal: PersistedEvent = {
               schemaVersion: 1,
               id: `evt_${crypto.randomUUID()}`,
@@ -2244,6 +2312,7 @@ export async function runConversationAgent(
               filePath,
               summary: 'Live changes from this run',
               diff,
+              applied: true,
             };
             generatedDiffIds.add(proposal.id);
             liveDiffEvents.push(proposal);
@@ -2316,6 +2385,7 @@ export async function runConversationAgent(
         // gave no sign of whether it had memory behind it — including when it had none because the brain was slow.
         (summary) => memoryEvents.push(memoryEvent(conversation.id, request.agent, 'recall', summary)),
         coachRepoMapMaxCharacters,
+        ownModelRun,
       )
     : await buildConversationContext(
         context,
@@ -2408,9 +2478,9 @@ ${BRAIN_TOOLS_GUIDANCE}`
     ? applyExecutionRulesToRequest(preparedRequest, rulesBriefing)
     : preparedRequest;
   // API runs load these themselves; a CLI run needs them on the request so the harness flags it can express are set.
-  const executionRequest: AgentRunRequest = preferences?.automation?.permissionRules?.length
+  const executionRequest: AgentRunRequest = scopeConversationRequest(conversation, preferences?.automation?.permissionRules?.length
     ? { ...requestWithRules, permissionRules: preferences.automation.permissionRules }
-    : requestWithRules;
+    : requestWithRules);
   // Visible in the conversation itself, not just true in the code: asked plainly, this answers it without
   // anyone having to trust that `shouldCarryRules` did the right thing.
   const rulesNotice: PersistedEvent = {
@@ -2490,6 +2560,7 @@ ${BRAIN_TOOLS_GUIDANCE}`
     });
     return messages.length;
   };
+  const fileFollow = leadConversationRun ? null : await followRunFiles(workRoot, request, emit);
   try {
     if (executionMode === 'api') setInterjectionActive(conversation.id, true);
     execution = executionMode === 'api'
@@ -2570,6 +2641,7 @@ ${BRAIN_TOOLS_GUIDANCE}`
         chipContext.imagePaths,
       ));
     }
+    if (fileFollow) execution.events.push(...await fileFollow.stop());
     await Promise.all([...liveDiffRefreshes, ...liveDiffTasks.values()]);
     execution.events.push(...liveDiffEvents);
   } catch (error) {
@@ -2582,6 +2654,7 @@ ${BRAIN_TOOLS_GUIDANCE}`
     }
     throw error;
   } finally {
+    await fileFollow?.stop();
     context.notifications.runEnded(conversation.id);
     context.runControl.forget(conversation.id);
     // What the run opened is closed before anything else touches the folder: a card's check starts its own app in the
@@ -2665,6 +2738,9 @@ ${BRAIN_TOOLS_GUIDANCE}`
     });
   }
   // The brain hears what the run did, not just that a session came and went; Overwatch then judges the draft.
+  if (conversation.leadHandoffs?.length && conversation.origin?.kind !== 'lead') {
+    userTurn.fileSnapshot = await captureTurnFileEvidence(workRoot, userTurn.fileChanges ?? [], execution.events);
+  }
   //
   // Guarded, and it matters that it is: this runs before the turn is saved, so a brain that refused the write used to
   // take the whole turn with it — no reply kept, and no announcement that the run had ended.
@@ -3122,6 +3198,9 @@ async function prepareMemorySession(
   }
 }
 
+/** A preloaded file longer than this is outlined for a model on the person's own hardware. */
+const LEAN_FILE_CHARACTERS = 6_000;
+
 async function buildConversationContext(
   context: IpcContext,
   projectPath: string,
@@ -3138,6 +3217,8 @@ async function buildConversationContext(
   /** Told what recall did, so the run can say it. Optional: the context preview has nobody to tell. */
   onRecall?: (summary: string) => void,
   repoMapMaxCharacters?: number,
+  /** For a model on the person's own hardware: only the files this request names, with large ones as outlines. */
+  lean = false,
 ) {
   const recall = await recallScopedMemories(context, projectPath, projectName, prompt, budget);
   onRecall?.(recall.skipped
@@ -3152,8 +3233,13 @@ async function buildConversationContext(
     .then((runs) => buildHistoryNote({ runs, files: filesInPlay, projectId, now: Date.now() }))
     .catch(() => null);
   const designProfile = await context.designProfiles.briefing(projectPath, prompt, filesInPlay);
+  // Every file the conversation ever changed, whole, can take most of a small window before the work starts.
+  const preload = lean
+    ? [...new Set([...namedPaths(prompt, changedFilePaths(conversation)), ...selectedPaths])]
+    : filesInPlay.slice(-12);
   const projectContext = await buildProjectContext(projectPath, {
-    selectedPaths: filesInPlay.slice(-12),
+    selectedPaths: preload,
+    ...(lean ? { outlineFilesOver: LEAN_FILE_CHARACTERS } : {}),
     touchedPaths: filesInPlay,
     memories: recall.memories,
     memoryNote: recall.note,

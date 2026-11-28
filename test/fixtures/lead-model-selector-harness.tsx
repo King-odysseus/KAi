@@ -1,15 +1,15 @@
+import { inventory } from './lead-model-inventory';
+import { LeadTaskCard } from '../../apps/desktop/src/renderer/src/components/LeadTaskCard';
+import { LeadHandoffHarness } from './lead-handoff-harness';
+import { ThemeProvider } from 'flowbite-react';
+import { kaiFlowbiteTheme } from '../../apps/desktop/src/renderer/src/flowbite-theme';
+import { CodeLearningTabs, restoredCodeLearningTab, type CodeLearningTab } from '../../apps/desktop/src/renderer/src/components/CodeLearningTabs';
 import { useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { LeadConversationPanel } from '../../apps/desktop/src/renderer/src/components/RightPane';
 import type { ConversationRecord } from '@kai/contracts';
 
-const inventory = {
-  apiProviders: [
-    { provider: 'lmstudio', credentialId: 'provider.lmstudio', label: 'Local Lab', tier: 'Local' as const, available: true, models: ['local-small', 'local-large'], defaultModel: '', baseUrl: 'http://127.0.0.1:1234/v1' },
-    { provider: 'openai', credentialId: 'provider.openai', label: 'Cloud Lab', tier: 'Paid API' as const, available: true, models: ['cloud-fast', 'cloud-strong'], defaultModel: '', baseUrl: 'https://api.example.test/v1' },
-  ],
-  cliAgents: [{ agent: 'claude' as const, label: 'Claude CLI', tier: 'Subscription' as const, available: true, models: ['sonnet', 'opus'] }],
-};
+
 
 function chat(id: string, text: string): ConversationRecord {
   const now = '2026-11-27T00:00:00.000Z';
@@ -52,10 +52,22 @@ function Harness(): ReactNode {
   </div>;
 }
 
+function LearningHarness(): ReactNode {
+ const [tab, setTab] = useState<CodeLearningTab>(() => restoredCodeLearningTab(localStorage.getItem('kai.codeSidePanel')));
+ return <div><CodeLearningTabs value={tab} onChange={(next) => { setTab(next); localStorage.setItem('kai.codeSidePanel', next); }} /><section aria-label="Selected learning panel">{tab}</section></div>;
+}
+
+function TaskHarness(): ReactNode {
+ const [enabled, setEnabled] = useState(true);
+ const [draft, setDraft] = useState('');
+ const [question, setQuestion] = useState('');
+ return <div style={{ maxWidth: '100%', overflowWrap: 'anywhere' }}><button onClick={() => setEnabled(!enabled)}>Toggle Builder</button><LeadTaskCard task={'### Goal\nAdd a form.\n### Files\n- src/form.ts\n### Done checks\n- Validates inputs.'} builderEnabled={enabled} onSend={setDraft} onChange={setQuestion} /><textarea aria-label="Builder draft" value={draft} readOnly /><textarea aria-label="Lead revision" value={question} readOnly /></div>;
+}
+
 function mount(): void {
   const root = document.getElementById('root');
   if (!root) throw new Error('Missing Lead test root');
-  createRoot(root).render(<Harness />);
+  createRoot(root).render(<ThemeProvider theme={kaiFlowbiteTheme}>{location.search === '?handoff' ? <LeadHandoffHarness /> : location.search === '?task' ? <TaskHarness /> : location.search === '?learning' ? <LearningHarness /> : <Harness />}</ThemeProvider>);
 }
 
 Object.assign(window, { mountLeadSelectorTest: mount });

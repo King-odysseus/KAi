@@ -18,6 +18,8 @@ conventions). Do not add a new mode, a second planner, a second explain-back or 
 
 ## Ground rules (this repo's traps)
 
+Workspace follow-through brought forward (2026-11-28): Conversation / Code views with the existing editor, evidence-based Builder completion returned to Lead, an optional separately selected reviewer, and bounded continuation. Learn & Code retains its teaching panels. Existing Studio/spec plans remain authoritative; completion records are evidence, not a second plan. Required phase gates stay open when failed, missing or stale.
+
 - Leave changes uncommitted unless the developer asks. They commit, push, rebuild and install themselves.
 - If you do commit: the trailer is exactly `Co-Authored-By: <noreply@anthropic.com>`, and no model or agent product
   names anywhere in the message (the commit-msg hook rejects them).
@@ -131,8 +133,10 @@ The memory store can accumulate duplicate or outdated notes, which can crowd out
 ## Phase 3.5. Lead tab v1 (build before Phases 4–5 and the 10-task test)
 
 - Add a resizable third **Lead** tab beside Context and Build in `RightPane.tsx`.
-- Keep a saved Lead chat per project, separate from the Builder conversation. It is read-only: it may inspect code and
-  plans, but it never edits files.
+- Keep saved Lead chats per project, separate from Builder. Model tools remain read-only. The separate **Lead access**
+  selector defaults to Read-only; **Ask before edits** previews one small correction and requires exact approval.
+  **Plan edits allowed** may mark an existing authoritative plan step complete from matching Passed task evidence;
+  other changes still require approval. Never overwrite an intervening file edit; refresh the diff and ask again.
 - Give the Lead its own local or cloud model picker and show the selected model and the model replying.
 - Reuse the Coach prompt in `guided-build-engine.ts`; do not add another planner. Explain why, how, risks and a simpler
   option in beginner language.
@@ -140,17 +144,23 @@ The memory store can accumulate duplicate or outdated notes, which can crowd out
   Builder run is active, warn before sending a Lead message.
 - Verify this first version with targeted tests, typecheck and a running-app screen check. Leave the remaining Phase 6
   work below for later.
+- A blocker holds the affected task or phase gate open, not the whole discussion. Lead separates current evidence
+  from old reports, compares recovery choices, recommends a concrete diagnostic/repair or an existing independent
+  step, and asks only for the exact decision or approval needed. Unknown dependencies are not treated as independent.
+  Blocked results expose **Plan ways forward** using the selected Lead model. Within existing limits, a blocked review
+  may produce one recovery proposal automatically; recovery tasks require approval before Builder starts. Stop, model
+  availability, spending limits and gate checks remain enforced. An unreachable endpoint does not prove missing software.
 - Project Studio has no Lead tab. **Start in Workspace** opens the selected project with Workspace's Lead tab selected.
-- Learn & Code mounts that same project's Lead chat and provider/model choice in its resizable side panel, with the
-  open file supplied as read-only context. Keep the existing Coach prompt, learning actions, ExplainBack component,
-  hands-on choices and progress store; retain old tutor/Coach turns so they still load. Guided Build keeps its steps and
-  Builder results. Do not add another chat or planner.
+- Learn & Code keeps its Learn, Guided Build and Review teaching panels, Coach prompt, ExplainBack component,
+  hands-on choices and progress store; retain old tutor/Coach turns. The development Lead stays in Workspace.
+  Guided Build keeps its steps and Builder results. Do not add another planner.
 - The Lead reads `.kai/spec/brief.md`, `decisions.md`, `architecture.md`, `status.md` and `risks.md` when present,
   selects whole relevant sections within a fixed budget, names omitted sections, summarizes the goal and next step,
-  and marks high-risk assumptions for developer approval. It never writes or replaces those files.
+  and marks high-risk assumptions for developer approval. Small corrections use the separate saved edit preview;
+  scope, decisions and verification baselines always need explicit approval. status.md stays generated from facts.
 
-Accept: project-specific saved chat, separate Lead model selection, read-only behavior, task handoff without execution,
-and the local-model warning are verified.
+Accept: saved chats, separate model/access/handoff settings, enforced read-only model tools, exact approved edits,
+changed-file protection, evidence-backed plan maintenance and the local-model warning are verified.
 
 ---
 

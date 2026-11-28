@@ -2,7 +2,7 @@ import type { Dirent } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { BrainEntry, ContextPreview, ContextPreviewItem, ContextPreviewSection } from '@kai/contracts';
-import { buildRepoMap } from './repo-map';
+import { buildRepoMap, outlineFile } from './repo-map';
 import { globMatches } from './glob-match';
 
 const INSTRUCTION_FILES = [
@@ -36,6 +36,8 @@ interface ContextEntry {
 }
 
 export interface BuildProjectContextOptions {
+  /** Selected files longer than this many characters are given as an outline instead of in full. */
+  outlineFilesOver?: number;
   selectedPaths?: readonly string[];
   memories?: readonly BrainEntry[];
   /** What the recall did, shown beside the memories so an empty list is explained instead of silent. */
@@ -78,7 +80,7 @@ export async function buildProjectContext(
     ? []
     : [...collectAuthoritativeInstructions(options.authoritativeRules), ...collectConventions(options.conventions), ...(await collectInstructions(root)), ...pathRules];
   const instructionPaths = new Set(instructions.map((entry) => entry.item.source));
-  const files = await collectSelectedFiles(root, options.selectedPaths ?? [], instructionPaths);
+  const files = await collectSelectedFiles(root, options.selectedPaths ?? [], instructionPaths, options.outlineFilesOver);
   const skills = options.omitStatic ? [] : await collectSkills(root);
   const memories = collectMemories(options.memories ?? []);
   const repoMap = options.includeRepoMap ? await collectRepoMap(root, options.repoMapMaxCharacters) : [];
@@ -180,6 +182,7 @@ async function collectSelectedFiles(
   root: string,
   selectedPaths: readonly string[],
   instructionPaths: Set<string | undefined>,
+  outlineOver?: number,
 ): Promise<ContextEntry[]> {
   const entries: ContextEntry[] = [];
   const seen = new Set<string>();
@@ -191,9 +194,38 @@ async function collectSelectedFiles(
     seen.add(filePath);
     const content = await readBoundedText(filePath, MAX_SELECTED_FILE_BYTES);
     if (!content.text) continue;
+    if (outlineOver !== undefined && content.text.length > outlineOver) {
+      entries.push(toEntry('file', path.basename(relativePath), relativePath, outlineEntry(relativePath, content.text, outlineOver), true));
+      continue;
+    }
     entries.push(toEntry('file', path.basename(relativePath), relativePath, content.text, content.truncated));
   }
   return entries;
+}
+
+/** A large file as its declarations and their line numbers, so the model reads the part it needs and no more. */
+function outlineEntry(relativePath: string, text: string, limit: number): string {
+  const outline = outlineFile(relativePath, text).map((entry) => `${entry.line}: ${entry.text}`).join('\n');
+  return outline
+    ? `Outline only (line: declaration). Use read_file with start_line and end_line for the code.\n${outline.slice(0, limit)}`
+    : `Beginning only. Use read_file with start_line for the rest.\n${text.slice(0, limit)}`;
+}
+
+/**
+ * The paths a request names, among those that could be meant: every path written in it, and every changed file whose
+ * name it mentions. Used for a model whose window cannot take every file the conversation has ever changed.
+ */
+export function namedPaths(prompt: string, candidates: readonly string[]): string[] {
+  const written = (prompt.match(/[\w@()[\]./\\-]*[\w)\]-]\.[A-Za-z][A-Za-z0-9]{0,5}\b/g) ?? [])
+    .map((value) => normalizeRelative(value).replace(/^\.\//, ''));
+  const text = prompt.toLowerCase();
+  const mentioned = candidates.filter((candidate) => {
+    const name = candidate.replace(/\\/g, '/').split('/').pop()?.toLowerCase() ?? '';
+    return name.length > 3 && text.includes(name);
+  });
+  // A bare name that already matched a full path is not listed a second time.
+  const bare = new Set(mentioned.map((candidate) => candidate.replace(/\\/g, '/').split('/').pop()));
+  return [...new Set([...mentioned, ...written.filter((value) => !bare.has(value))])];
 }
 
 async function collectRepoMap(root: string, maxCharacters?: number): Promise<ContextEntry[]> {
@@ -230,7 +262,7 @@ async function collectSkills(root: string): Promise<ContextEntry[]> {
 function collectMemories(memories: readonly BrainEntry[]): ContextEntry[] {
   const entries: ContextEntry[] = [];
   const seen = new Set<string>();
-  for (const memory of memories.slice(0, MAX_MEMORIES)) {
+  for (const memory of distinctMemories(memories).slice(0, MAX_MEMORIES)) {
     const key = `${memory.date}:${memory.type}:${memory.title}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -247,6 +279,27 @@ function collectMemories(memories: readonly BrainEntry[]): ContextEntry[] {
     );
   }
   return entries;
+}
+
+/**
+ * Recall can return one decision written down several times in slightly different words, and each copy is paid for on
+ * every run. The first (most relevant) of each kind is kept: two long notes of the same type that share most of their
+ * words, or two short ones that are all but identical.
+ */
+export function distinctMemories(memories: readonly BrainEntry[]): BrainEntry[] {
+  const kept: Array<{ memory: BrainEntry; words: Set<string> }> = [];
+  for (const memory of memories) {
+    const words = new Set(`${memory.title} ${Object.values(memory.fields).join(' ')}`.toLowerCase().match(/[a-z0-9_]{3,}/g) ?? []);
+    const repeated = kept.some((other) => {
+      if (other.memory.type !== memory.type || words.size === 0 || other.words.size === 0) return false;
+      let shared = 0;
+      for (const word of words) if (other.words.has(word)) shared += 1;
+      const smaller = Math.min(words.size, other.words.size);
+      return smaller >= 40 ? shared / smaller >= 0.65 : shared / (words.size + other.words.size - shared) >= 0.85;
+    });
+    if (!repeated) kept.push({ memory, words });
+  }
+  return kept.map((entry) => entry.memory);
 }
 
 function collectConventions(text: string | undefined): ContextEntry[] {

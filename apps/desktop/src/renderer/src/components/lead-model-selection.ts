@@ -34,6 +34,10 @@ export interface LeadCliAgentChoice {
 export interface LeadModelInventory {
   apiProviders: LeadApiProviderChoice[];
   cliAgents: LeadCliAgentChoice[];
+  gatewayOwnHardware?: boolean;
+  gatewayAwayUrl?: string | null;
+  gatewayHomeUrl?: string | null;
+  gatewayCredentialId?: string | null;
 }
 
 export function stableLeadTargetIdentity(target: RoleTarget): string {
@@ -59,12 +63,12 @@ export function targetFromLeadStorage(value: string | null): RoleTarget | null {
   return null;
 }
 
-export function leadModelTier(target: RoleTarget): 'Local' | 'Paid API' | 'Subscription' {
-  return target.execution === 'cli' ? 'Subscription' : describeRole(target).local ? 'Local' : 'Paid API';
+export function leadModelTier(target: RoleTarget, inventory?: LeadModelInventory): 'Local' | 'Paid API' | 'Subscription' {
+  return target.execution === 'cli' ? 'Subscription' : describeRole(target).local || isOwnedGatewayTarget(target, inventory) ? 'Local' : 'Paid API';
 }
 
 export function buildLeadModelInventory(input: {
-  settings: Pick<AppSettings, 'directApi' | 'savedLocalModels' | 'agentModels'>;
+  settings: Pick<AppSettings, 'directApi' | 'savedLocalModels' | 'agentModels'> & Partial<Pick<AppSettings, 'gatewayOwnHardware' | 'gatewayAwayUrl' | 'gatewayHomeUrl' | 'gatewayCredentialId'>>;
   credentialIds: readonly string[];
   agents: readonly Pick<AgentCapability, 'id' | 'displayName' | 'available' | 'unavailableReason'>[];
   directApiStatus?: { provider: ProviderId; available: boolean; reason?: string } | null;
@@ -79,12 +83,32 @@ export function buildLeadModelInventory(input: {
       model: input.settings.directApi.model,
     },
   };
-  const configured = apiChoices(input.credentialIds, [currentApi, ...(input.savedCoach ? [input.savedCoach] : [])]);
+  const ownGatewayConnection: RoleTarget | null = input.settings.gatewayOwnHardware && input.settings.gatewayAwayUrl ? {
+    execution: 'api',
+    api: {
+      provider: 'openai-compatible',
+      baseUrl: input.settings.gatewayAwayUrl,
+      credentialId: input.settings.gatewayCredentialId ?? directProviderPreset('openai-compatible').credentialId,
+      model: 'gateway/general',
+    },
+  } : null;
+  const configured = apiChoices(input.credentialIds, [currentApi, ...(input.savedCoach ? [input.savedCoach] : []), ...(ownGatewayConnection ? [ownGatewayConnection] : [])]);
+  const ownCredentialId = ownGatewayConnection?.execution === 'api' ? ownGatewayConnection.api?.credentialId : undefined;
+  const existingOwnGatewayChoice = configured.find((choice) => choice.provider === 'openai-compatible' && choice.credentialId === ownCredentialId);
+  if (existingOwnGatewayChoice) {
+    existingOwnGatewayChoice.local = true;
+    existingOwnGatewayChoice.keySaved = input.credentialIds.includes(ownCredentialId ?? '');
+  } else if (ownGatewayConnection) {
+    const preset = directProviderPreset('openai-compatible');
+    configured.push({ provider: 'openai-compatible', credentialId: ownCredentialId ?? preset.credentialId, label: preset.displayName, local: true, keySaved: input.credentialIds.includes(ownCredentialId ?? '') });
+  }
   const apiProviders = configured.map((choice): LeadApiProviderChoice => {
     const preset = directProviderPreset(choice.provider);
-    const local = isLocalProvider(choice.provider);
     const sameDirectConnection = choice.provider === input.settings.directApi.provider
       && choice.credentialId === input.settings.directApi.credentialId;
+    const isOwnedGateway = choice.provider === 'openai-compatible' && input.settings.gatewayOwnHardware === true
+      && (ownGatewayConnection ? choice.credentialId === ownCredentialId : sameDirectConnection);
+    const local = isLocalProvider(choice.provider) || isOwnedGateway;
     const sameCoachConnection = input.savedCoach?.execution === 'api'
       && input.savedCoach.api?.provider === choice.provider
       && (input.savedCoach.api.credentialId ?? preset.credentialId) === choice.credentialId;
@@ -94,22 +118,24 @@ export function buildLeadModelInventory(input: {
       ...savedModels,
       ...(sameDirectConnection && input.settings.directApi.model ? [input.settings.directApi.model] : []),
       ...(sameCoachConnection && input.savedCoach?.execution === 'api' && input.savedCoach.api?.model ? [input.savedCoach.api.model] : []),
-    ])];
-    const defaultModel = sameDirectConnection && input.settings.directApi.model
+    ])].filter((model) => !(choice.provider === 'openai-compatible' && input.settings.gatewayOwnHardware && model.toLowerCase() === 'gateway/auto'));
+    const defaultModel = isOwnedGateway ? 'gateway/general'
+      : sameDirectConnection && input.settings.directApi.model
       ? input.settings.directApi.model
       : sameCoachConnection && input.savedCoach?.execution === 'api' && input.savedCoach.api?.model
         ? input.savedCoach.api.model
         : local ? savedModels[0] ?? preset.defaultModel ?? '' : preset.defaultModel ?? '';
     const status = input.directApiStatus?.provider === choice.provider ? input.directApiStatus : null;
-    const available = status ? status.available : local ? savedModels.length > 0 : choice.keySaved;
+    const available = status ? status.available : isOwnedGateway ? choice.keySaved : local ? savedModels.length > 0 : choice.keySaved;
     const unavailableReason = status && !status.available
       ? status.reason || `${preset.displayName} is not responding.`
       : !choice.keySaved && !local
         ? `No API key is saved for ${choice.label}. Add one in Settings to use this provider.`
-        : local && savedModels.length === 0 && !sameDirectConnection && !sameCoachConnection
+        : local && !isOwnedGateway && savedModels.length === 0 && !sameDirectConnection && !sameCoachConnection
           ? `No models are saved for ${preset.displayName}. Start its local service and refresh models in Settings.`
           : undefined;
-    const baseUrl = sameDirectConnection ? input.settings.directApi.baseUrl
+    const baseUrl = isOwnedGateway ? input.settings.gatewayAwayUrl ?? undefined
+      : sameDirectConnection ? input.settings.directApi.baseUrl
       : sameCoachConnection && input.savedCoach?.execution === 'api' ? input.savedCoach.api?.baseUrl : undefined;
     return {
       provider: choice.provider,
@@ -143,7 +169,20 @@ export function buildLeadModelInventory(input: {
       models,
     };
   });
-  return { apiProviders, cliAgents };
+  return {
+    apiProviders,
+    cliAgents,
+    gatewayOwnHardware: input.settings.gatewayOwnHardware === true,
+    gatewayAwayUrl: input.settings.gatewayAwayUrl ?? (input.settings.directApi.provider === 'openai-compatible' ? input.settings.directApi.baseUrl : null),
+    gatewayHomeUrl: input.settings.gatewayHomeUrl ?? null,
+    gatewayCredentialId: input.settings.gatewayCredentialId ?? (input.settings.directApi.provider === 'openai-compatible' ? input.settings.directApi.credentialId : null),
+  };
+}
+
+function isOwnedGatewayTarget(target: RoleTarget, inventory?: LeadModelInventory): boolean {
+  if (!inventory?.gatewayOwnHardware || target.execution !== 'api' || target.api?.provider !== 'openai-compatible') return false;
+  const urls = [inventory.gatewayAwayUrl, inventory.gatewayHomeUrl].filter((url): url is string => Boolean(url));
+  return target.api.baseUrl ? urls.includes(target.api.baseUrl.replace(/\/$/, '')) : urls.length > 0;
 }
 
 export function leadTargetUnavailableReason(target: RoleTarget, inventory: LeadModelInventory): string | null {
@@ -153,14 +192,31 @@ export function leadTargetUnavailableReason(target: RoleTarget, inventory: LeadM
   }
   const api = target.api;
   if (!api) return 'Choose an API provider.';
+  if (inventory.gatewayOwnHardware && api.provider === 'openai-compatible' && api.model?.toLowerCase() === 'gateway/auto') {
+    return 'gateway/auto cannot be used on your own hardware. Choose gateway/coding, gateway/general, gateway/research, or gateway/vision.';
+  }
   const provider = inventory.apiProviders.find((item) => item.provider === api.provider
     && (!api.credentialId || item.credentialId === api.credentialId));
+  if (provider?.available && !api.model?.trim()) return 'Choose a model for this provider.';
   return provider?.available ? null : provider?.unavailableReason ?? `The saved provider ${api.provider} is unavailable.`;
 }
 
 export function leadTaskFromReply(text: string): string | null {
-  const match = /^\s*BUILDER TASK:\s*\n?([\s\S]*?)\s*$/im.exec(text);
-  const task = match?.[1]?.trim();
+  const marker = /^\s*BUILDER TASK:[ \t]*\r?\n?/im.exec(text);
+  if (!marker) return null;
+  const lines = text.slice(marker.index + marker[0].length).split('\n');
+  const kept: string[] = [];
+  let fence: string | null = null;
+  for (const line of lines) {
+    const delimiter = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (delimiter) {
+      if (!fence) fence = delimiter;
+      else if (delimiter[0] === fence[0] && delimiter.length >= fence.length) fence = null;
+    }
+    if (!fence && /^\s*(?:END BUILDER TASK|BUILDER TASK:)[ \t]*$/i.test(line)) break;
+    kept.push(line);
+  }
+  const task = kept.join('\n').trim();
   return task && !/^none\b/i.test(task) ? task : null;
 }
 
@@ -181,12 +237,13 @@ export function hasLocalBuilderRun(input: {
   conversations: readonly { id: string; guidedBuild?: { builderTarget?: RoleTarget | null } }[];
   runningConversationIds: readonly string[];
   targetForConversation: (conversationId: string) => RoleTarget | null;
+  inventory?: LeadModelInventory;
 }): boolean {
   const running = new Set(input.runningConversationIds);
   return input.conversations.some((conversation) => {
     if (!running.has(conversation.id)) return false;
     const target = conversation.guidedBuild?.builderTarget ?? input.targetForConversation(conversation.id);
-    return Boolean(target && leadModelTier(target) === 'Local');
+    return Boolean(target && leadModelTier(target, input.inventory) === 'Local');
   });
 }
 

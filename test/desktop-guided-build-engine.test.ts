@@ -49,13 +49,18 @@ describe('planLocation', () => {
 });
 
 describe('leadCoachPrompt', () => {
-  it('uses the Coach voice with hard read-only guidance and beginner explanations', () => {
+  it('uses a development Lead identity with read-only guidance', () => {
     const prompt = leadCoachPrompt('Why is the card blank?', 'tutor', 'step-by-step', 'blocked');
-    expect(prompt).toContain('You are the Coach in Guided Build');
+    expect(prompt).toContain('You are the Lead');
+    expect(prompt).not.toContain('You are the Coach in Guided Build');
     expect(prompt).toContain('always read-only');
     expect(prompt).toContain('never create, edit, delete or run a command that changes files');
     expect(prompt).toContain('risks and one simpler option');
-    expect(prompt).toContain('Do not make a multi-step implementation plan');
+    expect(prompt).toContain('multi-step implementation plans');
+    expect(prompt).toContain('keep that scope');
+    expect(prompt).toContain('without asking them to choose again');
+    expect(prompt).toContain('never mark a failed verification as accepted');
+    expect(prompt).toContain('do not retry');
   });
 });
 
@@ -201,6 +206,16 @@ describe('describeRole', () => {
 
   it('marks a paid API as not local', () => {
     expect(describeRole({ execution: 'api', api: { provider: 'openai', model: 'gpt-x' } }).local).toBe(false);
+  });
+
+  it('marks a saved gateway role Local even while the default API provider is DeepSeek', () => {
+    const described = describeRole(
+      { execution: 'api', api: { provider: 'openai-compatible', model: 'gateway/coding', baseUrl: 'https://relay.example/v1' } },
+      {},
+      { gatewayOwnHardware: true, gatewayAwayUrl: 'https://relay.example/v1', gatewayHomeUrl: null },
+    );
+    expect(described.local).toBe(true);
+    expect(described.label).toContain('(my hardware)');
   });
 
   it('says so when no role is set', () => {
