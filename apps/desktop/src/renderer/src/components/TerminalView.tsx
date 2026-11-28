@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from '
 import type { ProjectRecord, TerminalSession, TerminalShell } from '@kai/contracts';
 import { unwrap } from '../types';
 import { UiButton } from './UiButton';
+import { terminalKeyAction } from './terminal-clipboard';
 
 /** A real interactive PTY backed by xterm.js. The session survives page and panel navigation. */
 export function TerminalView({ activeProject, open, height, onClose, onResizeStart, commandRequest, onAgentSession }: {
@@ -109,6 +110,28 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
     terminal.open(host);
     terminalRef.current = terminal;
     fitRef.current = fit;
+    const copySelection = (): void => {
+      void navigator.clipboard.writeText(terminal.getSelection())
+        .then(() => terminal.clearSelection())
+        .catch(() => setError('Could not copy the selected text.'));
+    };
+    // Returning false keeps a key from the shell; for paste that lets the browser paste into the terminal.
+    terminal.attachCustomKeyEventHandler((event) => {
+      const action = terminalKeyAction(event, terminal.hasSelection());
+      if (action === 'pass') return true;
+      if (action !== 'paste') event.preventDefault();
+      if (action === 'copy') copySelection();
+      return false;
+    });
+    // Right-click copies a selection, and pastes when there is none.
+    const onContextMenu = (event: MouseEvent): void => {
+      event.preventDefault();
+      if (terminal.hasSelection()) { copySelection(); return; }
+      void navigator.clipboard.readText()
+        .then((text) => { if (text) terminal.paste(text); })
+        .catch(() => setError('Could not read the clipboard. Press Ctrl+V to paste.'));
+    };
+    host.addEventListener('contextmenu', onContextMenu);
     const dataSubscription = terminal.onData((data) => {
       const id = sessionRef.current?.id;
       if (id) void window.kaiDesktop.writeTerminal(id, data);
@@ -127,6 +150,7 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
     observer.observe(host);
     return () => {
       observer.disconnect();
+      host.removeEventListener('contextmenu', onContextMenu);
       dataSubscription.dispose();
       resizeSubscription.dispose();
       terminal.dispose();

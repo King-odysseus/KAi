@@ -192,6 +192,44 @@ describe('the agent loop on the person\'s own gateway', () => {
     expect(withGatewayProfile(settings, { provider: 'openai-compatible' })).toEqual({ provider: 'openai-compatible' });
   });
 
+  it('puts the "repeating itself" question on screen, not only in the waiting list', async () => {
+    const root = project({ 'notes.txt': 'one line\n' });
+    const server = http.createServer((incoming, response) => {
+      let raw = '';
+      incoming.setEncoding('utf8');
+      incoming.on('data', (chunk) => { raw += chunk; });
+      incoming.on('end', () => {
+        const body = JSON.parse(raw) as { tools?: unknown[] };
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        if (!body.tools) {
+          response.end('data: {"choices":[{"delta":{"content":"Stopping."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+          return;
+        }
+        const call = { index: 0, id: `call_${Math.random()}`, type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'notes.txt' }) } };
+        response.end(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [call] } }] })}\n\ndata: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n`);
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Test server did not bind.');
+    const shown: Array<{ type: string; requestId?: string; runQuestion?: { continueLabel: string } }> = [];
+    const asked: string[] = [];
+
+    await runtime(`http://127.0.0.1:${address.port}/v1`, 'gateway/coding').run(
+      request,
+      root,
+      undefined,
+      (event) => shown.push(event as (typeof shown)[number]),
+      { request: async (approval) => { asked.push(approval.requestId); return false; } },
+    );
+
+    expect(asked.length).toBeGreaterThan(0);
+    const questions = shown.filter((event) => event.type === 'approval.request');
+    expect(questions.map((event) => event.requestId)).toEqual(asked);
+    expect(questions[0]!.runQuestion?.continueLabel).toBe('Continue');
+  }, 30_000);
+
   it('refuses gateway/auto before sending anything', async () => {
     const bodies: Array<{ messages: Array<{ role: string; content?: string }> }> = [];
     const result = await runtime(await gateway(bodies, 'node -v'), 'gateway/auto').run(request, project());

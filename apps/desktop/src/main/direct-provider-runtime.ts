@@ -1151,6 +1151,7 @@ export class DesktopDirectProviderRuntime {
   ): Promise<AgentExecutionResult> {
     // Says so, once, if the run starts repeating the same paragraph; never touches the run.
     onEvent = withRepeatNotice(onEvent, request);
+    approvals = announceRunQuestions(approvals, request, onEvent);
     // Registered before any `await` below, not after — `cancel(conversationId)` only has something to abort once
     // this exists, and the awaits below (capability, credential, proxy-route lookups) used to run first, so a
     // cancel arriving during any of them found nothing registered and silently did nothing: the run went on to
@@ -2772,6 +2773,42 @@ export class DesktopDirectProviderRuntime {
  * to ask - a scheduled or team run, a test - the answer is to finish rather than to wait forever on a question that
  * has no one behind it.
  */
+/**
+ * A question about the run itself (it is repeating, past its spend limit, or only talking) has to be put on screen as
+ * well as registered for an answer. A permission or `ask_user` question announces itself where it is asked; these did
+ * not, so the run sat waiting for an answer to a question nobody could see.
+ */
+function announceRunQuestions(
+  approvals: DirectApiApprovalPort | undefined,
+  request: AgentRunRequest,
+  onEvent: ((event: PersistedEvent) => void) | undefined,
+): DirectApiApprovalPort | undefined {
+  if (!approvals || !onEvent) return approvals;
+  return {
+    ...(approvals.requestChoice ? { requestChoice: approvals.requestChoice.bind(approvals) } : {}),
+    request: (approval) => {
+      // Registered first, so an answer given at once has something to answer.
+      const answer = approvals.request(approval);
+      if (approval.runQuestion) {
+        onEvent({
+          schemaVersion: 1,
+          id: eventId(),
+          taskId: request.conversationId,
+          timestamp: nowIso(),
+          agent: request.agent,
+          type: 'approval.request',
+          requestId: approval.requestId,
+          title: approval.title,
+          detail: approval.detail,
+          risk: approval.risk,
+          runQuestion: approval.runQuestion,
+        });
+      }
+      return answer;
+    },
+  };
+}
+
 async function askToContinue(
   approvals: DirectApiApprovalPort | undefined,
   question: Omit<DirectApiApprovalRequest, 'requestId'>,

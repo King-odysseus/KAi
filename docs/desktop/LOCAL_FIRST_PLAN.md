@@ -462,3 +462,54 @@ Append dated, one-line notes here: what you delivered, what you need from the ot
 (R4, check) Saved helper settings still point at DeepSeek; only choosing the gateway preset selects `gateway/general`. Either offer a one-click "move helpers to my hardware" or say so in Settings.
 2026-11-28 — Codex follow-up: R1 helper requests now bypass the 120 s timeout only for own hardware, keep caller cancellation and surface queue status; delayed own-hardware (75 ms vs 20 ms test timeout) and cloud-timeout tests pass. R2 gateway profiles and Local labeling are independent of DeepSeek defaults; role/profile/address and Local classification tests pass. R3 diagnoses only transport sentences in `input.error`; test with unrelated tool output containing “503” and “queued” passes. R4 handled with Settings instructions to select OpenAI-compatible + `gateway/general` per helper. Review: no duplicate send found while an own-hardware request is confirmed queued; cancel signal reaches the model request/status poll; health checks are unauthenticated and the key is sent only to the selected gateway's model/status endpoints; cloud request timeout/retry path and CLI path remain unchanged by inspection. Claude request: `direct-provider-runtime.ts` resolves a role missing `baseUrl` to the OpenAI preset before `routeModel` classifies it, so with DeepSeek as default that role may miss the saved gateway URL and be treated as cloud; fill missing own-gateway URL/credential from the saved profile before resolving, and add a runtime regression test. `npm run desktop:typecheck` passed; focused tests passed 191/191; full `npm run desktop:test`: 3,212 passed, 4 skipped, 1 failed (MCP reconnect test exceeded 5 s), then that file passed 8/8 alone. No live gateway, real 3-hour wait, or real key transmission was exercised; no other review finding observed.
 2026-11-28 — Claude: done, the missing-baseUrl role case (`withGatewayProfile` in `api-connection.ts`, used by the loop and run start, with a runtime test). Also changed two Codex files while Codex was stopped: `settings:update` in `ipc.ts` overwrote the saved Away address with any OpenAI-compatible default (marking a third party's service as own hardware, free and unbudgeted), so it now fills only an empty profile; `model-host.ts` and `guided-build-engine.ts` count the default's address as owned only while no Away address is saved.
+
+## 10. First real runs on the owner's gateway (2026-11-28, version 1.2.49)
+Task: add a test for one untested component. Home address used; cost 0; starting context about 18.5k tokens
+(41k to 62k before Round 1). A helper request queued behind the run waited its turn.
+
+| | Run 1 | Run 2 (narrow task, new thread) |
+|---|---|---|
+| Result | stopped by hand | passed, 11 of 11 tests |
+| Time | 13 min | 45 s |
+| Input tokens | 3.8M over 68 requests (about 56k each, none cached) | 402k |
+| File reads | 16 (several files 4 times) | 3 |
+| Folds | 1, at 65,536 | 0 |
+
+What Round 2 and 3 take from this:
+- From 16:21:52 to 16:26:52 the same two tests failed 13 times in a row. The repeat guard only sees identical calls,
+  so it reacted only when the edit itself became identical. **Add: stop or escalate after N check runs with the same
+  failures** (K12).
+- The guard then asked Continue or Finish, but **the question was never shown** and the run waited 4.5 minutes.
+  Fixed: run questions are now sent to the screen.
+- The model first **changed app code to satisfy its own new test**, and later removed an assertion rather than
+  correct it. The first-pass review (X13) should flag source edits and removed assertions in a test-writing task.
+- No prompt-cache hits were reported, so each step re-read about 56k tokens (K9).
+
+## 11. Round 2 work split (2026-11-28, after the first real runs)
+Replaces the Round 2 row of 9.3. The rules in 9.1 and 9.2 still apply; handoff notes continue in 11.4.
+
+### 11.1 Claude (engine)
+| Task | Done when |
+|---|---|
+| K7 Read ledger: a re-read of an unchanged file returns a short note and the line ranges already seen, unless the earlier text is gone from the history | the replay test shows 0 re-reads of unchanged files on a 12,000-token window |
+| K8 Structured fold: plan, files changed with a diff summary, file notes, last check result, next step; fold at 75% of the window | replay: the task finishes with fewer folds, and nothing already read has to be re-read to continue |
+| K9 Stable prefix and append-only history, so the Mac can reuse its prompt cache | a test shows the request prefix unchanged between rounds without a fold; cached tokens are recorded when the gateway reports them |
+| K10 Compact rule set for own-model runs (about 8k tokens today) | cloud runs unchanged; local starting rules under 2,500 tokens |
+| K12 (moved from Round 3) Stuck detection: the same check failing the same way 4 times asks Continue or Finish | a test replaying 13 identical failures asks by the 4th |
+
+### 11.2 Codex (product)
+| Task | Done when |
+|---|---|
+| X7 "Test this model": tool call, tool result follow-up, JSON-schema reply, image, timing; a role cannot take a model that fails the part it needs | a fake server that fails each part is refused with the reason |
+| X8 One "Local first" routing policy read by Workspace, Lead, Studio, Learn and Crew; local roles default to API; every cloud switch stays | one table decides defaults, and a person's saved choice still wins |
+| X9 Helpers default to the small local model when local first is on | new profiles need no manual helper setup; saved choices untouched |
+| X10 Resident models and one local Crew task at a time; decide the `toolRoundLimit: 30` in `crew-runner.ts` and `architect-loop.ts` (K2 removed the loop's default: a limit should ask, not stop) | tests for both |
+| X15 A run waiting on the Mac or on the person says so on the composer line (queue position, "needs you"), in Workspace and Lead | a waiting event changes the line; a pending question is never hidden behind "Editing" |
+| X16 Settings control for each model's context window (`modelContextOverride`), showing the reported and gateway defaults | the person can see and clear a saved override |
+
+### 11.3 Files
+- Claude: as 9.1, plus `main/lead-tool-progress.ts` and new ledger and fold modules.
+- Codex: as 9.1, plus a new routing-policy module in `contracts`, `main/model-probe.ts`, `main/architect-loop.ts` and
+  `main/crew-*.ts`.
+
+### 11.4 Handoff notes
